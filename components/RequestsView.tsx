@@ -18,7 +18,14 @@ export function RequestsView() {
   const { requests, canClaimRequest } = useApp();
   const [sort, setSort] = useState<RequestBoardSort>("demand");
 
-  const sorted = useMemo(() => sortRequests(requests, sort), [requests, sort]);
+  const boardRequests = useMemo(
+    () => requests.filter((r) => r.status !== "parked"),
+    [requests],
+  );
+  const sorted = useMemo(
+    () => sortRequests(boardRequests, sort),
+    [boardRequests, sort],
+  );
 
   return (
     <>
@@ -32,8 +39,8 @@ export function RequestsView() {
             build.
           </p>
         </div>
-        <ButtonLink href="/file-need" variant="primary">
-          File a need
+        <ButtonLink href="/funnel" variant="primary">
+          Figure out a need
         </ButtonLink>
       </div>
 
@@ -57,8 +64,8 @@ export function RequestsView() {
 
       {canClaimRequest && (
         <p className="requests-board__hint t-para-sm text-muted">
-          As a builder, you can claim open requests — we&apos;ll create a planned
-          tool and link it back here.
+          Claim validated requests to continue through stack and approach — the
+          planned tool writes back to the registry.
         </p>
       )}
 
@@ -66,10 +73,10 @@ export function RequestsView() {
         <EmptyState
           icon="bulb"
           title="No requests yet"
-          description="Be the first to file a need — or check back when teammates add demand."
+          description="Be the first to validate a need through guided intake — or check back when teammates add demand."
           action={
-            <ButtonLink href="/file-need" variant="primary">
-              File a need
+            <ButtonLink href="/funnel" variant="primary">
+              Figure out a need
             </ButtonLink>
           }
         />

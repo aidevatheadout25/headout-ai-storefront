@@ -59,6 +59,26 @@ export const INITIAL_REQUESTS: NeedRequest[] = [
     upvotedBy: ["tom-walsh", "sofia-reyes", "maya-patel"],
     status: "open",
     createdAt: "2026-06-20T10:00:00Z",
+    funnelValidated: true,
+    stakesLevel: "low",
+    sourceQuery: "bulk resize campaign images",
+    prerequisites: {
+      dataSources: "Figma exports, GCS campaign asset bucket",
+      systems: "Growth creative workflow, CMS image slots",
+      inputsOutputs: "Upload PNG/JPG batches → resized/cropped assets per city spec",
+      touchesPII: false,
+      touchesPayments: false,
+      usesLLM: false,
+      needsExternalDep: false,
+    },
+    validation: {
+      problem:
+        "Analysts manually resize dozens of creatives per city launch — inconsistent crops slow go-live.",
+      whoHasIt: "Growth campaign ops (6 people), every 2 weeks at launch",
+      frequency: "Every 2 weeks at city launch",
+      currentWorkaround: "Manual resize in Figma + ad-hoc scripts in Slack threads",
+      expectedValue: "Save ~4 hours per launch; fewer wrong-aspect assets in CMS",
+    },
   },
   {
     id: "req-policy-qa-bot",

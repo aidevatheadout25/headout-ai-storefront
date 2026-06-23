@@ -34,9 +34,11 @@ export default function HomePage() {
 
         <p className="hero__idea-entry t-para-rg">
           Something missing?{" "}
-          <Link href="/file-need" className="hero__idea-link t-cta-sm">
-            File a need
+          <Link href="/funnel" className="hero__idea-link t-cta-sm">
+            Start guided intake
           </Link>
+          {" — "}
+          reuse check, validate demand, then post a need.
         </p>
       </section>
 
@@ -52,7 +54,7 @@ export default function HomePage() {
           <p className="cta-strip__desc t-para-rg">
             {canSubmitTool
               ? "Register it once — make it findable for everyone at Headout."
-              : "Upvote open requests or file your own need on the requests board."}
+              : "Upvote open requests or use guided intake to validate a new need."}
           </p>
         </div>
         {canSubmitTool ? (
@@ -60,8 +62,8 @@ export default function HomePage() {
             Submit a tool
           </ButtonLink>
         ) : (
-          <ButtonLink href="/requests" variant="primary">
-            View requests
+          <ButtonLink href="/funnel" variant="primary">
+            Figure out a need
           </ButtonLink>
         )}
       </section>

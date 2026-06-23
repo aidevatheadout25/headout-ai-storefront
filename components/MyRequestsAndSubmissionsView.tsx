@@ -41,8 +41,8 @@ export function MyRequestsAndSubmissionsView() {
         </div>
         <div className="page-header__actions">
           {canFileRequest && (
-            <ButtonLink href="/file-need" variant="secondary">
-              File a need
+            <ButtonLink href="/funnel" variant="secondary">
+              Figure out a need
             </ButtonLink>
           )}
           {canSubmitTool && (
@@ -75,10 +75,10 @@ export function MyRequestsAndSubmissionsView() {
         <EmptyState
           icon="bulb"
           title="Nothing to track yet"
-          description="File a need when something's missing, or submit a tool once you're a builder."
+          description="Use guided intake when something's missing, or submit a tool once you're a builder."
           action={
-            <ButtonLink href="/file-need" variant="primary">
-              File a need
+            <ButtonLink href="/funnel" variant="primary">
+              Figure out a need
             </ButtonLink>
           }
         />

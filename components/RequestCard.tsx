@@ -30,9 +30,9 @@ export function RequestCard({ request }: RequestCardProps) {
     : undefined;
 
   function handleClaim() {
-    const toolId = claimRequest(request.id);
-    if (toolId) {
-      router.push(`/tools/${toolId}`);
+    const claimedId = claimRequest(request.id);
+    if (claimedId) {
+      router.push(`/funnel?requestId=${claimedId}`);
     }
   }
 
@@ -40,6 +40,11 @@ export function RequestCard({ request }: RequestCardProps) {
     <div className="request-card tool-card">
       <div className="request-card__header">
         <RequestStatusBadge status={request.status} />
+        {request.funnelValidated && (
+          <span className="request-status request-status--validated t-tag-sm">
+            Validated
+          </span>
+        )}
         <span className="request-card__team t-tag-rg">{request.team}</span>
       </div>
 

@@ -17,11 +17,11 @@ function SubmitPageContent() {
         <EmptyState
           icon="shield-tick"
           title="Builder access required"
-          description="Only builders and admins can register tools. File a need if something's missing, or request builder access from an admin."
+          description="Only builders and admins can register tools. Use guided intake if something's missing, or request builder access from an admin."
           action={
             <div className="empty-state__action-row">
-              <ButtonLink href="/file-need" variant="primary">
-                File a need
+              <ButtonLink href="/funnel" variant="primary">
+                Figure out a need
               </ButtonLink>
               <ButtonLink href="/my-submissions" variant="secondary">
                 Request builder access

@@ -32,7 +32,27 @@ export type Owner = {
   slackId: string;
 };
 
-export type RequestStatus = "open" | "claimed" | "fulfilled";
+export type RequestStatus = "open" | "claimed" | "fulfilled" | "parked";
+
+export type StakesLevel = "low" | "high";
+
+export type RequestPrerequisites = {
+  dataSources: string;
+  systems: string;
+  inputsOutputs: string;
+  touchesPII: boolean;
+  touchesPayments: boolean;
+  usesLLM: boolean;
+  needsExternalDep: boolean;
+};
+
+export type RequestValidation = {
+  problem: string;
+  whoHasIt: string;
+  frequency: string;
+  currentWorkaround: string;
+  expectedValue: string;
+};
 
 export type NeedRequest = {
   id: string;
@@ -48,6 +68,64 @@ export type NeedRequest = {
   claimedBy?: Owner;
   claimedById?: string;
   linkedToolId?: string;
+  createdAt: string;
+  prerequisites?: RequestPrerequisites;
+  validation?: RequestValidation;
+  stakesLevel?: StakesLevel;
+  funnelValidated?: boolean;
+  parkedReason?: string;
+  sourceQuery?: string;
+};
+
+export type BuildingBlockKind = "api" | "service" | "agent" | "framework";
+
+export type BuildingBlockStatus = "live" | "beta" | "planned";
+
+export type BuildingBlock = {
+  id: string;
+  name: string;
+  kind: BuildingBlockKind;
+  description: string;
+  capabilityTags: string[];
+  owner: Owner;
+  accessLevel: AccessLevel;
+  status: BuildingBlockStatus;
+};
+
+export type DecisionRuleRecommend =
+  | { type: "buildingBlock"; buildingBlockId: string }
+  | { type: "text"; text: string };
+
+export type DecisionRule = {
+  id: string;
+  matches: string[];
+  recommend: DecisionRuleRecommend;
+  stakes: StakesLevel;
+  message: string;
+};
+
+export type ChosenStack = {
+  framework: string;
+  hosting: string;
+  auth: string;
+  justification?: string;
+  needsAdminSignoff?: boolean;
+};
+
+export type ChosenApproach = {
+  form: ToolType;
+  recommendation: string;
+  override?: boolean;
+  justification?: string;
+};
+
+export type FunnelStage = "prerequisites" | "validate" | "stack" | "approach" | "complete";
+
+export type ParkedNeed = {
+  id: string;
+  title: string;
+  reason: string;
+  sourceQuery?: string;
   createdAt: string;
 };
 
@@ -111,6 +189,9 @@ export type Tool = {
   rejectReason?: string;
   /** False when submitter names a different owner — awaiting owner ack */
   ownerConfirmed: boolean;
+  chosenStack?: ChosenStack;
+  chosenApproach?: ChosenApproach;
+  linkedRequestId?: string;
 };
 
 export type ToolFlagReasonCategory =
@@ -216,6 +297,15 @@ export const ROLE_LABELS: Record<Role, string> = {
   builder: "Builder",
   viewer: "Viewer",
 };
+
+export function formatBuildingBlockKind(kind: BuildingBlockKind): string {
+  switch (kind) {
+    case "api":
+      return "API";
+    default:
+      return kind.charAt(0).toUpperCase() + kind.slice(1);
+  }
+}
 
 export function formatToolType(type: ToolType): string {
   switch (type) {

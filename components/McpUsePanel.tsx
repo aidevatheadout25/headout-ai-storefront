@@ -46,7 +46,8 @@ export function McpUsePanel() {
         </button>
       </div>
       <p className="mcp-panel__caption t-label-sm text-muted">
-        search_internal_tools() — read-only
+        search_internal_tools() — read-only. Agents calling it get the same reuse
+        + building-block guidance as the guided funnel.
       </p>
     </section>
   );

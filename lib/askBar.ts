@@ -124,15 +124,19 @@ export function getClosestKits(query: string, limit = 3) {
   return KITS.slice(0, limit);
 }
 
-export function buildFileNeedUrl(query: string): string {
+export function buildFunnelUrl(query: string): string {
   const trimmed = query.trim();
   const params = new URLSearchParams();
   if (trimmed) {
-    params.set("title", trimmed);
-    params.set("problem", `Looking for something that ${trimmed}`);
+    params.set("q", trimmed);
   }
   const qs = params.toString();
-  return qs ? `/file-need?${qs}` : "/file-need";
+  return qs ? `/funnel?${qs}` : "/funnel";
+}
+
+/** @deprecated Use buildFunnelUrl — file-need redirects to funnel */
+export function buildFileNeedUrl(query: string): string {
+  return buildFunnelUrl(query);
 }
 
 /** @deprecated Use buildFileNeedUrl */

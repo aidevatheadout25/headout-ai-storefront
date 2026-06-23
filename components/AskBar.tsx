@@ -9,7 +9,7 @@ import { Button } from "@/components/Button";
 import { ErrorState } from "@/components/ErrorState";
 import { ZeroResultsPanel } from "@/components/ZeroResultsPanel";
 import { useApp } from "@/context/AppContext";
-import { getClosestKits, resolveAskQuery } from "@/lib/askBar";
+import { getClosestKits, resolveAskQuery, buildFunnelUrl } from "@/lib/askBar";
 import type { AskResult } from "@/lib/types";
 
 const SEARCH_ERROR_TRIGGER = "!!error!!";
@@ -107,6 +107,16 @@ export function AskBar() {
               >
                 View all in registry
               </Link>
+              <p className="ask-bar__funnel-hint t-para-sm">
+                Not what you need?{" "}
+                <Link
+                  href={buildFunnelUrl(result.query)}
+                  className="text-link t-cta-sm"
+                >
+                  Start guided intake
+                </Link>
+                {" — "}reuse check, validate, then post a need.
+              </p>
             </>
           )}
 
@@ -114,7 +124,7 @@ export function AskBar() {
             <ZeroResultsPanel
               query={result.query}
               kits={getClosestKits(result.query)}
-              leadMessage="Try describing what problem you're trying to solve — then register the need or browse what's already in the registry."
+              leadMessage="Try describing the problem in plain words — then start guided intake to validate before posting a need."
             />
           )}
 

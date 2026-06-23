@@ -10,8 +10,10 @@ import { Icon } from "@/components/Icon";
 import { RoleBanner } from "@/components/RoleSwitcher";
 import { useApp } from "@/context/AppContext";
 import { filterRegistryTools, getClosestKits } from "@/lib/askBar";
+import { filterBuildingBlocks } from "@/lib/funnel";
 import { getKitById } from "@/lib/mockData";
 import { sortRegistryTools, type RegistrySort } from "@/lib/registry";
+import { BuildingBlockCard } from "@/components/BuildingBlockCard";
 import {
   TEAMS,
   TOOL_TYPES,
@@ -29,8 +31,10 @@ const SORT_OPTIONS: { value: RegistrySort; label: string }[] = [
 export function RegistryView() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { approvedTools } = useApp();
+  const { approvedTools, buildingBlocks } = useApp();
   const kitParam = searchParams.get("kit") ?? "";
+  const tabParam = searchParams.get("tab") ?? "tools";
+  const registryTab = tabParam === "blocks" ? "blocks" : "tools";
   const [search, setSearch] = useState(searchParams.get("q") ?? "");
   const [typeFilter, setTypeFilter] = useState("");
   const [teamFilter, setTeamFilter] = useState("");
@@ -38,6 +42,11 @@ export function RegistryView() {
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
   const activeKit = kitParam ? getKitById(kitParam) : undefined;
+
+  const filteredBlocks = useMemo(
+    () => filterBuildingBlocks(buildingBlocks, search),
+    [buildingBlocks, search],
+  );
 
   const filtered = useMemo(() => {
     const results = filterRegistryTools(
@@ -120,12 +129,33 @@ export function RegistryView() {
         <div>
           <h1 className="page-header__title t-display-xs">Tool registry</h1>
           <p className="page-header__desc t-para-md">
-            Browse every internal tool, skill, MCP, and bot at Headout.
+            Browse internal tools and reusable building blocks at Headout.
           </p>
         </div>
-        <ButtonLink href="/file-need" variant="primary">
-          File a need
+        <ButtonLink href="/funnel" variant="primary">
+          Guided intake
         </ButtonLink>
+      </div>
+
+      <div className="registry-tabs" role="tablist" aria-label="Registry view">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={registryTab === "tools"}
+          className={`registry-tabs__btn t-label-rg${registryTab === "tools" ? " registry-tabs__btn--active" : ""}`}
+          onClick={() => router.push("/registry")}
+        >
+          Tools
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={registryTab === "blocks"}
+          className={`registry-tabs__btn t-label-rg${registryTab === "blocks" ? " registry-tabs__btn--active" : ""}`}
+          onClick={() => router.push("/registry?tab=blocks")}
+        >
+          Building blocks
+        </button>
       </div>
 
       <div className="registry-layout">
@@ -215,24 +245,28 @@ export function RegistryView() {
 
             <div className="registry-toolbar__meta">
               <span className="registry-toolbar__count t-label-rg-heavy">
-                {filtered.length} tool{filtered.length === 1 ? "" : "s"}
+                {registryTab === "blocks"
+                  ? `${filteredBlocks.length} block${filteredBlocks.length === 1 ? "" : "s"}`
+                  : `${filtered.length} tool${filtered.length === 1 ? "" : "s"}`}
               </span>
-              <select
-                className="registry-toolbar__sort t-para-rg"
-                value={sort}
-                onChange={(e) => setSort(e.target.value as RegistrySort)}
-                aria-label="Sort tools"
-              >
-                {SORT_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+              {registryTab === "tools" && (
+                <select
+                  className="registry-toolbar__sort t-para-rg"
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value as RegistrySort)}
+                  aria-label="Sort tools"
+                >
+                  {SORT_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
 
-          {activeChips.length > 0 && (
+          {activeChips.length > 0 && registryTab === "tools" && (
             <div className="filter-chips">
               {activeChips.map((chip) => (
                 <span key={chip.key} className="filter-chip t-label-sm">
@@ -250,7 +284,21 @@ export function RegistryView() {
             </div>
           )}
 
-          {filtered.length > 0 ? (
+          {registryTab === "blocks" ? (
+            filteredBlocks.length > 0 ? (
+              <div className="building-block-grid">
+                {filteredBlocks.map((block) => (
+                  <BuildingBlockCard key={block.id} block={block} />
+                ))}
+              </div>
+            ) : (
+              <EmptyState
+                icon="globe"
+                title="No building blocks found"
+                description="Try a different search — blocks are reusable APIs, services, agents, and frameworks."
+              />
+            )
+          ) : filtered.length > 0 ? (
             <div className="registry-grid">
               {filtered.map((tool) => (
                 <ToolCard key={tool.id} tool={tool} variant="catalog" />
@@ -280,8 +328,8 @@ export function RegistryView() {
                   : "The registry is empty. Register what you've built so others can find it."
               }
               action={
-                <ButtonLink href="/file-need" variant="primary">
-                  File a need
+                <ButtonLink href="/funnel" variant="primary">
+                  Figure out a need
                 </ButtonLink>
               }
             />

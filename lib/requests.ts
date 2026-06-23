@@ -8,6 +8,8 @@ export function formatRequestStatus(status: NeedRequest["status"]): string {
       return "Claimed";
     case "fulfilled":
       return "Fulfilled";
+    case "parked":
+      return "Parked";
     default: {
       const _exhaustive: never = status;
       return _exhaustive;

@@ -4,13 +4,19 @@ import { ROLE_LABELS, type Role } from "@/lib/types";
 import { useApp } from "@/context/AppContext";
 import { Icon } from "@/components/Icon";
 
+type RoleSwitcherProps = {
+  layout?: "inline" | "sidebar";
+};
+
 const ROLES: Role[] = ["viewer", "builder", "admin"];
 
-export function RoleSwitcher() {
+export function RoleSwitcher({ layout = "inline" }: RoleSwitcherProps) {
   const { role, setRole } = useApp();
 
   return (
-    <div className="role-switcher">
+    <div
+      className={`role-switcher${layout === "sidebar" ? " role-switcher--sidebar" : ""}`}
+    >
       <span className="role-switcher__label t-label-sm">
         <Icon name="users" size={16} />
         Role

@@ -5,6 +5,7 @@ const STATUS_CLASS: Record<NeedRequest["status"], string> = {
   open: "request-status--open",
   claimed: "request-status--claimed",
   fulfilled: "request-status--fulfilled",
+  parked: "request-status--parked",
 };
 
 type RequestStatusBadgeProps = {

@@ -28,6 +28,7 @@ import { GATE_ELIGIBILITY_NOTE } from "@/lib/adminMetrics";
 import {
   TOOL_FLAG_REASON_CATEGORIES,
   formatFlagReasonCategory,
+  suggestedFlagAction,
 } from "@/lib/flagReasons";
 import type { Owner, Tool, ToolFlagReasonCategory } from "@/lib/types";
 
@@ -41,6 +42,7 @@ export function ToolDetailView() {
     canApprove,
     canEditTool,
     canManageTool,
+    canFlagTool,
     markHelpful,
     recordClick,
     requestAccess,
@@ -104,6 +106,8 @@ export function ToolDetailView() {
     !tool.ownerConfirmed &&
     isCurrentUserOwner(tool, currentUser.slackId);
   const canManage = canManageTool(tool);
+  const canFlag = canFlagTool(tool);
+  const flagSuggestedAction = suggestedFlagAction(flagCategory);
   const checksPass = passesLightApprovalCheck(tool);
   const isIdea = isIdeaSubmission(tool);
 
@@ -292,23 +296,10 @@ export function ToolDetailView() {
         <p className="tool-detail__oneliner t-para-lg">{tool.oneLiner}</p>
         <FreshnessLine tool={tool} />
 
-        {isApproved && (
-          <div className="tool-detail__toolbar">
-            <button
-              type="button"
-              className="tool-detail__flag-btn t-cta-sm"
-              onClick={() => setFlagOpen(true)}
-              aria-label="Flag this entry"
-            >
-              <Icon name="info-circle" size={16} />
-              Flag
-            </button>
-          </div>
-        )}
-
         {flagSubmitted && (
           <p className="tool-detail__flag-confirmation t-para-sm" role="status">
-            Flagged for admin review.
+            Flag submitted — an admin will review and may archive or deprecate this
+            entry.
           </p>
         )}
       </header>
@@ -324,11 +315,11 @@ export function ToolDetailView() {
             onClick={(e) => e.stopPropagation()}
           >
             <h2 id="flag-dialog-title" className="modal-card__title t-heading-sm">
-              Flag this entry
+              Flag for admin review
             </h2>
             <p className="modal-card__desc t-para-sm text-muted">
-              Report an issue for admin review — you&apos;re not changing lifecycle
-              status yourself.
+              Viewers and builders can&apos;t archive or deprecate directly — flag
+              an issue and admins will act in the approval queue.
             </p>
             <div className="form-field">
               <label htmlFor="flag-reason" className="form-field__label t-label-rg-heavy">
@@ -348,6 +339,15 @@ export function ToolDetailView() {
                   </option>
                 ))}
               </select>
+              {flagSuggestedAction && (
+                <p className="flag-dialog__suggestion t-para-sm" role="status">
+                  Admins usually{" "}
+                  <strong>
+                    {flagSuggestedAction === "archive" ? "archive" : "deprecate"}
+                  </strong>{" "}
+                  tools flagged for this reason.
+                </p>
+              )}
             </div>
             <div className="form-field">
               <label htmlFor="flag-note" className="form-field__label t-label-rg-heavy">
@@ -593,6 +593,22 @@ export function ToolDetailView() {
 
             {isApproved && (
               <div className="sidebar-card__actions">
+                {canFlag && (
+                  <div className="sidebar-card__flag">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setFlagOpen(true)}
+                    >
+                      <Icon name="info-circle" size={16} />
+                      Flag for review
+                    </Button>
+                    <p className="signal-microcopy t-para-sm text-muted">
+                      Suggest archive or deprecate — admins act on flags, you
+                      can&apos;t change lifecycle status yourself.
+                    </p>
+                  </div>
+                )}
                 <button
                   type="button"
                   className={`helpful-btn t-cta-sm${helpfulClicked ? " helpful-btn--active" : ""}`}

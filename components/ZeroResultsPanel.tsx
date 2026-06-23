@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ButtonLink } from "@/components/Button";
 import { Icon } from "@/components/Icon";
-import { buildFileNeedUrl } from "@/lib/askBar";
+import { buildFunnelUrl } from "@/lib/askBar";
 import type { Kit } from "@/lib/types";
 import { STOREFRONT_SLACK_CHANNEL, STOREFRONT_SLACK_URL } from "@/lib/toolMeta";
 
@@ -44,14 +44,14 @@ export function ZeroResultsPanel({ query, kits, leadMessage }: ZeroResultsPanelP
 
       <div className="zero-results__actions">
         <ButtonLink
-          href={buildFileNeedUrl(query)}
+          href={buildFunnelUrl(query)}
           variant="primary"
           size="sm"
         >
-          File this need
+          Start guided intake
         </ButtonLink>
-        <Link href="/registry" className="zero-results__registry t-para-rg text-link">
-          Browse registry
+        <Link href="/requests" className="zero-results__registry t-para-rg text-link">
+          Browse open requests
         </Link>
         <a
           href={STOREFRONT_SLACK_URL}

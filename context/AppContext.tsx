@@ -13,16 +13,23 @@ import {
   INITIAL_APPROVED_TOOLS,
   INITIAL_PENDING_TOOLS,
 } from "@/lib/mockData";
+import { INITIAL_BUILDING_BLOCKS } from "@/lib/mockBuildingBlocks";
 import { INITIAL_FLAGGED_TOOLS } from "@/lib/flaggedTools";
 import { INITIAL_REQUESTS, MOCK_USERS } from "@/lib/mockRequests";
 import { isIdeaSubmission, isOwnerMatch } from "@/lib/toolMeta";
 import type {
   BuilderAccessRequest,
+  BuildingBlock,
+  ChosenApproach,
+  ChosenStack,
   MockUser,
   NeedRequest,
   Owner,
   RequestFormData,
+  RequestPrerequisites,
+  RequestValidation,
   Role,
+  Team,
   Tool,
   ToolFlag,
   ToolFlagReasonCategory,
@@ -37,6 +44,7 @@ type AppContextValue = {
   rejectedTools: Tool[];
   allTools: Tool[];
   requests: NeedRequest[];
+  buildingBlocks: BuildingBlock[];
   mySubmissions: Tool[];
   myRequests: NeedRequest[];
   hasTrackingItems: boolean;
@@ -67,6 +75,27 @@ type AppContextValue = {
   fileRequest: (data: RequestFormData) => string;
   upvoteRequest: (id: string) => void;
   claimRequest: (id: string) => string | null;
+  createValidatedRequest: (input: {
+    title: string;
+    team: Team;
+    tags: string[];
+    sourceQuery?: string;
+    prerequisites: RequestPrerequisites;
+    validation: RequestValidation;
+    stakesLevel: NeedRequest["stakesLevel"];
+  }) => string;
+  parkNeed: (input: {
+    title: string;
+    reason: string;
+    sourceQuery?: string;
+    prerequisites?: RequestPrerequisites;
+    validation?: RequestValidation;
+  }) => string;
+  completeBuilderFunnel: (
+    requestId: string,
+    stack: ChosenStack,
+    approach: ChosenApproach,
+  ) => string | null;
   requestBuilderAccess: () => void;
   grantBuilderRole: (userId: string) => void;
   revokeBuilderRole: (userId: string) => void;
@@ -79,6 +108,7 @@ type AppContextValue = {
   canApprove: boolean;
   canEditTool: (tool: Tool) => boolean;
   canManageTool: (tool: Tool) => boolean;
+  canFlagTool: (tool: Tool) => boolean;
   canViewTool: (tool: Tool) => boolean;
   currentUser: typeof DEMO_USER;
   getToolById: (id: string) => Tool | undefined;
@@ -138,6 +168,9 @@ function formToTool(
     linkUnreachable: preserve?.linkUnreachable,
     ownerConfirmed: preserve?.ownerConfirmed ?? ownerConfirmed,
     rejectReason: preserve?.rejectReason,
+    chosenStack: preserve?.chosenStack,
+    chosenApproach: preserve?.chosenApproach,
+    linkedRequestId: preserve?.linkedRequestId,
   };
 }
 
@@ -187,6 +220,15 @@ function fulfillLinkedRequests(
   );
 }
 
+function dedupeToolsById(tools: Tool[]): Tool[] {
+  const seen = new Set<string>();
+  return tools.filter((tool) => {
+    if (seen.has(tool.id)) return false;
+    seen.add(tool.id);
+    return true;
+  });
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<Role>("viewer");
   const [approvedTools, setApprovedTools] = useState<Tool[]>(
@@ -197,6 +239,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
   const [rejectedTools, setRejectedTools] = useState<Tool[]>([]);
   const [requests, setRequests] = useState<NeedRequest[]>(INITIAL_REQUESTS);
+  const [buildingBlocks] = useState<BuildingBlock[]>(INITIAL_BUILDING_BLOCKS);
   const [flaggedTools, setFlaggedTools] = useState<ToolFlag[]>(
     INITIAL_FLAGGED_TOOLS,
   );
@@ -207,9 +250,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     BuilderAccessRequest[]
   >([]);
 
+  const uniqueApprovedTools = useMemo(
+    () => dedupeToolsById(approvedTools),
+    [approvedTools],
+  );
+
   const allTools = useMemo(
-    () => [...approvedTools, ...pendingTools, ...rejectedTools],
-    [approvedTools, pendingTools, rejectedTools],
+    () => [...uniqueApprovedTools, ...pendingTools, ...rejectedTools],
+    [uniqueApprovedTools, pendingTools, rejectedTools],
   );
 
   const mySubmissions = useMemo(
@@ -281,6 +329,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     },
     [role],
   );
+
+  const canFlagTool = useCallback((tool: Tool) => {
+    return tool.approvalStatus === "approved";
+  }, []);
 
   const getToolById = useCallback(
     (id: string) => allTools.find((t) => t.id === id),
@@ -440,56 +492,160 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const claimRequest = useCallback((id: string): string | null => {
-    let createdToolId: string | null = null;
+    if (role !== "builder" && role !== "admin") return null;
 
-    setRequests((prev) => {
-      const request = prev.find((r) => r.id === id);
-      if (!request || request.status !== "open") return prev;
-      if (role !== "builder" && role !== "admin") return prev;
+    let claimed = false;
+    setRequests((prev) =>
+      prev.map((r) => {
+        if (r.id !== id || r.status !== "open") return r;
+        claimed = true;
+        return {
+          ...r,
+          status: "claimed" as const,
+          claimedBy: { name: DEMO_USER.name, slackId: DEMO_USER.slackId },
+          claimedById: DEMO_USER.id,
+        };
+      }),
+    );
 
-      const toolId = slugify(request.title) || `tool-${Date.now()}`;
-      createdToolId = toolId;
+    return claimed ? id : null;
+  }, [role]);
 
-      const toolData: ToolFormData = {
-        name: request.title,
-        oneLiner: request.problem,
-        types: ["app"],
-        link: "",
-        ownerName: DEMO_USER.name,
-        ownerSlackId: DEMO_USER.slackId,
-        team: request.team,
-        tags: request.tags.join(", "),
-        accessLevel: "open",
-        sensitive: false,
-        writeCapable: false,
-        githubUrl: "",
-        description: request.problem,
-        ownerInstructions: `Claimed from request. Reach out to ${request.requestedBy.slackId} on Slack.`,
-        status: "planned",
+  const createValidatedRequest = useCallback(
+    (input: {
+      title: string;
+      team: Team;
+      tags: string[];
+      sourceQuery?: string;
+      prerequisites: RequestPrerequisites;
+      validation: RequestValidation;
+      stakesLevel: NeedRequest["stakesLevel"];
+    }): string => {
+      const id = slugify(input.title) || `req-${Date.now()}`;
+      const request: NeedRequest = {
+        id,
+        title: input.title.trim(),
+        problem: input.validation.problem.trim(),
+        requestedBy: { name: DEMO_USER.name, slackId: DEMO_USER.slackId },
+        requestedById: DEMO_USER.id,
+        team: input.team,
+        tags: input.tags,
+        upvotes: 1,
+        upvotedBy: [DEMO_USER.id],
+        status: "open",
+        createdAt: nowIso(),
+        prerequisites: input.prerequisites,
+        validation: input.validation,
+        stakesLevel: input.stakesLevel,
+        funnelValidated: true,
+        sourceQuery: input.sourceQuery,
       };
+      setRequests((prev) => [request, ...prev]);
+      return id;
+    },
+    [],
+  );
 
-      const tool = formToTool(toolData, toolId, "pending", {
-        submittedBy: DEMO_USER.id,
-        ownerConfirmed: true,
+  const parkNeed = useCallback(
+    (input: {
+      title: string;
+      reason: string;
+      sourceQuery?: string;
+      prerequisites?: RequestPrerequisites;
+      validation?: RequestValidation;
+    }): string => {
+      const id = slugify(input.title) || `parked-${Date.now()}`;
+      const request: NeedRequest = {
+        id,
+        title: input.title.trim(),
+        problem: input.validation?.problem?.trim() || input.reason.trim(),
+        requestedBy: { name: DEMO_USER.name, slackId: DEMO_USER.slackId },
+        requestedById: DEMO_USER.id,
+        team: DEMO_USER.team,
+        tags: [],
+        upvotes: 0,
+        upvotedBy: [],
+        status: "parked",
+        parkedReason: input.reason.trim(),
+        createdAt: nowIso(),
+        prerequisites: input.prerequisites,
+        validation: input.validation,
+        sourceQuery: input.sourceQuery,
+        funnelValidated: false,
+      };
+      setRequests((prev) => [request, ...prev]);
+      return id;
+    },
+    [],
+  );
+
+  const completeBuilderFunnel = useCallback(
+    (
+      requestId: string,
+      stack: ChosenStack,
+      approach: ChosenApproach,
+    ): string | null => {
+      let resultId: string | null = null;
+
+      setRequests((prev) => {
+        const request = prev.find((r) => r.id === requestId);
+        if (!request || request.status !== "claimed") return prev;
+        if (request.claimedById !== DEMO_USER.id && role !== "admin") {
+          return prev;
+        }
+
+        if (request.linkedToolId) {
+          resultId = request.linkedToolId;
+          return prev;
+        }
+
+        const toolId = slugify(request.title) || `tool-${Date.now()}`;
+        resultId = toolId;
+
+        const tool: Tool = {
+          id: toolId,
+          name: request.title,
+          oneLiner: request.problem,
+          description: request.validation?.problem || request.problem,
+          types: [approach.form],
+          link: "",
+          owner: { name: DEMO_USER.name, slackId: DEMO_USER.slackId },
+          team: request.team,
+          tags: request.tags,
+          accessLevel: request.stakesLevel === "high" ? "request" : "open",
+          sensitive: Boolean(request.prerequisites?.touchesPII),
+          writeCapable: false,
+          ownerInstructions:
+            request.validation?.currentWorkaround
+              ? `Claimed from validated request. Prior workaround: ${request.validation.currentWorkaround}`
+              : `Claimed from request. Reach out to ${request.requestedBy.slackId} on Slack.`,
+          status: "planned",
+          approvalStatus: "approved",
+          submittedBy: DEMO_USER.id,
+          usageStats: { views: 0, clicks: 0, helpful: 0 },
+          lastUpdated: nowIso(),
+          lastUsed: nowIso(),
+          ownerConfirmed: true,
+          chosenStack: stack,
+          chosenApproach: approach,
+          linkedRequestId: requestId,
+        };
+
+        setApprovedTools((approved) => [
+          tool,
+          ...approved.filter((t) => t.id !== toolId),
+        ]);
+        setPendingTools((pending) => pending.filter((t) => t.id !== toolId));
+
+        return prev.map((r) =>
+          r.id === requestId ? { ...r, linkedToolId: toolId } : r,
+        );
       });
 
-      setPendingTools((pending) => [tool, ...pending]);
-
-      return prev.map((r) =>
-        r.id === id
-          ? {
-              ...r,
-              status: "claimed" as const,
-              claimedBy: { name: DEMO_USER.name, slackId: DEMO_USER.slackId },
-              claimedById: DEMO_USER.id,
-              linkedToolId: toolId,
-            }
-          : r,
-      );
-    });
-
-    return createdToolId;
-  }, [role]);
+      return resultId;
+    },
+    [role],
+  );
 
   const requestBuilderAccess = useCallback(() => {
     if (role !== "viewer") return;
@@ -679,11 +835,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => ({
       role,
       setRole,
-      approvedTools,
+      approvedTools: uniqueApprovedTools,
       pendingTools,
       rejectedTools,
       allTools,
       requests,
+      buildingBlocks,
       mySubmissions,
       myRequests,
       hasTrackingItems,
@@ -714,6 +871,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       fileRequest,
       upvoteRequest,
       claimRequest,
+      createValidatedRequest,
+      parkNeed,
+      completeBuilderFunnel,
       requestBuilderAccess,
       grantBuilderRole,
       revokeBuilderRole,
@@ -726,6 +886,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       canApprove,
       canEditTool,
       canManageTool,
+      canFlagTool,
       canViewTool,
       currentUser: DEMO_USER,
       getToolById,
@@ -734,11 +895,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }),
     [
       role,
-      approvedTools,
+      uniqueApprovedTools,
       pendingTools,
       rejectedTools,
       allTools,
       requests,
+      buildingBlocks,
       mySubmissions,
       myRequests,
       hasTrackingItems,
@@ -769,6 +931,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       fileRequest,
       upvoteRequest,
       claimRequest,
+      createValidatedRequest,
+      parkNeed,
+      completeBuilderFunnel,
       requestBuilderAccess,
       grantBuilderRole,
       revokeBuilderRole,
@@ -779,6 +944,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       canApprove,
       canEditTool,
       canManageTool,
+      canFlagTool,
       canViewTool,
       getToolById,
       getRequestById,

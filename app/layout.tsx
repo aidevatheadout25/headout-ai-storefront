@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Header } from "@/components/Header";
+import { Sidebar } from "@/components/Sidebar";
 import { Providers } from "@/components/Providers";
 import "./globals.css";
 
@@ -15,16 +15,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" data-theme="light" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <head>
         <link rel="stylesheet" href="/design-system/colors_and_type.css" />
-        <link rel="stylesheet" href="/design-system/dark-mode.css" />
       </head>
       <body>
         <Providers>
           <div className="app-shell">
-            <Header />
-            <main className="app-main">{children}</main>
+            <Sidebar />
+            <div className="app-content">
+              <main className="app-main">{children}</main>
+            </div>
           </div>
         </Providers>
       </body>
