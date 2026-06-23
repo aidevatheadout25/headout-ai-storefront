@@ -1,4 +1,13 @@
 import type { AskResult, Tool } from "@/lib/types";
+import { getKitById, KITS } from "@/lib/mockData";
+import { compareLifecycle } from "@/lib/toolMeta";
+
+export const STOREFRONT_SLACK_CHANNEL = "#project-ai-internal-storefront";
+export const STOREFRONT_SLACK_URL =
+  "https://headout.slack.com/archives/project-ai-internal-storefront";
+
+const NO_MATCH_MESSAGE = `No tool matches that. Try ${STOREFRONT_SLACK_CHANNEL} on Slack.`;
+const GIBBERISH_MESSAGE = "Try describing what problem you're trying to solve.";
 
 function normalizeQuery(query: string): string {
   return query.toLowerCase().trim();
@@ -22,36 +31,7 @@ function isGibberish(query: string): boolean {
   return false;
 }
 
-function isKnowledgeIntent(query: string): boolean {
-  const q = normalizeQuery(query);
-  return (
-    q.startsWith("how ") ||
-    q.includes("how do i") ||
-    q.includes("how can i") ||
-    q.includes("what's the process") ||
-    q.includes("what is the process") ||
-    q.includes("where do i") ||
-    q.includes("who do i ask")
-  );
-}
-
-function isToolDiscoveryIntent(query: string): boolean {
-  const q = normalizeQuery(query);
-  return (
-    q.startsWith("find ") ||
-    q.includes("find me") ||
-    q.includes("search for") ||
-    q.includes("looking for") ||
-    q.includes("need a") ||
-    q.includes("need something") ||
-    q.includes("something that") ||
-    q.includes("tool for") ||
-    q.includes("pulls ") ||
-    q.includes("pull ")
-  );
-}
-
-function searchTools(query: string, tools: Tool[]): Tool[] {
+export function searchTools(query: string, tools: Tool[]): Tool[] {
   const q = normalizeQuery(query);
   const stopWords = new Set([
     "the",
@@ -68,6 +48,8 @@ function searchTools(query: string, tools: Tool[]): Tool[] {
     "how",
     "what",
     "where",
+    "a",
+    "an",
   ]);
   const keywords = q
     .split(/\s+/)
@@ -83,7 +65,7 @@ function searchTools(query: string, tools: Tool[]): Tool[] {
   return tools
     .map((tool) => {
       const haystack =
-        `${tool.name} ${tool.oneLiner} ${tool.description} ${tool.tags.join(" ")} ${tool.type} ${tool.team}`.toLowerCase();
+        `${tool.name} ${tool.oneLiner} ${tool.description} ${tool.tags.join(" ")} ${tool.types.join(" ")} ${tool.team}`.toLowerCase();
       let score = 0;
       for (const kw of keywords) {
         if (haystack.includes(kw)) score += 1;
@@ -91,104 +73,66 @@ function searchTools(query: string, tools: Tool[]): Tool[] {
       return { tool, score };
     })
     .filter(({ score }) => score > 0)
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || compareLifecycle(a.tool, b.tool))
     .slice(0, 5)
     .map(({ tool }) => tool);
 }
 
-function matchesScraperIntent(query: string): boolean {
-  const q = normalizeQuery(query);
-  return (
-    q.includes("scraper") ||
-    q.includes("scrape") ||
-    q.includes("scraping") ||
-    (q.includes("find") && q.includes("viator")) ||
-    (q.includes("pull") && q.includes("availability"))
-  );
-}
-
-function matchesBigQueryIntent(query: string): boolean {
-  const q = normalizeQuery(query);
-  return (
-    q.includes("bigquery") ||
-    q.includes("bq access") ||
-    q.includes("bq ") ||
-    (q.includes("get") && q.includes("access") && q.includes("data")) ||
-    (q.includes("how") && q.includes("access") && q.includes("query"))
-  );
-}
-
 export function resolveAskQuery(query: string, tools: Tool[]): AskResult {
   const trimmed = query.trim();
-  if (!trimmed) {
+
+  if (!trimmed || isGibberish(trimmed)) {
     return {
       type: "fallback",
       query: trimmed,
-      message: "Try describing what problem you're trying to solve.",
+      message: GIBBERISH_MESSAGE,
+      reason: "gibberish",
     };
-  }
-
-  if (isGibberish(trimmed)) {
-    return {
-      type: "fallback",
-      query: trimmed,
-      message: "Try describing what problem you're trying to solve.",
-    };
-  }
-
-  if (matchesBigQueryIntent(trimmed)) {
-    return {
-      type: "knowledge",
-      query: trimmed,
-      answer:
-        "To get BigQuery access at Headout, request a data-platform seat in #data-platform. You'll need your manager's approval and a brief use-case blurb. Once approved, Jordan's team provisions a service account and adds you to the headout-analytics project. Most internal dashboards (like the availability dashboard) are already wired — you may just need Looker access instead.",
-      sources: [
-        {
-          label: "Data platform onboarding (Notion)",
-          url: "https://notion.headout.internal/data-platform-onboarding",
-        },
-        {
-          label: "BigQuery availability dashboard",
-          url: "/tools/bq-availability-dashboard",
-        },
-      ],
-    };
-  }
-
-  if (isKnowledgeIntent(trimmed)) {
-    return {
-      type: "knowledge",
-      query: trimmed,
-      uncertain: true,
-      answer:
-        "I don't have a confident answer — try #data-platform on Slack for help with internal process questions.",
-      sources: [
-        {
-          label: "#data-platform on Slack",
-          url: "https://headout.slack.com/archives/data-platform",
-        },
-      ],
-    };
-  }
-
-  if (matchesScraperIntent(trimmed) || isToolDiscoveryIntent(trimmed)) {
-    const scraperTools = tools.filter(
-      (t) =>
-        t.tags.includes("scraping") ||
-        t.name.toLowerCase().includes("scraper") ||
-        t.name.toLowerCase().includes("scrape"),
-    );
-    if (matchesScraperIntent(trimmed) && scraperTools.length > 0) {
-      return { type: "tools", query: trimmed, tools: scraperTools };
-    }
-    return { type: "tools", query: trimmed, tools: searchTools(trimmed, tools) };
   }
 
   const results = searchTools(trimmed, tools);
+
+  if (results.length === 0) {
+    return {
+      type: "fallback",
+      query: trimmed,
+      message: NO_MATCH_MESSAGE,
+      reason: "no-match",
+    };
+  }
+
   return { type: "tools", query: trimmed, tools: results };
 }
 
-import { getKitById } from "@/lib/mockData";
+export function getClosestKits(query: string, limit = 3) {
+  const q = query.toLowerCase().trim();
+  if (!q) return KITS.slice(0, limit);
+
+  const keywords = q.split(/\s+/).filter((w) => w.length >= 2);
+  const scored = KITS.map((kit) => {
+    const haystack = `${kit.name} ${kit.description}`.toLowerCase();
+    const score = keywords.filter((kw) => haystack.includes(kw)).length;
+    return { kit, score };
+  })
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  if (scored.length > 0) {
+    return scored.slice(0, limit).map(({ kit }) => kit);
+  }
+
+  return KITS.slice(0, limit);
+}
+
+export function buildPlannedSubmitUrl(query: string): string {
+  const trimmed = query.trim();
+  const params = new URLSearchParams({ status: "planned" });
+  if (trimmed) {
+    params.set("name", trimmed);
+    params.set("oneLiner", `Looking for something that ${trimmed}`);
+  }
+  return `/submit?${params.toString()}`;
+}
 
 export function filterRegistryTools(
   tools: Tool[],
@@ -202,14 +146,16 @@ export function filterRegistryTools(
   const kitIdSet = kit ? new Set(kit.toolIds) : null;
 
   return tools.filter((tool) => {
-    if (tool.status !== "approved") return false;
+    if (tool.approvalStatus !== "approved") return false;
     if (kitIdSet && !kitIdSet.has(tool.id)) return false;
-    if (typeFilter && tool.type !== typeFilter) return false;
+    if (typeFilter && !tool.types.includes(typeFilter as Tool["types"][number])) {
+      return false;
+    }
     if (teamFilter && tool.team !== teamFilter) return false;
     if (!q) return true;
 
     const haystack =
-      `${tool.name} ${tool.oneLiner} ${tool.tags.join(" ")} ${tool.owner.name} ${tool.team}`.toLowerCase();
+      `${tool.name} ${tool.oneLiner} ${tool.tags.join(" ")} ${tool.types.join(" ")} ${tool.owner.name} ${tool.team}`.toLowerCase();
     return q.split(/\s+/).every((word) => haystack.includes(word));
   });
 }

@@ -4,11 +4,12 @@ import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ToolCard } from "@/components/ToolCard";
 import { EmptyState } from "@/components/EmptyState";
+import { ZeroResultsPanel } from "@/components/ZeroResultsPanel";
 import { ButtonLink } from "@/components/Button";
 import { Icon } from "@/components/Icon";
 import { RoleBanner } from "@/components/RoleSwitcher";
 import { useApp } from "@/context/AppContext";
-import { filterRegistryTools } from "@/lib/askBar";
+import { filterRegistryTools, getClosestKits } from "@/lib/askBar";
 import { getKitById } from "@/lib/mockData";
 import { sortRegistryTools, type RegistrySort } from "@/lib/registry";
 import {
@@ -28,7 +29,7 @@ const SORT_OPTIONS: { value: RegistrySort; label: string }[] = [
 export function RegistryView() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { approvedTools, canSubmit } = useApp();
+  const { approvedTools } = useApp();
   const kitParam = searchParams.get("kit") ?? "";
   const [search, setSearch] = useState(searchParams.get("q") ?? "");
   const [typeFilter, setTypeFilter] = useState("");
@@ -114,11 +115,9 @@ export function RegistryView() {
             Browse every internal tool, skill, MCP, and bot at Headout.
           </p>
         </div>
-        {canSubmit && (
-          <ButtonLink href="/submit" variant="primary">
-            Submit a tool
-          </ButtonLink>
-        )}
+        <ButtonLink href="/submit" variant="primary">
+          Submit a tool
+        </ButtonLink>
       </div>
 
       <div className="registry-layout">
@@ -249,21 +248,28 @@ export function RegistryView() {
                 <ToolCard key={tool.id} tool={tool} variant="catalog" />
               ))}
             </div>
+          ) : hasActiveFilters && search ? (
+            <ZeroResultsPanel
+              query={search}
+              kits={getClosestKits(search)}
+            />
           ) : (
             <EmptyState
               icon="globe"
-              title="No tools found"
+              title={
+                hasActiveFilters
+                  ? "No tools found"
+                  : "Nothing here yet — be the first to register a tool"
+              }
               description={
                 hasActiveFilters
-                  ? "Nothing matched your search or filters."
-                  : "The registry is empty. Be the first to submit a tool."
+                  ? "Nothing matched your filters. Try clearing filters or broadening your search."
+                  : "The registry is empty. Register what you've built so others can find it."
               }
               action={
-                canSubmit ? (
-                  <ButtonLink href="/submit" variant="primary">
-                    Want to register one?
-                  </ButtonLink>
-                ) : undefined
+                <ButtonLink href="/submit" variant="primary">
+                  Register a tool
+                </ButtonLink>
               }
             />
           )}

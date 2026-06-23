@@ -37,8 +37,9 @@ export function RoleBanner() {
   const { role, canSubmit, canApprove } = useApp();
 
   const messages: Record<Role, string> = {
-    viewer: "You're browsing as a viewer — you can search and discover, but can't submit tools.",
-    builder: "You're a builder — submit tools and edit your own entries.",
+    viewer:
+      "You're browsing as a viewer — search the catalog and submit ideas; your first submission makes you a builder.",
+    builder: "You're a builder — submit tools, track my submissions, and edit your own entries.",
     admin: "You're an admin — approve submissions and manage the full registry.",
   };
 
@@ -53,7 +54,7 @@ export function RoleBanner() {
           </span>
         )}
         {canSubmit && role === "builder" && (
-          <span className="role-banner__badge t-tag-sm">Submit enabled</span>
+          <span className="role-banner__badge t-tag-sm">Submit & track enabled</span>
         )}
       </p>
     </div>

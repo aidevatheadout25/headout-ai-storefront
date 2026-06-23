@@ -29,15 +29,15 @@ export function getRecommendedTools(
   const tagBoost = new Set(ROLE_TAG_BOOST[role]);
 
   return [...tools]
-    .filter((t) => t.status === "approved")
+    .filter((t) => t.approvalStatus === "approved")
     .map((tool) => {
       let score = tool.usageStats.views * 0.01 + tool.usageStats.helpful;
 
       if (tool.team === mockTeam) score += 50;
-      if (typeBoost.has(tool.type)) score += 20;
+      if (tool.types.some((t) => typeBoost.has(t))) score += 20;
       if (tool.tags.some((tag) => tagBoost.has(tag))) score += 15;
 
-      if (role === "admin" && tool.accessLevel === "gated") score += 10;
+      if (role === "admin" && tool.accessLevel !== "open") score += 10;
       if (role === "builder" && tool.submittedBy === "alex-kim") score += 25;
 
       return { tool, score };

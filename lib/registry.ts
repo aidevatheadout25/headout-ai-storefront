@@ -1,22 +1,30 @@
 import type { Tool, ToolType } from "@/lib/types";
+import { compareLifecycle } from "@/lib/toolMeta";
 
 export type RegistrySort = "most-used" | "recent" | "a-z";
 
-export function sortRegistryTools(tools: Tool[], sort: RegistrySort): Tool[] {
-  const sorted = [...tools];
+function withLifecycleSort(tools: Tool[], secondary: (a: Tool, b: Tool) => number): Tool[] {
+  return [...tools].sort((a, b) => {
+    const lifecycleDiff = compareLifecycle(a, b);
+    if (lifecycleDiff !== 0) return lifecycleDiff;
+    return secondary(a, b);
+  });
+}
 
+export function sortRegistryTools(tools: Tool[], sort: RegistrySort): Tool[] {
   switch (sort) {
     case "most-used":
-      return sorted.sort(
-        (a, b) =>
-          b.usageStats.views +
-          b.usageStats.clicks -
-          (a.usageStats.views + a.usageStats.clicks),
+      return withLifecycleSort(tools, (a, b) =>
+        b.usageStats.views +
+        b.usageStats.clicks -
+        (a.usageStats.views + a.usageStats.clicks),
       );
     case "recent":
-      return sorted.reverse();
+      return withLifecycleSort(tools, (a, b) =>
+        new Date(b.lastUpdated).getTime() - new Date(a.lastUpdated).getTime(),
+      );
     case "a-z":
-      return sorted.sort((a, b) => a.name.localeCompare(b.name));
+      return withLifecycleSort(tools, (a, b) => a.name.localeCompare(b.name));
     default: {
       const _exhaustive: never = sort;
       return _exhaustive;

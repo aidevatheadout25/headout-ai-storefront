@@ -2,23 +2,55 @@
 
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Icon } from "@/components/Icon";
 import { ToolCard } from "@/components/ToolCard";
-import { Button, ButtonLink } from "@/components/Button";
+import { Button } from "@/components/Button";
+import { ErrorState } from "@/components/ErrorState";
+import { ZeroResultsPanel } from "@/components/ZeroResultsPanel";
 import { useApp } from "@/context/AppContext";
-import { resolveAskQuery } from "@/lib/askBar";
+import { getClosestKits, resolveAskQuery } from "@/lib/askBar";
 import type { AskResult } from "@/lib/types";
 
+const SEARCH_ERROR_TRIGGER = "!!error!!";
+
 export function AskBar() {
-  const { approvedTools, canSubmit } = useApp();
+  const searchParams = useSearchParams();
+  const { approvedTools, recordZeroResultSearch } = useApp();
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<AskResult | null>(null);
   const [submitted, setSubmitted] = useState(false);
+  const [searchError, setSearchError] = useState(false);
+  const [lastQuery, setLastQuery] = useState("");
+
+  function runSearch(searchQuery: string) {
+    if (
+      searchParams.get("demo") === "search-error" ||
+      searchQuery.trim().toLowerCase() === SEARCH_ERROR_TRIGGER
+    ) {
+      setSearchError(true);
+      setSubmitted(true);
+      setResult(null);
+      setLastQuery(searchQuery);
+      return;
+    }
+
+    setSearchError(false);
+    const resolved = resolveAskQuery(searchQuery, approvedTools);
+    if (
+      resolved.type === "fallback" &&
+      resolved.reason === "no-match"
+    ) {
+      recordZeroResultSearch(searchQuery);
+    }
+    setResult(resolved);
+    setSubmitted(true);
+    setLastQuery(searchQuery);
+  }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    setSubmitted(true);
-    setResult(resolveAskQuery(query, approvedTools));
+    runSearch(query);
   }
 
   return (
@@ -29,10 +61,10 @@ export function AskBar() {
           <input
             type="search"
             className="ask-bar__input t-para-md"
-            placeholder="Search tools or ask a question — 'find a scraper', 'how do I get BigQuery access?'"
+            placeholder="Search tools — 'viator scraper', 'pricing MCP', 'content QA bot'"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="Search tools or ask a question"
+            aria-label="Search tools"
           />
           <Button type="submit" size="sm" className="ask-bar__submit">
             Search
@@ -40,77 +72,51 @@ export function AskBar() {
         </div>
       </form>
 
-      {submitted && result && (
+      {submitted && searchError && (
+        <ErrorState
+          title="Search unavailable"
+          message="We couldn't run that search right now. This is a mocked error — try again."
+          onRetry={() => {
+            setSearchError(false);
+            runSearch(lastQuery || query);
+          }}
+        />
+      )}
+
+      {submitted && !searchError && result && (
         <div className="ask-bar__results">
           {result.type === "tools" && (
             <>
               <p className="ask-bar__results-heading t-subheading-rg">
-                {result.tools.length > 0
-                  ? `Found ${result.tools.length} tool${result.tools.length === 1 ? "" : "s"} for "${result.query}"`
-                  : `No tools found for "${result.query}"`}
+                Found {result.tools.length} tool
+                {result.tools.length === 1 ? "" : "s"} for &ldquo;{result.query}&rdquo;
               </p>
-              {result.tools.length > 0 ? (
-                <>
-                  <div className="tool-grid tool-grid--compact">
-                    {result.tools.map((tool) => (
-                      <ToolCard key={tool.id} tool={tool} />
-                    ))}
-                  </div>
-                  <Link
-                    href={`/registry?q=${encodeURIComponent(result.query)}`}
-                    className="ask-bar__view-all t-para-rg text-link"
-                  >
-                    View all in registry
-                  </Link>
-                </>
-              ) : (
-                <div className="ask-bar__zero-results">
-                  <p className="ask-bar__fallback t-para-md">
-                    No tools found — want to register one?
-                  </p>
-                  {canSubmit ? (
-                    <ButtonLink href="/submit" variant="primary" size="sm">
-                      Submit a tool
-                    </ButtonLink>
-                  ) : (
-                    <p className="t-para-sm text-muted">
-                      Ask a builder on your team to register it, or switch to
-                      Builder role in the header.
-                    </p>
-                  )}
-                </div>
-              )}
+              <div className="tool-grid tool-grid--compact">
+                {result.tools.map((tool) => (
+                  <ToolCard key={tool.id} tool={tool} />
+                ))}
+              </div>
+              <Link
+                href={`/registry?q=${encodeURIComponent(result.query)}`}
+                className="ask-bar__view-all t-para-rg text-link"
+              >
+                View all in registry
+              </Link>
             </>
           )}
 
-          {result.type === "knowledge" && (
-            <div className="ask-bar__knowledge">
-              <p className="ask-bar__results-heading t-subheading-rg">
-                Answer for &ldquo;{result.query}&rdquo;
-              </p>
-              <p className="ask-bar__answer t-para-md">{result.answer}</p>
-              <div className="ask-bar__sources">
-                <span className="ask-bar__sources-label t-label-rg-heavy">
-                  Source{result.sources.length === 1 ? "" : "s"}
-                </span>
-                <ul className="ask-bar__sources-list">
-                  {result.sources.map((source) => (
-                    <li key={source.label}>
-                      <Link href={source.url} className="text-link t-para-rg">
-                        {source.label}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          )}
-
-          {result.type === "fallback" && (
+          {result.type === "fallback" && result.reason === "gibberish" && (
             <div className="ask-bar__fallback-card">
               <Icon name="bulb" size={24} className="ask-bar__fallback-icon" />
               <p className="t-para-md">{result.message}</p>
             </div>
+          )}
+
+          {result.type === "fallback" && result.reason === "no-match" && (
+            <ZeroResultsPanel
+              query={result.query}
+              kits={getClosestKits(result.query)}
+            />
           )}
         </div>
       )}

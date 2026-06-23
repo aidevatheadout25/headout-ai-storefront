@@ -11,7 +11,10 @@ export default function EditToolPage() {
   const { getToolById, canEditTool } = useApp();
   const tool = getToolById(id);
 
-  if (!tool || tool.status !== "approved") {
+  if (
+    !tool ||
+    (tool.approvalStatus !== "approved" && tool.approvalStatus !== "rejected")
+  ) {
     notFound();
   }
 
@@ -25,17 +28,32 @@ export default function EditToolPage() {
     );
   }
 
+  const isResubmit = tool.approvalStatus === "rejected";
+
   return (
     <>
       <div className="page-header">
         <div>
-          <h1 className="page-header__title t-display-xs">Edit tool</h1>
+          <h1 className="page-header__title t-display-xs">
+            {isResubmit ? "Edit and resubmit" : "Edit tool"}
+          </h1>
           <p className="page-header__desc t-para-md">
-            Update {tool.name} — changes go live immediately.
+            {isResubmit
+              ? `Update ${tool.name} and send it back to the review queue.`
+              : `Update ${tool.name} — changes go live immediately.`}
           </p>
+          {isResubmit && tool.rejectReason && (
+            <p className="review-banner__desc t-para-sm">
+              Previous feedback: {tool.rejectReason}
+            </p>
+          )}
         </div>
       </div>
-      <ToolForm mode="edit" toolId={id} initialData={toolToForm(tool)} />
+      <ToolForm
+        mode={isResubmit ? "resubmit" : "edit"}
+        toolId={id}
+        initialData={toolToForm(tool)}
+      />
     </>
   );
 }

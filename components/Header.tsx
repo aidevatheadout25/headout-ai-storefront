@@ -19,7 +19,8 @@ function navClass(pathname: string, href: string) {
 
 export function Header() {
   const pathname = usePathname();
-  const { canSubmit, canApprove, pendingTools } = useApp();
+  const { canApprove, pendingTools, flaggedTools, hasSubmissions } = useApp();
+  const approvalBadgeCount = pendingTools.length + flaggedTools.length;
 
   return (
     <header className="site-header">
@@ -47,21 +48,35 @@ export function Header() {
               {item.label}
             </Link>
           ))}
-          {canSubmit && (
-            <Link href="/submit" className={navClass(pathname, "/submit")}>
-              Submit a tool
+          <Link href="/submit" className={navClass(pathname, "/submit")}>
+            Submit a tool
+          </Link>
+          {hasSubmissions && (
+            <Link
+              href="/my-submissions"
+              className={navClass(pathname, "/my-submissions")}
+            >
+              My submissions
             </Link>
           )}
           {canApprove && (
-            <Link
-              href="/admin/approvals"
-              className={`${navClass(pathname, "/admin")} site-header__nav-link--admin`}
-            >
-              Approvals
-              {pendingTools.length > 0 && (
-                <span className="site-header__badge">{pendingTools.length}</span>
-              )}
-            </Link>
+            <>
+              <Link
+                href="/admin/approvals"
+                className={`${navClass(pathname, "/admin/approvals")} site-header__nav-link--admin`}
+              >
+                Approvals
+                {approvalBadgeCount > 0 && (
+                  <span className="site-header__badge">{approvalBadgeCount}</span>
+                )}
+              </Link>
+              <Link
+                href="/admin/metrics"
+                className={`${navClass(pathname, "/admin/metrics")} site-header__nav-link--admin`}
+              >
+                Metrics
+              </Link>
+            </>
           )}
         </nav>
 
@@ -84,21 +99,35 @@ export function Header() {
             {item.label}
           </Link>
         ))}
-        {canSubmit && (
-          <Link href="/submit" className={navClass(pathname, "/submit")}>
-            Submit a tool
+        <Link href="/submit" className={navClass(pathname, "/submit")}>
+          Submit a tool
+        </Link>
+        {hasSubmissions && (
+          <Link
+            href="/my-submissions"
+            className={navClass(pathname, "/my-submissions")}
+          >
+            My submissions
           </Link>
         )}
         {canApprove && (
-          <Link
-            href="/admin/approvals"
-            className={`${navClass(pathname, "/admin")} site-header__nav-link--admin`}
-          >
-            Approvals
-            {pendingTools.length > 0 && (
-              <span className="site-header__badge">{pendingTools.length}</span>
-            )}
-          </Link>
+          <>
+            <Link
+              href="/admin/approvals"
+              className={`${navClass(pathname, "/admin/approvals")} site-header__nav-link--admin`}
+            >
+              Approvals
+              {approvalBadgeCount > 0 && (
+                <span className="site-header__badge">{approvalBadgeCount}</span>
+              )}
+            </Link>
+            <Link
+              href="/admin/metrics"
+              className={`${navClass(pathname, "/admin/metrics")} site-header__nav-link--admin`}
+            >
+              Metrics
+            </Link>
+          </>
         )}
       </nav>
     </header>

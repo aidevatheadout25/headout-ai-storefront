@@ -9,9 +9,16 @@ export type ToolType =
   | "slack-bot"
   | "dashboard";
 
-export type AccessLevel = "open" | "gated";
+export type AccessLevel = "open" | "request" | "sensitive";
 
-export type ToolStatus = "approved" | "pending" | "rejected";
+export type ApprovalStatus = "approved" | "pending" | "rejected";
+
+export type ToolLifecycleStatus =
+  | "planned"
+  | "beta"
+  | "live"
+  | "deprecated"
+  | "archived";
 
 export type Team =
   | "Platform"
@@ -25,6 +32,7 @@ export type Owner = {
   slackId: string;
 };
 
+/** Internal tallies only — never shown as public scores in v1 UI */
 export type UsageStats = {
   views: number;
   clicks: number;
@@ -36,35 +44,62 @@ export type Tool = {
   name: string;
   oneLiner: string;
   description: string;
-  type: ToolType;
+  types: ToolType[];
   link: string;
   owner: Owner;
   team: Team;
   tags: string[];
   accessLevel: AccessLevel;
+  sensitive: boolean;
+  writeCapable: boolean;
+  ownerInstructions: string;
   accessContact?: string;
   githubUrl?: string;
-  status: ToolStatus;
+  linkUnreachable?: boolean;
+  /** Lifecycle: planned → beta → live → deprecated → archived */
+  status: ToolLifecycleStatus;
+  approvalStatus: ApprovalStatus;
   submittedBy: string;
   usageStats: UsageStats;
+  lastUpdated: string;
+  lastUsed: string;
   rejectReason?: string;
+  /** False when submitter names a different owner — awaiting owner ack */
+  ownerConfirmed: boolean;
+};
+
+export type ToolFlag = {
+  id: string;
+  toolId: string;
+  toolName: string;
+  reason: string;
+  reporterName: string;
+  reporterSlackId: string;
+  createdAt: string;
+};
+
+export type ZeroResultQuery = {
+  query: string;
+  count: number;
 };
 
 export type ToolFormData = {
   name: string;
   oneLiner: string;
-  type: ToolType;
+  types: ToolType[];
   link: string;
   ownerName: string;
   ownerSlackId: string;
   team: Team;
   tags: string;
   accessLevel: AccessLevel;
+  sensitive: boolean;
+  writeCapable: boolean;
   githubUrl: string;
   description: string;
+  ownerInstructions: string;
+  status: ToolLifecycleStatus;
 };
-
-export type AskResultType = "tools" | "knowledge" | "fallback";
 
 export type AskToolResult = {
   type: "tools";
@@ -72,18 +107,11 @@ export type AskToolResult = {
   tools: Tool[];
 };
 
-export type AskKnowledgeResult = {
-  type: "knowledge";
-  query: string;
-  answer: string;
-  sources: { label: string; url: string }[];
-  uncertain?: boolean;
-};
-
 export type AskFallbackResult = {
   type: "fallback";
   query: string;
   message: string;
+  reason: "gibberish" | "no-match";
 };
 
 export type Kit = {
@@ -94,7 +122,7 @@ export type Kit = {
   accentVar: string;
 };
 
-export type AskResult = AskToolResult | AskKnowledgeResult | AskFallbackResult;
+export type AskResult = AskToolResult | AskFallbackResult;
 
 export const TOOL_TYPES: ToolType[] = [
   "app",
@@ -114,6 +142,14 @@ export const TEAMS: Team[] = [
   "Content",
 ];
 
+export const LIFECYCLE_STATUSES: ToolLifecycleStatus[] = [
+  "live",
+  "beta",
+  "planned",
+  "deprecated",
+  "archived",
+];
+
 export const ROLE_LABELS: Record<Role, string> = {
   admin: "Admin",
   builder: "Builder",
@@ -129,4 +165,8 @@ export function formatToolType(type: ToolType): string {
     default:
       return type.charAt(0).toUpperCase() + type.slice(1);
   }
+}
+
+export function formatToolTypes(types: ToolType[]): string {
+  return types.map(formatToolType).join(", ");
 }
