@@ -124,14 +124,20 @@ export function getClosestKits(query: string, limit = 3) {
   return KITS.slice(0, limit);
 }
 
-export function buildPlannedSubmitUrl(query: string): string {
+export function buildFileNeedUrl(query: string): string {
   const trimmed = query.trim();
-  const params = new URLSearchParams({ status: "planned" });
+  const params = new URLSearchParams();
   if (trimmed) {
-    params.set("name", trimmed);
-    params.set("oneLiner", `Looking for something that ${trimmed}`);
+    params.set("title", trimmed);
+    params.set("problem", `Looking for something that ${trimmed}`);
   }
-  return `/submit?${params.toString()}`;
+  const qs = params.toString();
+  return qs ? `/file-need?${qs}` : "/file-need";
+}
+
+/** @deprecated Use buildFileNeedUrl */
+export function buildPlannedSubmitUrl(query: string): string {
+  return buildFileNeedUrl(query);
 }
 
 export function filterRegistryTools(

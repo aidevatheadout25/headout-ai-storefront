@@ -57,6 +57,14 @@ export function RegistryView() {
   const activeChips: { key: string; label: string; onRemove: () => void }[] =
     [];
 
+  const zeroResultContext = useMemo(() => {
+    if (search.trim()) return search.trim();
+    if (activeKit) return activeKit.name;
+    if (typeFilter) return formatToolType(typeFilter as ToolType);
+    if (teamFilter) return teamFilter;
+    return "";
+  }, [search, activeKit, typeFilter, teamFilter]);
+
   if (search) {
     activeChips.push({
       key: "search",
@@ -115,8 +123,8 @@ export function RegistryView() {
             Browse every internal tool, skill, MCP, and bot at Headout.
           </p>
         </div>
-        <ButtonLink href="/submit" variant="primary">
-          Submit a tool
+        <ButtonLink href="/file-need" variant="primary">
+          File a need
         </ButtonLink>
       </div>
 
@@ -248,10 +256,15 @@ export function RegistryView() {
                 <ToolCard key={tool.id} tool={tool} variant="catalog" />
               ))}
             </div>
-          ) : hasActiveFilters && search ? (
+          ) : hasActiveFilters ? (
             <ZeroResultsPanel
-              query={search}
-              kits={getClosestKits(search)}
+              query={zeroResultContext}
+              kits={getClosestKits(zeroResultContext)}
+              leadMessage={
+                search
+                  ? undefined
+                  : `Nothing matched your filters${zeroResultContext ? ` (${zeroResultContext})` : ""} — try these next steps instead of stopping here.`
+              }
             />
           ) : (
             <EmptyState
@@ -267,8 +280,8 @@ export function RegistryView() {
                   : "The registry is empty. Register what you've built so others can find it."
               }
               action={
-                <ButtonLink href="/submit" variant="primary">
-                  Register a tool
+                <ButtonLink href="/file-need" variant="primary">
+                  File a need
                 </ButtonLink>
               }
             />

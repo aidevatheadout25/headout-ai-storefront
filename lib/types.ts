@@ -32,6 +32,51 @@ export type Owner = {
   slackId: string;
 };
 
+export type RequestStatus = "open" | "claimed" | "fulfilled";
+
+export type NeedRequest = {
+  id: string;
+  title: string;
+  problem: string;
+  requestedBy: Owner;
+  requestedById: string;
+  team: Team;
+  tags: string[];
+  upvotes: number;
+  upvotedBy: string[];
+  status: RequestStatus;
+  claimedBy?: Owner;
+  claimedById?: string;
+  linkedToolId?: string;
+  createdAt: string;
+};
+
+export type RequestFormData = {
+  title: string;
+  problem: string;
+  team: Team;
+  tags: string;
+};
+
+export type MockUser = {
+  id: string;
+  name: string;
+  slackId: string;
+  team: Team;
+  role: Role;
+};
+
+export type BuilderAccessRequest = {
+  id: string;
+  userId: string;
+  userName: string;
+  userSlackId: string;
+  team: Team;
+  createdAt: string;
+};
+
+export type RequestBoardSort = "demand" | "recent";
+
 /** Internal tallies only — never shown as public scores in v1 UI */
 export type UsageStats = {
   views: number;
@@ -68,11 +113,20 @@ export type Tool = {
   ownerConfirmed: boolean;
 };
 
+export type ToolFlagReasonCategory =
+  | "broken-link"
+  | "outdated"
+  | "wrong-owner"
+  | "duplicate"
+  | "security"
+  | "other";
+
 export type ToolFlag = {
   id: string;
   toolId: string;
   toolName: string;
-  reason: string;
+  reasonCategory: ToolFlagReasonCategory;
+  note?: string;
   reporterName: string;
   reporterSlackId: string;
   createdAt: string;
@@ -148,6 +202,13 @@ export const LIFECYCLE_STATUSES: ToolLifecycleStatus[] = [
   "planned",
   "deprecated",
   "archived",
+];
+
+/** Statuses a submitter can pick when registering something new */
+export const SUBMIT_LIFECYCLE_STATUSES: ToolLifecycleStatus[] = [
+  "planned",
+  "live",
+  "beta",
 ];
 
 export const ROLE_LABELS: Record<Role, string> = {

@@ -2,9 +2,37 @@
 
 import { Suspense } from "react";
 import { ToolForm } from "@/components/ToolForm";
+import { EmptyState } from "@/components/EmptyState";
 import { RoleBanner } from "@/components/RoleSwitcher";
+import { ButtonLink } from "@/components/Button";
+import { useApp } from "@/context/AppContext";
 
-export default function SubmitPage() {
+function SubmitPageContent() {
+  const { canSubmitTool } = useApp();
+
+  if (!canSubmitTool) {
+    return (
+      <>
+        <RoleBanner />
+        <EmptyState
+          icon="shield-tick"
+          title="Builder access required"
+          description="Only builders and admins can register tools. File a need if something's missing, or request builder access from an admin."
+          action={
+            <div className="empty-state__action-row">
+              <ButtonLink href="/file-need" variant="primary">
+                File a need
+              </ButtonLink>
+              <ButtonLink href="/my-submissions" variant="secondary">
+                Request builder access
+              </ButtonLink>
+            </div>
+          }
+        />
+      </>
+    );
+  }
+
   return (
     <>
       <RoleBanner />
@@ -12,9 +40,8 @@ export default function SubmitPage() {
         <div>
           <h1 className="page-header__title t-display-xs">Submit a tool</h1>
           <p className="page-header__desc t-para-md">
-            Register what you built — or log a planned idea so others don&apos;t
-            duplicate it. Anyone can submit; your first submission makes you a
-            builder.
+            Register what you built — make it findable for everyone at Headout.
+            Builder access is granted by an admin.
           </p>
         </div>
       </div>
@@ -23,4 +50,8 @@ export default function SubmitPage() {
       </Suspense>
     </>
   );
+}
+
+export default function SubmitPage() {
+  return <SubmitPageContent />;
 }

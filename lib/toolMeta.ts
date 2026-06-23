@@ -4,6 +4,36 @@ export const STOREFRONT_SLACK_CHANNEL = "#project-ai-internal-storefront";
 export const STOREFRONT_SLACK_URL =
   "https://headout.slack.com/archives/project-ai-internal-storefront";
 
+/** Mock Slack channel for improvement requests — not email. */
+export const IMPROVEMENT_REQUEST_SLACK_URL = STOREFRONT_SLACK_URL;
+
+const SUBMITTER_LABELS: Record<string, string> = {
+  "alex-kim": "Alex Kim (@alex.kim)",
+  "jordan-lee": "Jordan Lee (@jordan.lee)",
+  "maya-patel": "Maya Patel (@maya.p)",
+  "sofia-reyes": "Sofia Reyes (@sofia.r)",
+  "tom-walsh": "Tom Walsh (@tom.w)",
+  "priya-sharma": "Priya Sharma (@priya.s)",
+};
+
+export function formatSubmitterLabel(submittedBy: string): string {
+  return (
+    SUBMITTER_LABELS[submittedBy] ??
+    submittedBy
+      .split("-")
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ")
+  );
+}
+
+export function formatSubmissionDate(isoDate: string): string {
+  return new Date(isoDate).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 const LIFECYCLE_RANK: Record<ToolLifecycleStatus, number> = {
   live: 0,
   beta: 1,
@@ -37,13 +67,13 @@ export const LIFECYCLE_STATUS_STYLES: Record<
     colorDark: "var(--color-dreamypale-400)",
   },
   deprecated: {
-    bg: "var(--color-grey-200)",
-    color: "var(--color-grey-700)",
-    bgDark: "var(--color-grey-800)",
-    colorDark: "var(--color-grey-400)",
+    bg: "var(--color-peachyorange-200)",
+    color: "var(--color-peachyorange-800)",
+    bgDark: "var(--color-peachyorange-800)",
+    colorDark: "var(--color-peachyorange-200)",
   },
   archived: {
-    bg: "var(--color-grey-100)",
+    bg: "var(--color-grey-200)",
     color: "var(--color-grey-600)",
     bgDark: "var(--color-grey-900)",
     colorDark: "var(--color-grey-500)",

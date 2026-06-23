@@ -65,10 +65,15 @@ export function AdminMetricsView() {
           <p className="stat-card__hint t-para-sm text-muted">Ideas + go-live reviews</p>
         </article>
 
-        <article className="stat-card tool-card">
-          <span className="stat-card__label t-label-rg-heavy">Zero-result searches</span>
+        <article className="stat-card tool-card stat-card--demo">
+          <div className="stat-card__header-row">
+            <span className="stat-card__label t-label-rg-heavy">Zero-result searches</span>
+            <span className="demo-data-badge t-tag-sm">Demo data</span>
+          </div>
           <p className="stat-card__value t-display-xs">{metrics.zeroResultsCount}</p>
-          <p className="stat-card__hint t-para-sm text-muted">Roadmap signal (mocked)</p>
+          <p className="stat-card__hint t-para-sm text-muted">
+            Illustrative count — not live telemetry
+          </p>
         </article>
       </div>
 
@@ -87,10 +92,12 @@ export function AdminMetricsView() {
       </section>
 
       <section className="metrics-section">
-        <h2 className="metrics-section__title t-heading-sm">Top zero-result queries</h2>
+        <div className="metrics-section__header">
+          <h2 className="metrics-section__title t-heading-sm">Top zero-result queries</h2>
+          <span className="demo-data-badge t-tag-sm">Demo data</span>
+        </div>
         <p className="metrics-section__desc t-para-sm text-muted">
-          What people searched for but didn&apos;t find — informs what to build or
-          register next.
+          Sample queries for the demo — not captured from live search sessions.
         </p>
         <ol className="metrics-query-list">
           {metrics.topZeroResultQueries.map((item, index) => (

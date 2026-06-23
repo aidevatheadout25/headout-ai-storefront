@@ -1,5 +1,5 @@
-import { MySubmissionsView } from "@/components/MySubmissionsView";
+import { MyRequestsAndSubmissionsView } from "@/components/MyRequestsAndSubmissionsView";
 
 export default function MySubmissionsPage() {
-  return <MySubmissionsView />;
+  return <MyRequestsAndSubmissionsView />;
 }

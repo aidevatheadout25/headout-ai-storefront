@@ -8,45 +8,84 @@ import { EmptyState } from "@/components/EmptyState";
 import { RoleBanner } from "@/components/RoleSwitcher";
 import { Icon } from "@/components/Icon";
 import { useApp } from "@/context/AppContext";
+import { FlagReasonChip } from "@/components/FlagReasonChip";
 import type { Tool, ToolFlag } from "@/lib/types";
 import { formatToolTypes } from "@/lib/types";
 import {
   formatAccessLevel,
+  formatSubmissionDate,
+  formatSubmitterLabel,
   isGoLiveSubmission,
   isIdeaSubmission,
   passesLightApprovalCheck,
   toolHasMcpType,
 } from "@/lib/toolMeta";
 import { GATE_ELIGIBILITY_NOTE } from "@/lib/adminMetrics";
+import { suggestedFlagAction } from "@/lib/flagReasons";
 
 function FlaggedCard({
   flag,
   onDismiss,
+  onDeprecate,
   onArchive,
 }: {
   flag: ToolFlag;
   onDismiss: () => void;
+  onDeprecate: () => void;
   onArchive: () => void;
 }) {
+  const suggested = suggestedFlagAction(flag.reasonCategory);
+
   return (
     <li className="flagged-card">
       <div className="flagged-card__header">
         <Icon name="info-circle" size={18} className="flagged-card__icon" />
         <div className="flagged-card__main">
-          <Link href={`/tools/${flag.toolId}`} className="flagged-card__title t-heading-sm text-link">
-            {flag.toolName}
-          </Link>
-          <p className="flagged-card__reason t-para-rg">{flag.reason}</p>
+          <div className="flagged-card__title-row">
+            <Link
+              href={`/tools/${flag.toolId}`}
+              className="flagged-card__title t-heading-sm text-link"
+            >
+              {flag.toolName}
+            </Link>
+            <FlagReasonChip category={flag.reasonCategory} />
+          </div>
+          {flag.note && (
+            <p className="flagged-card__note t-para-rg">{flag.note}</p>
+          )}
           <p className="flagged-card__meta t-para-sm text-muted">
             Reported by {flag.reporterName} ({flag.reporterSlackId})
           </p>
+          {suggested === "deprecate" && (
+            <p className="flagged-card__suggestion t-para-sm">
+              Suggested: deprecate outdated tools that still work.
+            </p>
+          )}
+          {suggested === "archive" && (
+            <p className="flagged-card__suggestion flagged-card__suggestion--archive t-para-sm">
+              Suggested: archive broken or security-risk tools.
+            </p>
+          )}
         </div>
       </div>
       <div className="flagged-card__actions">
         <Button variant="secondary" size="sm" onClick={onDismiss}>
           Dismiss
         </Button>
-        <Button variant="destructive" size="sm" onClick={onArchive}>
+        <Button
+          variant={suggested === "deprecate" ? "primary" : "secondary"}
+          size="sm"
+          onClick={onDeprecate}
+          className={suggested === "deprecate" ? "flagged-card__action--suggested" : undefined}
+        >
+          Deprecate
+        </Button>
+        <Button
+          variant="destructive"
+          size="sm"
+          onClick={onArchive}
+          className={suggested === "archive" ? "flagged-card__action--suggested" : undefined}
+        >
           Archive tool
         </Button>
       </div>
@@ -108,7 +147,11 @@ function ApprovalCard({
       <p className="approval-card__oneliner t-para-rg">{tool.oneLiner}</p>
 
       <p className="approval-card__meta t-para-sm text-muted">
-        {tool.owner.name} ({tool.owner.slackId})
+        Filed by {formatSubmitterLabel(tool.submittedBy)} on{" "}
+        {formatSubmissionDate(tool.lastUpdated)}
+      </p>
+      <p className="approval-card__meta t-para-sm text-muted">
+        Owner: {tool.owner.name} ({tool.owner.slackId})
       </p>
 
       {!isIdea && (
@@ -205,6 +248,7 @@ export function ApprovalsView() {
     rejectTool,
     dismissFlag,
     archiveFromFlag,
+    deprecateFromFlag,
     canApprove,
   } = useApp();
   const [rejectingId, setRejectingId] = useState<string | null>(null);
@@ -277,7 +321,8 @@ export function ApprovalsView() {
             Flagged ({flaggedTools.length})
           </h2>
           <p className="flagged-queue__desc t-para-sm text-muted">
-            User-reported issues — dismiss if resolved or archive the tool.
+            User-reported issues — dismiss, deprecate, or archive based on the
+            reason.
           </p>
           <ul className="flagged-list">
             {flaggedTools.map((flag) => (
@@ -285,6 +330,7 @@ export function ApprovalsView() {
                 key={flag.id}
                 flag={flag}
                 onDismiss={() => dismissFlag(flag.id)}
+                onDeprecate={() => deprecateFromFlag(flag.id)}
                 onArchive={() => archiveFromFlag(flag.id)}
               />
             ))}

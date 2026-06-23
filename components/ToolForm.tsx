@@ -5,6 +5,7 @@ import { useState, type FormEvent } from "react";
 import { findDedupMatches, MOCK_README_PREVIEW, DEMO_USER } from "@/lib/mockData";
 import {
   LIFECYCLE_STATUSES,
+  SUBMIT_LIFECYCLE_STATUSES,
   TEAMS,
   TOOL_TYPES,
   formatToolType,
@@ -40,7 +41,7 @@ const EMPTY_FORM: ToolFormData = {
 };
 
 type ToolFormProps = {
-  mode: "create" | "edit" | "resubmit";
+  mode: "create" | "edit" | "edit-pending" | "resubmit";
   initialData?: ToolFormData;
   toolId?: string;
 };
@@ -48,7 +49,7 @@ type ToolFormProps = {
 export function ToolForm({ mode, initialData, toolId }: ToolFormProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { allTools, submitTool, updateTool, resubmitRejectedTool, role, setRole } = useApp();
+  const { allTools, submitTool, updateTool, updatePendingTool, resubmitRejectedTool } = useApp();
   const demoErrors = searchParams.get("demo") === "errors";
   const [form, setForm] = useState<ToolFormData>(() => {
     const base: ToolFormData = initialData ?? {
@@ -76,7 +77,6 @@ export function ToolForm({ mode, initialData, toolId }: ToolFormProps) {
   const [submitted, setSubmitted] = useState(false);
   const [submitFailed, setSubmitFailed] = useState(false);
   const [submitAttempted, setSubmitAttempted] = useState(false);
-  const [promotedToBuilder, setPromotedToBuilder] = useState(false);
 
   const isPlanned = form.status === "planned";
   const dedupMatches = findDedupMatches(form.name, form.oneLiner, allTools);
@@ -125,16 +125,14 @@ export function ToolForm({ mode, initialData, toolId }: ToolFormProps) {
 
     setSubmitFailed(false);
     if (mode === "create") {
-      const wasViewer = role === "viewer";
       submitTool(form);
-      if (wasViewer) {
-        setRole("builder");
-        setPromotedToBuilder(true);
-      }
       setSubmitted(true);
     } else if (toolId && mode === "resubmit") {
       resubmitRejectedTool(toolId, form);
       router.push("/my-submissions");
+    } else if (toolId && mode === "edit-pending") {
+      updatePendingTool(toolId, form);
+      router.push(`/tools/${toolId}`);
     } else if (toolId) {
       updateTool(toolId, form);
       router.push(`/tools/${toolId}`);
@@ -182,14 +180,9 @@ export function ToolForm({ mode, initialData, toolId }: ToolFormProps) {
             {GATE_ELIGIBILITY_NOTE}
           </p>
         )}
-        {promotedToBuilder && (
-          <p className="builder-promotion-note t-para-sm" role="status">
-            You&apos;re now a builder — you can track and edit what you submit.
-          </p>
-        )}
         <div className="confirmation-card__actions">
           <ButtonLinkWrap href="/my-submissions" variant="primary">
-            My submissions
+            My requests & submissions
           </ButtonLinkWrap>
           <ButtonLinkWrap href="/registry" variant="secondary">
             Browse registry
@@ -251,9 +244,17 @@ export function ToolForm({ mode, initialData, toolId }: ToolFormProps) {
 
       <div className="form-field">
         <span className="form-field__label t-label-rg-heavy">Status</span>
+        <p className="form-field__hint t-para-sm text-muted">
+          {mode === "create"
+            ? "How far along is this? Deprecated and archived are set later by the owner — not at submit time."
+            : mode === "edit-pending"
+              ? "Still in review — you can update details before an admin decides."
+              : "Lifecycle after publish. Use Archive on the tool page to retire an entry."}
+        </p>
         <div className="form-field__radios form-field__radios--wrap">
-          {LIFECYCLE_STATUSES.filter((s) =>
-            mode === "create" ? true : s !== "archived",
+          {(mode === "create" || mode === "edit-pending"
+            ? SUBMIT_LIFECYCLE_STATUSES
+            : LIFECYCLE_STATUSES.filter((s) => s !== "archived")
           ).map((status) => (
             <label key={status} className="form-field__radio t-para-rg">
               <input
@@ -490,10 +491,16 @@ export function ToolForm({ mode, initialData, toolId }: ToolFormProps) {
               : "Submit for go-live review"
             : mode === "resubmit"
               ? "Resubmit for review"
-              : "Save changes"}
+              : mode === "edit-pending"
+                ? "Save submission"
+                : "Save changes"}
         </Button>
         <Link
-          href={mode === "edit" && toolId ? `/tools/${toolId}` : "/registry"}
+          href={
+            toolId && (mode === "edit" || mode === "edit-pending")
+              ? `/tools/${toolId}`
+              : "/registry"
+          }
           className="btn btn--secondary btn--rg t-cta-rg"
         >
           Cancel

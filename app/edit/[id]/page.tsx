@@ -13,7 +13,9 @@ export default function EditToolPage() {
 
   if (
     !tool ||
-    (tool.approvalStatus !== "approved" && tool.approvalStatus !== "rejected")
+    (tool.approvalStatus !== "approved" &&
+      tool.approvalStatus !== "rejected" &&
+      tool.approvalStatus !== "pending")
   ) {
     notFound();
   }
@@ -23,24 +25,31 @@ export default function EditToolPage() {
       <EmptyState
         icon="shield-tick"
         title="You can't edit this tool"
-        description="Switch to Builder (for your own tools) or Admin to edit registry entries."
+        description="Only the person who submitted this entry — or an admin — can edit it."
       />
     );
   }
 
   const isResubmit = tool.approvalStatus === "rejected";
+  const isPendingEdit = tool.approvalStatus === "pending";
 
   return (
     <>
       <div className="page-header">
         <div>
           <h1 className="page-header__title t-display-xs">
-            {isResubmit ? "Edit and resubmit" : "Edit tool"}
+            {isResubmit
+              ? "Edit and resubmit"
+              : isPendingEdit
+                ? "Edit submission"
+                : "Edit tool"}
           </h1>
           <p className="page-header__desc t-para-md">
             {isResubmit
               ? `Update ${tool.name} and send it back to the review queue.`
-              : `Update ${tool.name} — changes go live immediately.`}
+              : isPendingEdit
+                ? `Update ${tool.name} while it's still in the admin queue.`
+                : `Update ${tool.name} — changes go live immediately.`}
           </p>
           {isResubmit && tool.rejectReason && (
             <p className="review-banner__desc t-para-sm">
@@ -50,7 +59,7 @@ export default function EditToolPage() {
         </div>
       </div>
       <ToolForm
-        mode={isResubmit ? "resubmit" : "edit"}
+        mode={isResubmit ? "resubmit" : isPendingEdit ? "edit-pending" : "edit"}
         toolId={id}
         initialData={toolToForm(tool)}
       />

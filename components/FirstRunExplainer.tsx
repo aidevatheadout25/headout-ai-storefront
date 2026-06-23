@@ -32,8 +32,8 @@ export function FirstRunExplainer() {
     <div className="first-run-strip" role="status">
       <p className="first-run-strip__text t-para-rg">
         Find an internal tool before you build one. Search, or{" "}
-        <Link href="/submit" className="first-run-strip__cta t-cta-sm">
-          register what you&apos;ve made
+        <Link href="/file-need" className="first-run-strip__cta t-cta-sm">
+          file a need
         </Link>
         .
       </p>

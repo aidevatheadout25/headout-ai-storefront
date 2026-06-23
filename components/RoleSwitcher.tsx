@@ -29,18 +29,23 @@ export function RoleSwitcher() {
           </button>
         ))}
       </div>
+      <p className="role-switcher__caption t-label-sm text-muted">
+        Demo: roles are admin-assigned in production.
+      </p>
     </div>
   );
 }
 
 export function RoleBanner() {
-  const { role, canSubmit, canApprove } = useApp();
+  const { role, canSubmitTool, canClaimRequest, canApprove } = useApp();
 
   const messages: Record<Role, string> = {
     viewer:
-      "You're browsing as a viewer — search the catalog and submit ideas; your first submission makes you a builder.",
-    builder: "You're a builder — submit tools, track my submissions, and edit your own entries.",
-    admin: "You're an admin — approve submissions and manage the full registry.",
+      "You're a viewer — search, file needs, upvote requests, and track your own demand. Builder access is admin-granted.",
+    builder:
+      "You're a builder — file needs, submit tools, claim requests, and maintain what you own.",
+    admin:
+      "You're an admin — approve tools, moderate flags, manage builders, and grant builder access.",
   };
 
   return (
@@ -50,11 +55,18 @@ export function RoleBanner() {
         {messages[role]}
         {canApprove && role === "admin" && (
           <span className="role-banner__badge t-tag-sm">
-            Approval queue visible
+            Admin queues visible
           </span>
         )}
-        {canSubmit && role === "builder" && (
-          <span className="role-banner__badge t-tag-sm">Submit & track enabled</span>
+        {canSubmitTool && role === "builder" && (
+          <span className="role-banner__badge t-tag-sm">
+            Submit & claim enabled
+          </span>
+        )}
+        {canClaimRequest && role === "admin" && (
+          <span className="role-banner__badge t-tag-sm">
+            Can claim requests
+          </span>
         )}
       </p>
     </div>

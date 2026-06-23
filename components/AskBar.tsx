@@ -55,6 +55,11 @@ export function AskBar() {
 
   return (
     <div className="ask-bar">
+      <p className="ask-bar__scope t-label-sm">
+        <span className="ask-bar__scope-badge t-tag-sm">Tool search</span>
+        Ask in plain language or keywords — not org-knowledge Q&amp;A.
+      </p>
+
       <form className="ask-bar__form" onSubmit={handleSubmit}>
         <div className="ask-bar__input-wrap ask-bar__input-wrap--primary">
           <Icon name="search" size={20} className="ask-bar__icon" />
@@ -106,10 +111,11 @@ export function AskBar() {
           )}
 
           {result.type === "fallback" && result.reason === "gibberish" && (
-            <div className="ask-bar__fallback-card">
-              <Icon name="bulb" size={24} className="ask-bar__fallback-icon" />
-              <p className="t-para-md">{result.message}</p>
-            </div>
+            <ZeroResultsPanel
+              query={result.query}
+              kits={getClosestKits(result.query)}
+              leadMessage="Try describing what problem you're trying to solve — then register the need or browse what's already in the registry."
+            />
           )}
 
           {result.type === "fallback" && result.reason === "no-match" && (

@@ -9,8 +9,11 @@ import { RecommendedSection } from "@/components/RecommendedSection";
 import { RoleBanner } from "@/components/RoleSwitcher";
 import { ButtonLink } from "@/components/Button";
 import Link from "next/link";
+import { useApp } from "@/context/AppContext";
 
 export default function HomePage() {
+  const { canSubmitTool } = useApp();
+
   return (
     <>
       <RoleBanner />
@@ -30,9 +33,9 @@ export default function HomePage() {
         </Suspense>
 
         <p className="hero__idea-entry t-para-rg">
-          Have an idea?{" "}
-          <Link href="/submit?status=planned" className="hero__idea-link t-cta-sm">
-            Register it
+          Something missing?{" "}
+          <Link href="/file-need" className="hero__idea-link t-cta-sm">
+            File a need
           </Link>
         </p>
       </section>
@@ -44,15 +47,23 @@ export default function HomePage() {
       <section className="cta-strip">
         <div>
           <h2 className="cta-strip__title t-heading-md">
-            Built something useful?
+            {canSubmitTool ? "Built something useful?" : "See what others need"}
           </h2>
           <p className="cta-strip__desc t-para-rg">
-            Register it once — make it findable for everyone at Headout.
+            {canSubmitTool
+              ? "Register it once — make it findable for everyone at Headout."
+              : "Upvote open requests or file your own need on the requests board."}
           </p>
         </div>
-        <ButtonLink href="/submit" variant="primary">
-          Submit a tool
-        </ButtonLink>
+        {canSubmitTool ? (
+          <ButtonLink href="/submit" variant="primary">
+            Submit a tool
+          </ButtonLink>
+        ) : (
+          <ButtonLink href="/requests" variant="primary">
+            View requests
+          </ButtonLink>
+        )}
       </section>
     </>
   );

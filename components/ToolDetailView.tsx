@@ -2,7 +2,7 @@
 
 import { useParams, notFound, useRouter } from "next/navigation";
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { TypeTags } from "@/components/TypeTags";
 import { StatusBadge } from "@/components/StatusBadge";
 import { FreshnessLine } from "@/components/FreshnessLine";
@@ -12,15 +12,24 @@ import { SubmissionStatusBadge } from "@/components/SubmissionStatusBadge";
 import { Button, ButtonLink } from "@/components/Button";
 import { Icon } from "@/components/Icon";
 import { useApp } from "@/context/AppContext";
+import { useModalDialog } from "@/hooks/useModalDialog";
 import { MOCK_OWNERS } from "@/lib/mockData";
 import {
   canOpenToolLink,
+  formatSubmissionDate,
+  formatSubmitterLabel,
+  IMPROVEMENT_REQUEST_SLACK_URL,
   isCurrentUserOwner,
   isIdeaSubmission,
   passesLightApprovalCheck,
+  STOREFRONT_SLACK_CHANNEL,
 } from "@/lib/toolMeta";
 import { GATE_ELIGIBILITY_NOTE } from "@/lib/adminMetrics";
-import type { Owner, Tool } from "@/lib/types";
+import {
+  TOOL_FLAG_REASON_CATEGORIES,
+  formatFlagReasonCategory,
+} from "@/lib/flagReasons";
+import type { Owner, Tool, ToolFlagReasonCategory } from "@/lib/types";
 
 export function ToolDetailView() {
   const params = useParams();
@@ -40,6 +49,8 @@ export function ToolDetailView() {
     confirmOwnership,
     transferOwnership,
     archiveTool,
+    deprecateTool,
+    restoreToLive,
     approveTool,
     rejectTool,
     currentUser,
@@ -48,13 +59,30 @@ export function ToolDetailView() {
   const [helpfulClicked, setHelpfulClicked] = useState(false);
   const [accessConfirmed, setAccessConfirmed] = useState(false);
   const [flagOpen, setFlagOpen] = useState(false);
-  const [flagReason, setFlagReason] = useState("");
+  const [flagCategory, setFlagCategory] = useState<ToolFlagReasonCategory>("outdated");
+  const [flagNote, setFlagNote] = useState("");
   const [flagSubmitted, setFlagSubmitted] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
   const [selectedOwner, setSelectedOwner] = useState("");
   const [archiveConfirm, setArchiveConfirm] = useState(false);
+  const [deprecateConfirm, setDeprecateConfirm] = useState(false);
+  const [restoreConfirm, setRestoreConfirm] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
+
+  const closeFlagDialog = useCallback(() => {
+    setFlagOpen(false);
+    setFlagCategory("outdated");
+    setFlagNote("");
+  }, []);
+
+  const closeTransferDialog = useCallback(() => {
+    setTransferOpen(false);
+    setSelectedOwner("");
+  }, []);
+
+  const flagDialogRef = useModalDialog(flagOpen, closeFlagDialog);
+  const transferDialogRef = useModalDialog(transferOpen, closeTransferDialog);
 
   if (!rawTool || !canViewTool(rawTool)) {
     notFound();
@@ -68,6 +96,7 @@ export function ToolDetailView() {
   const isOpen = tool.accessLevel === "open";
   const accessAlreadyRequested = accessRequests.includes(tool.id);
   const isPlanned = tool.status === "planned";
+  const isDeprecated = tool.status === "deprecated";
   const isArchived = tool.status === "archived";
   const showGoToTool = isApproved && canOpenToolLink(tool);
   const showOwnerConfirm =
@@ -96,11 +125,15 @@ export function ToolDetailView() {
   }
 
   function handleFlagSubmit() {
-    if (!flagReason.trim()) return;
-    flagTool(tool.id, flagReason.trim());
+    flagTool(tool.id, flagCategory, flagNote);
     setFlagSubmitted(true);
     setFlagOpen(false);
-    setFlagReason("");
+    setFlagCategory("outdated");
+    setFlagNote("");
+  }
+
+  function resetFlagDialog() {
+    closeFlagDialog();
   }
 
   function handleTransfer() {
@@ -114,6 +147,16 @@ export function ToolDetailView() {
   function handleArchive() {
     archiveTool(tool.id);
     setArchiveConfirm(false);
+  }
+
+  function handleDeprecate() {
+    deprecateTool(tool.id);
+    setDeprecateConfirm(false);
+  }
+
+  function handleRestore() {
+    restoreToLive(tool.id);
+    setRestoreConfirm(false);
   }
 
   function handleApprove() {
@@ -150,6 +193,14 @@ export function ToolDetailView() {
                 ? "Your submission is in the admin queue — you'll see it here until it's approved or rejected."
                 : "This submission is awaiting admin review before it goes live in the catalog."}
             </p>
+            {canApprove && (
+              <p className="review-banner__meta t-para-sm text-muted">
+                Filed by {formatSubmitterLabel(tool.submittedBy)} on{" "}
+                {formatSubmissionDate(tool.lastUpdated)}
+                {" · "}
+                Owner: {tool.owner.name} ({tool.owner.slackId})
+              </p>
+            )}
             {canApprove && (
               <div className="review-banner__actions">
                 {rejecting ? (
@@ -263,10 +314,12 @@ export function ToolDetailView() {
       </header>
 
       {flagOpen && (
-        <div className="modal-backdrop" role="presentation" onClick={() => setFlagOpen(false)}>
+        <div className="modal-backdrop" role="presentation" onClick={resetFlagDialog}>
           <div
+            ref={flagDialogRef}
             className="modal-card"
             role="dialog"
+            aria-modal="true"
             aria-labelledby="flag-dialog-title"
             onClick={(e) => e.stopPropagation()}
           >
@@ -274,26 +327,46 @@ export function ToolDetailView() {
               Flag this entry
             </h2>
             <p className="modal-card__desc t-para-sm text-muted">
-              Tell admins what&apos;s wrong — outdated info, broken link, etc.
+              Report an issue for admin review — you&apos;re not changing lifecycle
+              status yourself.
             </p>
-            <textarea
-              className="form-field__input form-field__textarea t-para-rg"
-              rows={3}
-              placeholder="Reason for flagging"
-              value={flagReason}
-              onChange={(e) => setFlagReason(e.target.value)}
-              autoFocus
-            />
-            <div className="modal-card__actions">
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={handleFlagSubmit}
-                disabled={!flagReason.trim()}
+            <div className="form-field">
+              <label htmlFor="flag-reason" className="form-field__label t-label-rg-heavy">
+                Reason
+              </label>
+              <select
+                id="flag-reason"
+                className="form-field__input form-field__select t-para-rg"
+                value={flagCategory}
+                onChange={(e) =>
+                  setFlagCategory(e.target.value as ToolFlagReasonCategory)
+                }
               >
+                {TOOL_FLAG_REASON_CATEGORIES.map((category) => (
+                  <option key={category} value={category}>
+                    {formatFlagReasonCategory(category)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-field">
+              <label htmlFor="flag-note" className="form-field__label t-label-rg-heavy">
+                Note <span className="text-muted">(optional)</span>
+              </label>
+              <textarea
+                id="flag-note"
+                className="form-field__input form-field__textarea t-para-rg"
+                rows={3}
+                placeholder="Add context for admins"
+                value={flagNote}
+                onChange={(e) => setFlagNote(e.target.value)}
+              />
+            </div>
+            <div className="modal-card__actions">
+              <Button variant="primary" size="sm" onClick={handleFlagSubmit}>
                 Submit flag
               </Button>
-              <Button variant="secondary" size="sm" onClick={() => setFlagOpen(false)}>
+              <Button variant="secondary" size="sm" onClick={resetFlagDialog}>
                 Cancel
               </Button>
             </div>
@@ -302,10 +375,12 @@ export function ToolDetailView() {
       )}
 
       {transferOpen && (
-        <div className="modal-backdrop" role="presentation" onClick={() => setTransferOpen(false)}>
+        <div className="modal-backdrop" role="presentation" onClick={closeTransferDialog}>
           <div
+            ref={transferDialogRef}
             className="modal-card"
             role="dialog"
+            aria-modal="true"
             aria-labelledby="transfer-dialog-title"
             onClick={(e) => e.stopPropagation()}
           >
@@ -336,7 +411,7 @@ export function ToolDetailView() {
               >
                 Transfer
               </Button>
-              <Button variant="secondary" size="sm" onClick={() => setTransferOpen(false)}>
+              <Button variant="secondary" size="sm" onClick={closeTransferDialog}>
                 Cancel
               </Button>
             </div>
@@ -403,14 +478,32 @@ export function ToolDetailView() {
             </section>
           )}
 
+          {isDeprecated && (
+            <section className="detail-section">
+              <div className="deprecated-callout">
+                <Icon name="info-circle" size={24} />
+                <div>
+                  <h2 className="deprecated-callout__title t-heading-sm">Deprecated</h2>
+                  <p className="deprecated-callout__desc t-para-rg">
+                    Still works, but prefer a newer tool. Ranked below live and beta
+                    entries in search.
+                  </p>
+                </div>
+              </div>
+            </section>
+          )}
+
           {isArchived && (
             <section className="detail-section">
               <div className="archived-callout">
                 <Icon name="hourglass" size={24} />
-                <p className="t-para-rg">
-                  This tool is archived — still searchable but ranked last. Contact the
-                  owner if you need a replacement.
-                </p>
+                <div>
+                  <h2 className="archived-callout__title t-heading-sm">Archived</h2>
+                  <p className="archived-callout__desc t-para-rg">
+                    Retired — not for active use. Kept for history and dedup. Ranked
+                    last in search.
+                  </p>
+                </div>
               </div>
             </section>
           )}
@@ -468,13 +561,17 @@ export function ToolDetailView() {
                 Link unreachable — contact the owner for an updated URL.
               </p>
             ) : isPending && isSubmitter ? (
-              <p className="sidebar-card__note t-para-rg text-muted">
-                Waiting on admin review — check{" "}
-                <Link href="/my-submissions" className="text-link">
-                  my submissions
-                </Link>{" "}
-                for status updates.
-              </p>
+              <div className="sidebar-card__pending">
+                <p className="sidebar-card__note t-para-rg text-muted">
+                  Waiting on admin review — you can still fix details before a
+                  decision.
+                </p>
+                {canEditTool(tool) && (
+                  <ButtonLink href={`/edit/${tool.id}`} variant="primary" size="sm">
+                    Edit submission
+                  </ButtonLink>
+                )}
+              </div>
             ) : null}
 
             <div className="sidebar-card__section">
@@ -509,17 +606,29 @@ export function ToolDetailView() {
                   Lightweight signal only — no guaranteed response from the owner.
                 </p>
                 <a
-                  href={`mailto:${tool.owner.slackId}?subject=Improvement request: ${tool.name}`}
+                  href={IMPROVEMENT_REQUEST_SLACK_URL}
                   className="improvement-link t-para-rg text-link"
+                  target="_blank"
+                  rel="noopener noreferrer"
                 >
-                  Request an improvement
+                  Request an improvement in {STOREFRONT_SLACK_CHANNEL}
                 </a>
+                <p className="signal-microcopy t-para-sm text-muted">
+                  Tag {tool.owner.slackId} when you post — Storefront doesn&apos;t
+                  route DMs.
+                </p>
               </div>
             )}
 
             {isApproved && canEditTool(tool) && (
               <ButtonLink href={`/edit/${tool.id}`} variant="tertiary" size="sm">
                 Edit this tool
+              </ButtonLink>
+            )}
+
+            {isPending && canEditTool(tool) && !isSubmitter && (
+              <ButtonLink href={`/edit/${tool.id}`} variant="tertiary" size="sm">
+                Edit submission
               </ButtonLink>
             )}
 
@@ -532,6 +641,64 @@ export function ToolDetailView() {
                 >
                   Transfer ownership
                 </button>
+
+                {isDeprecated ? (
+                  !restoreConfirm ? (
+                    <button
+                      type="button"
+                      className="manage-action t-cta-sm"
+                      onClick={() => setRestoreConfirm(true)}
+                    >
+                      Restore to live
+                    </button>
+                  ) : (
+                    <div className="lifecycle-confirm">
+                      <p className="t-para-sm">
+                        Restore this tool to live? It will rank normally again.
+                      </p>
+                      <div className="lifecycle-confirm__actions">
+                        <Button variant="primary" size="sm" onClick={handleRestore}>
+                          Confirm restore
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => setRestoreConfirm(false)}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                ) : !deprecateConfirm ? (
+                  <button
+                    type="button"
+                    className="manage-action t-cta-sm"
+                    onClick={() => setDeprecateConfirm(true)}
+                  >
+                    Mark deprecated
+                  </button>
+                ) : (
+                  <div className="lifecycle-confirm">
+                    <p className="t-para-sm">
+                      Mark as deprecated? It stays usable but ranks lower — prefer
+                      this over archive when a replacement exists.
+                    </p>
+                    <div className="lifecycle-confirm__actions">
+                      <Button variant="primary" size="sm" onClick={handleDeprecate}>
+                        Confirm deprecated
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setDeprecateConfirm(false)}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
                 {!archiveConfirm ? (
                   <button
                     type="button"
@@ -541,9 +708,12 @@ export function ToolDetailView() {
                     Archive
                   </button>
                 ) : (
-                  <div className="archive-confirm">
-                    <p className="t-para-sm">Archive this tool? It stays searchable.</p>
-                    <div className="archive-confirm__actions">
+                  <div className="lifecycle-confirm lifecycle-confirm--destructive">
+                    <p className="t-para-sm">
+                      Archive this tool? Retired from active use — kept for history
+                      only.
+                    </p>
+                    <div className="lifecycle-confirm__actions">
                       <Button variant="destructive" size="sm" onClick={handleArchive}>
                         Confirm archive
                       </Button>

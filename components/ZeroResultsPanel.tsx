@@ -1,20 +1,24 @@
 import Link from "next/link";
 import { ButtonLink } from "@/components/Button";
 import { Icon } from "@/components/Icon";
-import { buildPlannedSubmitUrl } from "@/lib/askBar";
+import { buildFileNeedUrl } from "@/lib/askBar";
 import type { Kit } from "@/lib/types";
 import { STOREFRONT_SLACK_CHANNEL, STOREFRONT_SLACK_URL } from "@/lib/toolMeta";
 
 type ZeroResultsPanelProps = {
   query: string;
   kits: Kit[];
+  leadMessage?: string;
 };
 
-export function ZeroResultsPanel({ query, kits }: ZeroResultsPanelProps) {
+export function ZeroResultsPanel({ query, kits, leadMessage }: ZeroResultsPanelProps) {
+  const displayQuery = query.trim() || "your search";
+
   return (
     <div className="zero-results">
       <p className="zero-results__lead t-para-md">
-        Nothing matched &ldquo;{query}&rdquo; — here are some next steps.
+        {leadMessage ??
+          `Nothing matched "${displayQuery}" — here are some next steps.`}
       </p>
 
       {kits.length > 0 && (
@@ -40,12 +44,15 @@ export function ZeroResultsPanel({ query, kits }: ZeroResultsPanelProps) {
 
       <div className="zero-results__actions">
         <ButtonLink
-          href={buildPlannedSubmitUrl(query)}
+          href={buildFileNeedUrl(query)}
           variant="primary"
           size="sm"
         >
-          Register this need
+          File this need
         </ButtonLink>
+        <Link href="/registry" className="zero-results__registry t-para-rg text-link">
+          Browse registry
+        </Link>
         <a
           href={STOREFRONT_SLACK_URL}
           className="zero-results__slack t-para-rg text-link"
