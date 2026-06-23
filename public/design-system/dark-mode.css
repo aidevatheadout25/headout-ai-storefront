@@ -1,0 +1,80 @@
+/* Dark mode — semantic token remaps. Must load AFTER colors_and_type.css */
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Surfaces — layer from near-black up */
+  --surface-white: var(--color-black);
+  --surface-grey-1: #1a1a1a;
+  --surface-grey-2: var(--color-grey-900);
+  --surface-grey-3: #2a2a2a;
+
+  /* Surface tints — dark equivalents, not light washes */
+  --surface-primary-1: var(--color-grey-900);
+  --surface-primary-2: var(--color-grey-800);
+  --surface-candy-1: var(--color-candy-800);
+  --surface-candy-2: var(--color-candy-800);
+  --surface-success: var(--color-okaygreen-800);
+  --surface-warning: var(--color-joymustard-800);
+  --surface-error: var(--color-warningred-800);
+
+  /* Text — invert to light */
+  --text-grey-1: var(--color-white);
+  --text-grey-2: var(--color-white-a80);
+  --text-grey-3: var(--color-white-a50);
+  --text-disabled: var(--color-white-a30);
+  --text-primary: var(--color-purps-300);
+  --text-candy: var(--color-candy-300);
+  --text-destructive: var(--color-warningred-400);
+  --text-positive: var(--color-okaygreen-400);
+  --text-warning: var(--color-joymustard-400);
+  --text-linkblue: var(--color-linkblue-300);
+
+  /* CTA — backgrounds/text for buttons */
+  --cta-primary: var(--color-purps);
+  --cta-tertiary: var(--color-purps-900);
+  --cta-positive: var(--color-okaygreen-600);
+  --cta-destructive: var(--color-warningred-600);
+  --cta-black: var(--color-grey-900);
+  --cta-white: var(--color-white);
+  --cta-disabled-primary: var(--color-grey-700);
+  --cta-disabled-tertiary: var(--color-grey-800);
+
+  /* Borders */
+  --border-primary: var(--color-purps-400);
+  --border-success: var(--color-okaygreen-600);
+  --border-warning: var(--color-joymustard-600);
+  --border-destructive: var(--color-warningred-500);
+  --border-candy: var(--color-candy-600);
+
+  /* Dividers — alpha white */
+  --divider-light: var(--color-white-a05);
+  --divider-primary: var(--color-white-a10);
+  --divider-dark: var(--color-white-a20);
+
+  /* Overlays — stronger scrim on dark UI */
+  --overlay-light: var(--color-black-a50);
+  --overlay-primary: var(--color-black-a80);
+  --overlay-dark: var(--color-black-a80);
+
+  /* Shadows nearly invisible — elevation via borders in globals */
+  --shadow-1: none;
+  --shadow-2: none;
+  --shadow-3: none;
+  --shadow-top-1: none;
+  --shadow-top-2: none;
+  --shadow-inset: none;
+}
+
+html[data-theme="dark"] body {
+  background: var(--surface-white);
+  color: var(--text-grey-1);
+}
+
+html[data-theme="dark"] h1,
+html[data-theme="dark"] h2,
+html[data-theme="dark"] h3,
+html[data-theme="dark"] h4,
+html[data-theme="dark"] h5 {
+  color: var(--text-grey-1);
+}

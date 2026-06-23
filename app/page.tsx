@@ -1,66 +1,49 @@
-import Image from "next/image";
-import styles from "./page.module.css";
+"use client";
 
-export default function Home() {
+import { AskBar } from "@/components/AskBar";
+import { KitsSection } from "@/components/KitsSection";
+import { RecommendedSection } from "@/components/RecommendedSection";
+import { RoleBanner } from "@/components/RoleSwitcher";
+import { ButtonLink } from "@/components/Button";
+import { useApp } from "@/context/AppContext";
+
+export default function HomePage() {
+  const { canSubmit } = useApp();
+
   return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className={styles.intro}>
-          <h1>To get started, edit the page.tsx file.</h1>
-          <p>
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+    <>
+      <RoleBanner />
+
+      <section className="hero">
+        <h1 className="hero__title t-display-md">
+          Find what your team already built
+        </h1>
+        <p className="hero__subtitle t-para-lg">
+          One place to discover every internal tool, skill, MCP, and bot at
+          Headout — so you don&apos;t build it twice.
+        </p>
+
+        <AskBar />
+      </section>
+
+      <RecommendedSection />
+      <KitsSection />
+
+      {canSubmit && (
+        <section className="cta-strip">
+          <div>
+            <h2 className="cta-strip__title t-heading-md">
+              Built something useful?
+            </h2>
+            <p className="cta-strip__desc t-para-rg">
+              Register it once — make it findable for everyone at Headout.
+            </p>
+          </div>
+          <ButtonLink href="/submit" variant="primary">
+            Submit a tool
+          </ButtonLink>
+        </section>
+      )}
+    </>
   );
 }
