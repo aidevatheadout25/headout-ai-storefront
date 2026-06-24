@@ -12,22 +12,28 @@ import { useApp } from "@/context/AppContext";
 import {
   GOLDEN_PATH_STACK,
   approachNeedsHardGate,
-  buildPrerequisitesHaystack,
+  buildIntakeHaystack,
   computeStakesLevel,
   findNearDuplicateRequests,
   hardGateReason,
+  hasReuseMatches,
   isGoldenPathStack,
   matchFunnelReuse,
   recommendApproach,
   stackNeedsHardGate,
 } from "@/lib/funnel";
 import { DECISION_RULES } from "@/lib/mockDecisionRules";
+import {
+  getDemandUpvoteCount,
+  isHighDemand,
+} from "@/lib/requests";
 import type {
   ChosenApproach,
   ChosenStack,
   FunnelStage,
   RequestPrerequisites,
   RequestValidation,
+  RiskAnswer,
   Team,
   ToolType,
 } from "@/lib/types";
@@ -37,20 +43,77 @@ const EMPTY_PREREQ: RequestPrerequisites = {
   dataSources: "",
   systems: "",
   inputsOutputs: "",
-  touchesPII: false,
-  touchesPayments: false,
-  usesLLM: false,
-  needsExternalDep: false,
+  touchesPII: "no",
+  touchesPayments: "no",
+  usesLLM: "no",
+  needsExternalDep: "no",
 };
 
-const STAGE_LABELS: { id: FunnelStage; label: string; step: number }[] = [
-  { id: "prerequisites", label: "Prerequisites", step: 2 },
-  { id: "validate", label: "Validate", step: 3 },
-  { id: "stack", label: "Tech stack", step: 4 },
-  { id: "approach", label: "Approach", step: 5 },
+const INTAKE_PROGRESS = [
+  { id: "describe", label: "Describe the need", step: 1 },
+  { id: "prerequisites", label: "What it touches", step: 2 },
+  { id: "reuse-check", label: "Reuse check", step: 3 },
+] as const;
+
+const BUILDER_PROGRESS = [
+  { id: "stack", label: "Stack", step: 1 },
+  { id: "approach", label: "Approach", step: 2 },
+] as const;
+
+const RISK_FIELDS: {
+  key: keyof Pick<
+    RequestPrerequisites,
+    "touchesPII" | "touchesPayments" | "usesLLM" | "needsExternalDep"
+  >;
+  label: string;
+}[] = [
+  { key: "touchesPII", label: "Touches PII" },
+  { key: "touchesPayments", label: "Touches payments" },
+  { key: "usesLLM", label: "Uses LLM" },
+  { key: "needsExternalDep", label: "New external dependency" },
 ];
 
-type FunnelUiStage = FunnelStage | "reuse-check" | "parked" | "viewer-done";
+type FunnelUiStage =
+  | FunnelStage
+  | "reuse-check"
+  | "posted"
+  | "parked"
+  | "awaiting-signoff";
+
+function RiskToggleGroup({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: RiskAnswer;
+  onChange: (value: RiskAnswer) => void;
+}) {
+  return (
+    <fieldset className="funnel-risk-group">
+      <legend className="t-label-rg">{label}</legend>
+      <div className="funnel-risk-group__options">
+        {(
+          [
+            ["no", "No"],
+            ["yes", "Yes"],
+            ["unsure", "Not sure"],
+          ] as const
+        ).map(([answer, text]) => (
+          <label key={answer} className="funnel-risk-option t-para-sm">
+            <input
+              type="radio"
+              name={label}
+              checked={value === answer}
+              onChange={() => onChange(answer)}
+            />
+            {text}
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
 
 export function DecisionFunnel() {
   const router = useRouter();
@@ -62,54 +125,55 @@ export function DecisionFunnel() {
     approvedTools,
     buildingBlocks,
     requests,
+    mockUsers,
     currentUser,
-    role,
     canSubmitTool,
     getRequestById,
-    createValidatedRequest,
+    postOpenNeed,
     parkNeed,
     completeBuilderFunnel,
     upvoteRequest,
   } = useApp();
 
-  const claimedRequest = requestIdParam ? getRequestById(requestIdParam) : undefined;
-  const isBuilderContinuation = Boolean(
-    claimedRequest &&
-      claimedRequest.status === "claimed" &&
-      claimedRequest.claimedById === currentUser.id &&
-      !claimedRequest.linkedToolId,
+  const entryRequest = requestIdParam
+    ? getRequestById(requestIdParam)
+    : undefined;
+  const isEnteringFromClaim = Boolean(
+    entryRequest?.status === "claimed" &&
+      entryRequest.claimedById === currentUser.id &&
+      !entryRequest.linkedToolId,
   );
 
-  const [title, setTitle] = useState(
-    () => claimedRequest?.title ?? initialQuery,
-  );
+  const [createdRequestId, setCreatedRequestId] = useState("");
+  const [title, setTitle] = useState(() => {
+    if (entryRequest?.title) return entryRequest.title;
+    return initialQuery.trim();
+  });
   const [team, setTeam] = useState<Team>(
-    () => claimedRequest?.team ?? currentUser.team,
-  );
-  const [prerequisites, setPrerequisites] = useState<RequestPrerequisites>(
-    () => claimedRequest?.prerequisites ?? { ...EMPTY_PREREQ },
+    () => entryRequest?.team ?? currentUser.team,
   );
   const [validation, setValidation] = useState<RequestValidation>(() => ({
     problem:
-      claimedRequest?.validation?.problem ??
-      claimedRequest?.problem ??
-      (initialQuery ? `Looking for something that ${initialQuery}` : ""),
-    whoHasIt: claimedRequest?.validation?.whoHasIt ?? "",
-    frequency: claimedRequest?.validation?.frequency ?? "",
-    currentWorkaround: claimedRequest?.validation?.currentWorkaround ?? "",
-    expectedValue: claimedRequest?.validation?.expectedValue ?? "",
+      entryRequest?.validation?.problem ?? entryRequest?.problem ?? "",
+    whoHasIt: entryRequest?.validation?.whoHasIt ?? "",
+    frequency: entryRequest?.validation?.frequency ?? "",
+    currentWorkaround: entryRequest?.validation?.currentWorkaround ?? "",
+    expectedValue: entryRequest?.validation?.expectedValue ?? "",
   }));
+  const [prerequisites, setPrerequisites] = useState<RequestPrerequisites>(
+    () => entryRequest?.prerequisites ?? { ...EMPTY_PREREQ },
+  );
   const [stage, setStage] = useState<FunnelUiStage>(() =>
-    isBuilderContinuation ? "stack" : "prerequisites",
+    isEnteringFromClaim ? "stack" : "describe",
   );
   const [reuseMatches, setReuseMatches] = useState<ReturnType<
     typeof matchFunnelReuse
   > | null>(null);
   const [stakesLevel, setStakesLevel] = useState(
     () =>
-      claimedRequest?.stakesLevel ??
-      (claimedRequest?.prerequisites
-        ? computeStakesLevel(claimedRequest.prerequisites)
+      entryRequest?.stakesLevel ??
+      (entryRequest?.prerequisites
+        ? computeStakesLevel(entryRequest.prerequisites, entryRequest.problem)
         : "low"),
   );
   const [stack, setStack] = useState<ChosenStack>({ ...GOLDEN_PATH_STACK });
@@ -117,10 +181,17 @@ export function DecisionFunnel() {
   const [approach, setApproach] = useState<ChosenApproach | null>(null);
   const [approachJustification, setApproachJustification] = useState("");
   const [parkReason, setParkReason] = useState("");
-  const [createdRequestId, setCreatedRequestId] = useState("");
-  const [duplicateRequests, setDuplicateRequests] = useState<
-    ReturnType<typeof findNearDuplicateRequests>
-  >([]);
+  const [reuseOverrideNote, setReuseOverrideNote] = useState("");
+  const [finishedToolId, setFinishedToolId] = useState("");
+
+  const activeRequestId = requestIdParam || createdRequestId;
+  const activeRequest = activeRequestId
+    ? getRequestById(activeRequestId)
+    : undefined;
+  const isBuilderContinuation =
+    stage === "stack" ||
+    stage === "approach" ||
+    stage === "awaiting-signoff";
 
   const recommendedApproach = useMemo(
     () => recommendApproach(prerequisites, validation),
@@ -135,16 +206,45 @@ export function DecisionFunnel() {
     recommendedApproach.form,
   );
 
-  const demandSignal = useMemo(() => {
+  const nearDuplicates = useMemo(
+    () => findNearDuplicateRequests(validation, title, requests),
+    [validation, title, requests],
+  );
+
+  const similarOpenNeeds = useMemo(() => {
     const haystack = `${title} ${validation.problem}`.toLowerCase();
     return requests
-      .filter((r) => r.status === "open" && r.id !== claimedRequest?.id)
+      .filter((r) => r.status === "open" && r.id !== activeRequestId)
       .filter((r) => {
         const h = `${r.title} ${r.problem}`.toLowerCase();
         return haystack.split(/\s+/).some((w) => w.length > 3 && h.includes(w));
       })
       .slice(0, 3);
-  }, [requests, title, validation.problem, claimedRequest?.id]);
+  }, [requests, title, validation.problem, activeRequestId]);
+
+  const reuseHasMatches = reuseMatches ? hasReuseMatches(reuseMatches) : false;
+
+  const intakeComplete = stage === "posted" || stage === "parked";
+  const intakeCurrentStep = (() => {
+    if (intakeComplete) return INTAKE_PROGRESS.length + 1;
+    switch (stage) {
+      case "describe":
+        return 1;
+      case "prerequisites":
+        return 2;
+      case "reuse-check":
+        return 3;
+      default:
+        return 1;
+    }
+  })();
+
+  const builderComplete = stage === "awaiting-signoff";
+  const builderCurrentStep = (() => {
+    if (builderComplete) return BUILDER_PROGRESS.length + 1;
+    if (stage === "approach") return 2;
+    return 1;
+  })();
 
   function updatePrereq<K extends keyof RequestPrerequisites>(
     key: K,
@@ -160,48 +260,24 @@ export function DecisionFunnel() {
     setValidation((prev) => ({ ...prev, [key]: value }));
   }
 
+  function handleDescribeContinue() {
+    setStage("prerequisites");
+  }
+
   function handlePrerequisitesContinue() {
-    const level = computeStakesLevel(prerequisites);
+    const haystack = buildIntakeHaystack(title, validation, prerequisites);
+    const level = computeStakesLevel(prerequisites, haystack);
     setStakesLevel(level);
-    const haystack = `${title} ${buildPrerequisitesHaystack(prerequisites)}`;
-    setReuseMatches(matchFunnelReuse(haystack, approvedTools, buildingBlocks));
+    setReuseMatches(
+      matchFunnelReuse(haystack, approvedTools, buildingBlocks),
+    );
     setStage("reuse-check");
   }
 
-  function handleContinueToValidate() {
-    setStage("validate");
-  }
+  function handlePostOpenNeed() {
+    if (reuseHasMatches && !reuseOverrideNote.trim()) return;
 
-  function handleValidatePass() {
-    const dupes = findNearDuplicateRequests(validation, title, requests);
-    if (dupes.length > 0 && !isBuilderContinuation) {
-      setDuplicateRequests(dupes);
-      return;
-    }
-
-    if (isBuilderContinuation && requestIdParam) {
-      setApproach(recommendedApproach);
-      setStage("stack");
-      return;
-    }
-
-    if (canSubmitTool) {
-      const id = createValidatedRequest({
-        title,
-        team,
-        tags: title.toLowerCase().split(/\s+/).slice(0, 4),
-        sourceQuery: initialQuery || undefined,
-        prerequisites,
-        validation,
-        stakesLevel,
-      });
-      setCreatedRequestId(id);
-      setApproach(recommendedApproach);
-      setStage("stack");
-      return;
-    }
-
-    const id = createValidatedRequest({
+    const id = postOpenNeed({
       title,
       team,
       tags: title.toLowerCase().split(/\s+/).slice(0, 4),
@@ -209,9 +285,20 @@ export function DecisionFunnel() {
       prerequisites,
       validation,
       stakesLevel,
+      reuseOverrideNote: reuseHasMatches ? reuseOverrideNote.trim() : undefined,
+      autoClaimForBuilder: canSubmitTool,
     });
+
+    if (canSubmitTool) {
+      setCreatedRequestId(id);
+      setApproach(recommendedApproach);
+      setStage("stack");
+      router.replace(`/funnel?requestId=${id}`, { scroll: false });
+      return;
+    }
+
     setCreatedRequestId(id);
-    setStage("viewer-done");
+    setStage("posted");
   }
 
   function handlePark() {
@@ -233,7 +320,7 @@ export function DecisionFunnel() {
   }
 
   function handleFinishBuilder() {
-    const targetRequestId = requestIdParam || createdRequestId;
+    const targetRequestId = activeRequestId;
     if (!targetRequestId) return;
 
     const finalStack: ChosenStack = {
@@ -249,26 +336,21 @@ export function DecisionFunnel() {
 
     if (approachGate && !approachJustification.trim()) return;
 
-    const toolId = completeBuilderFunnel(
+    const { toolId, awaitingSignoff } = completeBuilderFunnel(
       targetRequestId,
       finalStack,
       finalApproach,
     );
-    if (toolId) {
-      router.push(`/tools/${toolId}`);
+
+    if (!toolId) return;
+
+    setFinishedToolId(toolId);
+    if (awaitingSignoff) {
+      setStage("awaiting-signoff");
+      return;
     }
+    router.push(`/tools/${toolId}`);
   }
-
-  const visibleStages = canSubmitTool || isBuilderContinuation
-    ? STAGE_LABELS
-    : STAGE_LABELS.filter((s) => s.step <= 3);
-
-  const currentStep =
-    stage === "reuse-check"
-      ? 2
-      : stage === "viewer-done" || stage === "parked"
-        ? 3
-        : STAGE_LABELS.find((s) => s.id === stage)?.step ?? 2;
 
   return (
     <>
@@ -279,12 +361,13 @@ export function DecisionFunnel() {
           <div>
             <h1 className="funnel__title t-display-xs">
               {isBuilderContinuation
-                ? "Continue build — stack & approach"
+                ? "Build from claimed need"
                 : "Figure out what you need"}
             </h1>
             <p className="funnel__desc t-para-md">
-              Earn the right to build — reuse first, validate demand, then stack
-              and approach for builders.
+              {isBuilderContinuation
+                ? "You claimed this need. Two steps — stack, then approach — to write a planned tool to the registry."
+                : "Describe the need → what it touches → reuse check → post an open need for builders to claim."}
             </p>
           </div>
           <Link href="/" className="funnel__close t-cta-sm text-link">
@@ -293,34 +376,65 @@ export function DecisionFunnel() {
           </Link>
         </header>
 
-        <ol className="funnel-progress" aria-label="Funnel progress">
-          {visibleStages.map((item) => {
-            const done = item.step < currentStep;
-            const active = item.step === currentStep;
-            return (
-              <li
-                key={item.id}
-                className={`funnel-progress__item${done ? " funnel-progress__item--done" : ""}${active ? " funnel-progress__item--active" : ""}`}
-              >
-                <span className="funnel-progress__step t-label-sm">
-                  {item.step}
-                </span>
-                <span className="funnel-progress__label t-label-rg">
-                  {item.label}
-                </span>
-              </li>
-            );
-          })}
-        </ol>
+        {!isBuilderContinuation && (
+          <div className="funnel-flow">
+            <ol className="funnel-progress" aria-label="Intake progress">
+              {INTAKE_PROGRESS.map((item) => {
+                const done =
+                  intakeComplete || item.step < intakeCurrentStep;
+                const active =
+                  !intakeComplete && item.step === intakeCurrentStep;
+                return (
+                  <li
+                    key={item.id}
+                    className={`funnel-progress__item${done ? " funnel-progress__item--done" : ""}${active ? " funnel-progress__item--active" : ""}`}
+                  >
+                    <span className="funnel-progress__step t-label-sm">
+                      {item.step}
+                    </span>
+                    <span className="funnel-progress__label t-label-rg">
+                      {item.label}
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        )}
 
-        {stage === "prerequisites" && (
+        {isBuilderContinuation && (
+          <div className="funnel-flow funnel-flow--build">
+            <p className="funnel-flow__eyebrow t-label-sm">Build</p>
+            <ol className="funnel-progress" aria-label="Build progress">
+              {BUILDER_PROGRESS.map((item) => {
+                const done =
+                  builderComplete || item.step < builderCurrentStep;
+                const active =
+                  !builderComplete && item.step === builderCurrentStep;
+                return (
+                  <li
+                    key={item.id}
+                    className={`funnel-progress__item${done ? " funnel-progress__item--done" : ""}${active ? " funnel-progress__item--active" : ""}`}
+                  >
+                    <span className="funnel-progress__step t-label-sm">
+                      {item.step}
+                    </span>
+                    <span className="funnel-progress__label t-label-rg">
+                      {item.label}
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        )}
+
+        {stage === "describe" && (
           <section className="funnel-stage">
-            <h2 className="funnel-stage__title t-heading-md">
-              Stage 2 · What does it touch?
-            </h2>
+            <h2 className="funnel-stage__title t-heading-md">Describe the need</h2>
             <p className="funnel-stage__intro t-para-rg">
-              Quick scan — we&apos;ll check for existing tools and internal
-              building blocks before you go further.
+              In your own words — what hurts, who feels it, and how often. No
+              tool specs yet.
             </p>
 
             <label className="form-field">
@@ -332,6 +446,129 @@ export function DecisionFunnel() {
                 placeholder="e.g. Bulk-resize campaign images"
               />
             </label>
+
+            <label className="form-field">
+              <span className="form-field__label t-label-rg">The problem</span>
+              <textarea
+                className="form-field__input form-field__textarea t-para-rg"
+                rows={3}
+                value={validation.problem}
+                onChange={(e) => updateValidation("problem", e.target.value)}
+                placeholder="What is painful or slow today?"
+              />
+            </label>
+
+            <label className="form-field">
+              <span className="form-field__label t-label-rg">Who has it?</span>
+              <input
+                className="form-field__input t-para-rg"
+                value={validation.whoHasIt}
+                onChange={(e) => updateValidation("whoHasIt", e.target.value)}
+                placeholder="Team, role, how many people"
+              />
+            </label>
+
+            <label className="form-field">
+              <span className="form-field__label t-label-rg">How often?</span>
+              <input
+                className="form-field__input t-para-rg"
+                value={validation.frequency}
+                onChange={(e) => updateValidation("frequency", e.target.value)}
+                placeholder="Daily, weekly, every launch…"
+              />
+            </label>
+
+            <label className="form-field">
+              <span className="form-field__label t-label-rg">
+                Current workaround{" "}
+                <span className="text-muted">(optional)</span>
+              </span>
+              <input
+                className="form-field__input t-para-rg"
+                value={validation.currentWorkaround}
+                onChange={(e) =>
+                  updateValidation("currentWorkaround", e.target.value)
+                }
+                placeholder="Spreadsheets, manual steps, Slack hacks…"
+              />
+            </label>
+
+            <label className="form-field">
+              <span className="form-field__label t-label-rg">
+                Expected value{" "}
+                <span className="text-muted">(optional)</span>
+              </span>
+              <input
+                className="form-field__input t-para-rg"
+                value={validation.expectedValue}
+                onChange={(e) =>
+                  updateValidation("expectedValue", e.target.value)
+                }
+                placeholder="Time saved, fewer errors, faster launches…"
+              />
+            </label>
+
+            <label className="form-field">
+              <span className="form-field__label t-label-rg">Team</span>
+              <select
+                className="form-field__input form-field__select t-para-rg"
+                value={team}
+                onChange={(e) => setTeam(e.target.value as Team)}
+              >
+                {TEAMS.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {similarOpenNeeds.length > 0 && (
+              <div className="funnel-demand">
+                <p className="funnel-demand__title t-subheading-rg">
+                  Similar open needs — upvote instead of duplicating
+                </p>
+                <ul className="funnel-demand__list">
+                  {similarOpenNeeds.map((req) => (
+                    <li key={req.id} className="funnel-demand__item t-para-rg">
+                      <strong>{req.title}</strong> —{" "}
+                      {getDemandUpvoteCount(req, mockUsers)} upvote
+                      {getDemandUpvoteCount(req, mockUsers) === 1 ? "" : "s"}
+                      {isHighDemand(req, mockUsers) && (
+                        <span className="funnel-demand__high t-tag-sm">
+                          High demand
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="funnel-stage__actions">
+              <Button
+                variant="primary"
+                onClick={handleDescribeContinue}
+                disabled={
+                  !title.trim() ||
+                  !validation.problem.trim() ||
+                  !validation.whoHasIt.trim() ||
+                  !validation.frequency.trim()
+                }
+              >
+                Continue
+              </Button>
+            </div>
+          </section>
+        )}
+
+        {stage === "prerequisites" && (
+          <section className="funnel-stage">
+            <h2 className="funnel-stage__title t-heading-md">What does it touch?</h2>
+            <p className="funnel-stage__intro t-para-rg">
+              Quick scan for reuse and risk — we&apos;ll match tools and internal
+              building blocks next.
+            </p>
 
             <label className="form-field">
               <span className="form-field__label t-label-rg">Data sources</span>
@@ -363,49 +600,26 @@ export function DecisionFunnel() {
               />
             </label>
 
-            <fieldset className="funnel-toggles">
-              <legend className="t-label-rg">Risk toggles</legend>
-              {(
-                [
-                  ["touchesPII", "Touches PII"],
-                  ["touchesPayments", "Touches payments"],
-                  ["usesLLM", "Uses LLM"],
-                  ["needsExternalDep", "New external dependency"],
-                ] as const
-              ).map(([key, label]) => (
-                <label key={key} className="funnel-toggle">
-                  <input
-                    type="checkbox"
-                    checked={prerequisites[key]}
-                    onChange={(e) => updatePrereq(key, e.target.checked)}
-                  />
-                  <span className="t-para-rg">{label}</span>
-                </label>
+            <div className="funnel-risk-toggles">
+              {RISK_FIELDS.map(({ key, label }) => (
+                <RiskToggleGroup
+                  key={key}
+                  label={label}
+                  value={prerequisites[key]}
+                  onChange={(value) => updatePrereq(key, value)}
+                />
               ))}
-            </fieldset>
-
-            <label className="form-field">
-              <span className="form-field__label t-label-rg">Team</span>
-              <select
-                className="form-field__input form-field__select t-para-rg"
-                value={team}
-                onChange={(e) => setTeam(e.target.value as Team)}
-              >
-                {TEAMS.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            </label>
+            </div>
 
             <div className="funnel-stage__actions">
               <Button
                 variant="primary"
                 onClick={handlePrerequisitesContinue}
-                disabled={!title.trim()}
               >
-                Continue
+                Check for reuse
+              </Button>
+              <Button variant="secondary" onClick={() => setStage("describe")}>
+                Back
               </Button>
             </div>
           </section>
@@ -413,99 +627,86 @@ export function DecisionFunnel() {
 
         {stage === "reuse-check" && reuseMatches && (
           <section className="funnel-stage">
-            <h2 className="funnel-stage__title t-heading-md">
-              Reuse check
-            </h2>
+            <h2 className="funnel-stage__title t-heading-md">Reuse check</h2>
+            <p className="funnel-stage__intro t-para-rg">
+              {reuseHasMatches
+                ? "We found existing tools or building blocks — try these before posting a new need."
+                : "No close matches in the catalog — you can post an open need for builders to claim."}
+            </p>
 
-            {reuseMatches.tools.length > 0 && (
-              <div className="funnel-reuse-block funnel-reuse-block--alert">
-                <p className="t-subheading-rg">This may already exist</p>
-                <div className="tool-grid tool-grid--compact">
-                  {reuseMatches.tools.map((tool) => (
-                    <ToolCard key={tool.id} tool={tool} />
-                  ))}
-                </div>
-                <ButtonLink href={`/tools/${reuseMatches.tools[0].id}`} variant="primary" size="sm">
-                  Use existing tool
-                </ButtonLink>
-              </div>
-            )}
+            {reuseHasMatches && (
+              <div className="funnel-reuse-hero">
+                {reuseMatches.tools.length > 0 && (
+                  <div className="funnel-reuse-block funnel-reuse-block--hero">
+                    <p className="funnel-reuse-block__heading t-subheading-rg">
+                      Matching tools
+                    </p>
+                    <div className="tool-grid tool-grid--compact">
+                      {reuseMatches.tools.map((tool) => (
+                        <ToolCard key={tool.id} tool={tool} />
+                      ))}
+                    </div>
+                    <ButtonLink
+                      href={`/tools/${reuseMatches.tools[0].id}`}
+                      variant="primary"
+                      size="sm"
+                    >
+                      Open this tool
+                    </ButtonLink>
+                  </div>
+                )}
 
-            {reuseMatches.blocks.length > 0 && (
-              <div className="funnel-reuse-block">
-                <p className="t-subheading-rg">Use these internal pieces</p>
-                <div className="building-block-grid">
-                  {reuseMatches.blocks.map((block) => (
-                    <BuildingBlockCard key={block.id} block={block} compact />
-                  ))}
-                </div>
-              </div>
-            )}
+                {reuseMatches.blocks.length > 0 && (
+                  <div className="funnel-reuse-block funnel-reuse-block--hero">
+                    <p className="funnel-reuse-block__heading t-subheading-rg">
+                      Matching building blocks
+                    </p>
+                    <div className="building-block-grid">
+                      {reuseMatches.blocks.map((block) => (
+                        <BuildingBlockCard key={block.id} block={block} compact />
+                      ))}
+                    </div>
+                    <ButtonLink
+                      href="/registry?tab=blocks"
+                      variant="primary"
+                      size="sm"
+                    >
+                      See building blocks
+                    </ButtonLink>
+                  </div>
+                )}
 
-            {reuseMatches.rules.length > 0 && (
-              <ul className="funnel-rules">
-                {reuseMatches.rules.map((rule) => (
-                  <li key={rule.id} className="funnel-rules__item t-para-rg">
-                    <Icon name="info-circle" size={16} />
-                    <span>
-                      {rule.message}
-                      {rule.stakes === "high" && (
-                        <span className="funnel-rules__stakes t-tag-sm">
-                          High stakes
+                {reuseMatches.rules.length > 0 && (
+                  <ul className="funnel-rules">
+                    {reuseMatches.rules.map((rule) => (
+                      <li key={rule.id} className="funnel-rules__item t-para-rg">
+                        <Icon name="info-circle" size={16} />
+                        <span>
+                          {rule.message}
+                          {rule.stakes === "high" && (
+                            <span className="funnel-rules__stakes t-tag-sm">
+                              High stakes
+                            </span>
+                          )}
                         </span>
-                      )}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            {reuseMatches.tools.length === 0 &&
-              reuseMatches.blocks.length === 0 &&
-              reuseMatches.rules.length === 0 && (
-                <p className="t-para-rg text-muted">
-                  No close matches — continue to validate the need.
-                </p>
-              )}
-
-            <div className="funnel-stage__actions">
-              <Button variant="primary" onClick={handleContinueToValidate}>
-                Continue to validate
-              </Button>
-            </div>
-          </section>
-        )}
-
-        {stage === "validate" && (
-          <section className="funnel-stage">
-            <h2 className="funnel-stage__title t-heading-md">
-              Stage 3 · Validate the need
-            </h2>
-
-            {demandSignal.length > 0 && (
-              <div className="funnel-demand">
-                <p className="funnel-demand__title t-subheading-rg">
-                  Demand signal — similar open requests
-                </p>
-                <ul className="funnel-demand__list">
-                  {demandSignal.map((req) => (
-                    <li key={req.id} className="funnel-demand__item t-para-rg">
-                      <strong>{req.title}</strong> — {req.upvotes} upvote
-                      {req.upvotes === 1 ? "" : "s"}
-                    </li>
-                  ))}
-                </ul>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             )}
 
-            {duplicateRequests.length > 0 && (
-              <div className="funnel-reuse-block funnel-reuse-block--alert">
-                <p className="t-subheading-rg">Near-duplicate request found</p>
+            {nearDuplicates.length > 0 && (
+              <div className="funnel-reuse-block funnel-reuse-block--secondary">
+                <p className="funnel-reuse-block__heading t-subheading-rg">
+                  Similar need already on the board
+                </p>
                 <ul className="funnel-demand__list">
-                  {duplicateRequests.map((req) => (
+                  {nearDuplicates.map((req) => (
                     <li key={req.id} className="funnel-demand__item">
                       <p className="t-para-rg">
-                        <strong>{req.title}</strong> — {req.upvotes} upvotes
+                        <strong>{req.title}</strong> —{" "}
+                        {getDemandUpvoteCount(req, mockUsers)} upvotes
                       </p>
                       <Button
                         variant="secondary"
@@ -520,117 +721,115 @@ export function DecisionFunnel() {
                     </li>
                   ))}
                 </ul>
+                <p className="t-para-sm text-muted">
+                  Optional — you can still post a novel need.
+                </p>
               </div>
             )}
 
-            <label className="form-field">
-              <span className="form-field__label t-label-rg">The problem</span>
-              <textarea
-                className="form-field__input form-field__textarea t-para-rg"
-                rows={3}
-                value={validation.problem}
-                onChange={(e) => updateValidation("problem", e.target.value)}
-              />
-            </label>
+            {reuseHasMatches ? (
+              <details className="funnel-disclosure">
+                <summary className="funnel-disclosure__summary t-label-rg">
+                  Not a fit? Post anyway or park
+                </summary>
+                <div className="funnel-disclosure__body">
+                  <label className="form-field">
+                    <span className="form-field__label t-label-rg">
+                      None of these fit because…
+                    </span>
+                    <textarea
+                      className="form-field__input form-field__textarea t-para-rg"
+                      rows={2}
+                      value={reuseOverrideNote}
+                      onChange={(e) => setReuseOverrideNote(e.target.value)}
+                      placeholder="Required to post past matches — logged for admins"
+                    />
+                  </label>
 
-            <label className="form-field">
-              <span className="form-field__label t-label-rg">Who has it?</span>
-              <input
-                className="form-field__input t-para-rg"
-                value={validation.whoHasIt}
-                onChange={(e) => updateValidation("whoHasIt", e.target.value)}
-                placeholder="Team, role, how many people"
-              />
-            </label>
+                  <div className="funnel-park funnel-park--inline">
+                    <label className="form-field">
+                      <span className="form-field__label t-label-rg">
+                        Park reason
+                      </span>
+                      <textarea
+                        className="form-field__input form-field__textarea t-para-rg"
+                        rows={2}
+                        value={parkReason}
+                        onChange={(e) => setParkReason(e.target.value)}
+                        placeholder="Why not pursue — stays searchable in the registry"
+                      />
+                    </label>
+                    <Button variant="secondary" size="sm" onClick={handlePark}>
+                      Park this need
+                    </Button>
+                  </div>
 
-            <label className="form-field">
-              <span className="form-field__label t-label-rg">How often?</span>
-              <input
-                className="form-field__input t-para-rg"
-                value={validation.frequency}
-                onChange={(e) => updateValidation("frequency", e.target.value)}
-                placeholder="Daily, weekly, every launch…"
-              />
-            </label>
+                  <div className="funnel-stage__actions">
+                    <Button
+                      variant="secondary"
+                      onClick={handlePostOpenNeed}
+                      disabled={!reuseOverrideNote.trim()}
+                    >
+                      Post open need anyway
+                    </Button>
+                  </div>
+                </div>
+              </details>
+            ) : (
+              <div className="funnel-stage__actions">
+                <Button variant="primary" onClick={handlePostOpenNeed}>
+                  Post open need
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => setStage("prerequisites")}
+                >
+                  Back
+                </Button>
+              </div>
+            )}
 
-            <label className="form-field">
-              <span className="form-field__label t-label-rg">Current workaround</span>
-              <input
-                className="form-field__input t-para-rg"
-                value={validation.currentWorkaround}
-                onChange={(e) =>
-                  updateValidation("currentWorkaround", e.target.value)
-                }
-              />
-            </label>
-
-            <label className="form-field">
-              <span className="form-field__label t-label-rg">Expected value</span>
-              <input
-                className="form-field__input t-para-rg"
-                value={validation.expectedValue}
-                onChange={(e) => updateValidation("expectedValue", e.target.value)}
-                placeholder="Time saved, fewer errors, faster launches…"
-              />
-            </label>
-
-            <div className="funnel-park">
-              <p className="t-label-rg">Not worth pursuing?</p>
-              <textarea
-                className="form-field__input form-field__textarea t-para-rg"
-                rows={2}
-                value={parkReason}
-                onChange={(e) => setParkReason(e.target.value)}
-                placeholder="Park reason — captured for search, not a dead end"
-              />
-              <Button variant="secondary" size="sm" onClick={handlePark}>
-                Park / decline
-              </Button>
-            </div>
-
-            <div className="funnel-stage__actions">
-              <Button
-                variant="primary"
-                onClick={handleValidatePass}
-                disabled={
-                  !validation.problem.trim() ||
-                  !validation.whoHasIt.trim() ||
-                  duplicateRequests.length > 0
-                }
-              >
-                {canSubmitTool || isBuilderContinuation
-                  ? "Validated — continue to stack"
-                  : "Post validated need"}
-              </Button>
-            </div>
+            {reuseHasMatches && (
+              <div className="funnel-stage__actions funnel-stage__actions--muted">
+                <Button
+                  variant="secondary"
+                  onClick={() => setStage("prerequisites")}
+                >
+                  Back
+                </Button>
+              </div>
+            )}
           </section>
         )}
 
-        {stage === "viewer-done" && (
+        {stage === "posted" && (
           <section className="funnel-stage funnel-stage--done">
             <div className="confirmation-card">
               <div className="confirmation-card__icon">
                 <Icon name="checkmark" size={32} />
               </div>
               <h2 className="confirmation-card__title t-heading-md">
-                Need validated and posted
+                Open need posted
               </h2>
               <p className="confirmation-card__desc t-para-md">
-                <strong>{title}</strong> is on the requests board with prerequisites
-                and demand captured. A builder can claim it and continue through
-                stack and approach.
+                <strong>{title}</strong> is on the requests board. Upvotes rank
+                it; a builder claiming it is what makes it real.
               </p>
               {stakesLevel === "high" && (
                 <p className="funnel-gate-note t-para-sm">
-                  {hardGateReason(stakesLevel, stack, prerequisites)}
+                  High stakes — builders will need admin sign-off before a
+                  planned tool goes live.
                 </p>
               )}
               <div className="confirmation-card__actions">
                 <ButtonLink href="/requests" variant="primary">
                   View requests board
                 </ButtonLink>
-                <ButtonLink href={`/requests#${createdRequestId}`} variant="secondary">
-                  View this request
+                <ButtonLink
+                  href={`/requests#${createdRequestId}`}
+                  variant="secondary"
+                >
+                  View this need
                 </ButtonLink>
               </div>
             </div>
@@ -642,10 +841,11 @@ export function DecisionFunnel() {
             <div className="confirmation-card">
               <h2 className="confirmation-card__title t-heading-md">Need parked</h2>
               <p className="confirmation-card__desc t-para-md">
-                Captured with your reason — searchable later, not a dead end.
+                Captured with your reason — searchable in the registry under
+                needs.
               </p>
-              <ButtonLink href="/registry" variant="primary">
-                Back to registry
+              <ButtonLink href="/registry?tab=needs" variant="primary">
+                Search needs in registry
               </ButtonLink>
             </div>
           </section>
@@ -653,12 +853,10 @@ export function DecisionFunnel() {
 
         {stage === "stack" && (
           <section className="funnel-stage">
-            <h2 className="funnel-stage__title t-heading-md">
-              Stage 4 · Tech stack
-            </h2>
+            <h2 className="funnel-stage__title t-heading-md">Tech stack</h2>
             <p className="funnel-stage__intro t-para-rg">
-              Golden path pre-selected. Low-stakes — edit freely. High-stakes or
-              off-path — justify before continuing.
+              Golden path pre-selected. Low stakes — edit freely. High stakes or
+              off-path — justify; admin sign-off required before go-live.
             </p>
 
             <div className="funnel-stack-default">
@@ -719,9 +917,6 @@ export function DecisionFunnel() {
                     placeholder="Why deviate from golden path or proceed on high stakes?"
                   />
                 </label>
-                <p className="t-para-sm text-muted" role="status">
-                  Admin sign-off needed — mocked for demo.
-                </p>
               </div>
             )}
 
@@ -739,9 +934,7 @@ export function DecisionFunnel() {
 
         {stage === "approach" && (
           <section className="funnel-stage">
-            <h2 className="funnel-stage__title t-heading-md">
-              Stage 5 · Approach
-            </h2>
+            <h2 className="funnel-stage__title t-heading-md">Approach</h2>
 
             <div className="funnel-approach-rec">
               <Icon name="spark" size={20} />
@@ -775,7 +968,8 @@ export function DecisionFunnel() {
             {approachGate && (
               <div className="funnel-hard-gate">
                 <p className="funnel-gate-note t-para-sm">
-                  Why this is gated: high-stakes override on recommended approach.
+                  High-stakes override on recommended approach — admin sign-off
+                  required.
                 </p>
                 <label className="form-field">
                   <span className="form-field__label t-label-rg">
@@ -803,8 +997,41 @@ export function DecisionFunnel() {
           </section>
         )}
 
+        {stage === "awaiting-signoff" && (
+          <section className="funnel-stage funnel-stage--done">
+            <div className="confirmation-card confirmation-card--blocked">
+              <div className="confirmation-card__icon">
+                <Icon name="shield-tick" size={32} />
+              </div>
+              <h2 className="confirmation-card__title t-heading-md">
+                Awaiting admin sign-off
+              </h2>
+              <p className="confirmation-card__desc t-para-md">
+                <strong>{title}</strong> is a planned tool in the approval
+                queue. It will not appear in search until an admin approves it.
+              </p>
+              <p className="funnel-gate-note t-para-sm">
+                {hardGateReason(stakesLevel, stack, prerequisites)}
+              </p>
+              <div className="confirmation-card__actions">
+                <ButtonLink href="/admin/approvals" variant="primary">
+                  View approval queue
+                </ButtonLink>
+                {finishedToolId && (
+                  <ButtonLink
+                    href={`/tools/${finishedToolId}`}
+                    variant="secondary"
+                  >
+                    View pending tool
+                  </ButtonLink>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
         <p className="funnel-footnote t-para-sm text-muted">
-          Decision rules loaded: {DECISION_RULES.length} seeded policies (mock).
+          Decision rules loaded: {DECISION_RULES.length} seeded policies.
           Stakes: <strong>{stakesLevel}</strong>
           {!isGoldenPathStack(stack) && " · off golden path"}
         </p>

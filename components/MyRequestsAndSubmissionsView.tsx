@@ -46,8 +46,8 @@ export function MyRequestsAndSubmissionsView() {
             </ButtonLink>
           )}
           {canSubmitTool && (
-            <ButtonLink href="/submit" variant="primary">
-              Submit a tool
+            <ButtonLink href="/requests" variant="primary">
+              Browse open needs
             </ButtonLink>
           )}
         </div>
@@ -75,7 +75,7 @@ export function MyRequestsAndSubmissionsView() {
         <EmptyState
           icon="bulb"
           title="Nothing to track yet"
-          description="Use guided intake when something's missing, or submit a tool once you're a builder."
+          description="Use guided intake when something's missing, or claim an open need once you're a builder."
           action={
             <ButtonLink href="/funnel" variant="primary">
               Figure out a need

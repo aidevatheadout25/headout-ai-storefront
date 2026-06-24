@@ -15,7 +15,7 @@ const SORT_OPTIONS: { value: RequestBoardSort; label: string }[] = [
 ];
 
 export function RequestsView() {
-  const { requests, canClaimRequest } = useApp();
+  const { requests, mockUsers, canClaimRequest } = useApp();
   const [sort, setSort] = useState<RequestBoardSort>("demand");
 
   const boardRequests = useMemo(
@@ -23,8 +23,8 @@ export function RequestsView() {
     [requests],
   );
   const sorted = useMemo(
-    () => sortRequests(boardRequests, sort),
-    [boardRequests, sort],
+    () => sortRequests(boardRequests, sort, mockUsers),
+    [boardRequests, sort, mockUsers],
   );
 
   return (
@@ -64,8 +64,8 @@ export function RequestsView() {
 
       {canClaimRequest && (
         <p className="requests-board__hint t-para-sm text-muted">
-          Claim validated requests to continue through stack and approach — the
-          planned tool writes back to the registry.
+          Claim open needs to continue through stack and approach — the planned
+          tool writes back to the registry.
         </p>
       )}
 
@@ -73,7 +73,7 @@ export function RequestsView() {
         <EmptyState
           icon="bulb"
           title="No requests yet"
-          description="Be the first to validate a need through guided intake — or check back when teammates add demand."
+          description="Be the first to post a need through guided intake — or check back when teammates add demand."
           action={
             <ButtonLink href="/funnel" variant="primary">
               Figure out a need

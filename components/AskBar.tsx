@@ -115,7 +115,7 @@ export function AskBar() {
                 >
                   Start guided intake
                 </Link>
-                {" — "}reuse check, validate, then post a need.
+                {" — "}describe the need, check reuse, then post for builders.
               </p>
             </>
           )}
@@ -124,7 +124,7 @@ export function AskBar() {
             <ZeroResultsPanel
               query={result.query}
               kits={getClosestKits(result.query)}
-              leadMessage="Try describing the problem in plain words — then start guided intake to validate before posting a need."
+              leadMessage="Try describing the problem in plain words — then start guided intake to post an open need."
             />
           )}
 

@@ -25,7 +25,6 @@ import type {
   MockUser,
   NeedRequest,
   Owner,
-  RequestFormData,
   RequestPrerequisites,
   RequestValidation,
   Role,
@@ -34,6 +33,7 @@ import type {
   ToolFlag,
   ToolFlagReasonCategory,
   ToolFormData,
+  ZeroResultQuery,
 } from "@/lib/types";
 
 type AppContextValue = {
@@ -49,7 +49,7 @@ type AppContextValue = {
   myRequests: NeedRequest[];
   hasTrackingItems: boolean;
   flaggedTools: ToolFlag[];
-  zeroResultSearchCount: number;
+  zeroResultQueries: ZeroResultQuery[];
   mockUsers: MockUser[];
   builderAccessRequests: BuilderAccessRequest[];
   submitTool: (data: ToolFormData) => string;
@@ -72,10 +72,9 @@ type AppContextValue = {
   deprecateTool: (toolId: string) => void;
   restoreToLive: (toolId: string) => void;
   recordZeroResultSearch: (query: string) => void;
-  fileRequest: (data: RequestFormData) => string;
   upvoteRequest: (id: string) => void;
   claimRequest: (id: string) => string | null;
-  createValidatedRequest: (input: {
+  postOpenNeed: (input: {
     title: string;
     team: Team;
     tags: string[];
@@ -83,6 +82,8 @@ type AppContextValue = {
     prerequisites: RequestPrerequisites;
     validation: RequestValidation;
     stakesLevel: NeedRequest["stakesLevel"];
+    reuseOverrideNote?: string;
+    autoClaimForBuilder?: boolean;
   }) => string;
   parkNeed: (input: {
     title: string;
@@ -95,7 +96,7 @@ type AppContextValue = {
     requestId: string,
     stack: ChosenStack,
     approach: ChosenApproach,
-  ) => string | null;
+  ) => { toolId: string | null; awaitingSignoff: boolean };
   requestBuilderAccess: () => void;
   grantBuilderRole: (userId: string) => void;
   revokeBuilderRole: (userId: string) => void;
@@ -103,6 +104,7 @@ type AppContextValue = {
   dismissBuilderAccessRequest: (id: string) => void;
   canFileRequest: boolean;
   canSubmitTool: boolean;
+  canRegisterNetNewTool: boolean;
   canClaimRequest: boolean;
   canManageBuilders: boolean;
   canApprove: boolean;
@@ -244,7 +246,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     INITIAL_FLAGGED_TOOLS,
   );
   const [accessRequests, setAccessRequests] = useState<string[]>([]);
-  const [zeroResultSearchCount, setZeroResultSearchCount] = useState(0);
+  const [zeroResultQueries, setZeroResultQueries] = useState<ZeroResultQuery[]>(
+    [],
+  );
   const [mockUsers, setMockUsers] = useState<MockUser[]>(MOCK_USERS);
   const [builderAccessRequests, setBuilderAccessRequests] = useState<
     BuilderAccessRequest[]
@@ -286,6 +290,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const canFileRequest = true;
   const canSubmitTool = role === "builder" || role === "admin";
+  const canRegisterNetNewTool = role === "admin";
   const canClaimRequest = role === "builder" || role === "admin";
   const canManageBuilders = role === "admin";
   const canApprove = role === "admin";
@@ -454,33 +459,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const fileRequest = useCallback((data: RequestFormData): string => {
-    const id = slugify(data.title) || `req-${Date.now()}`;
-    const tags = data.tags
-      .split(",")
-      .map((t) => t.trim())
-      .filter(Boolean);
-    const request: NeedRequest = {
-      id,
-      title: data.title.trim(),
-      problem: data.problem.trim(),
-      requestedBy: { name: DEMO_USER.name, slackId: DEMO_USER.slackId },
-      requestedById: DEMO_USER.id,
-      team: data.team,
-      tags,
-      upvotes: 1,
-      upvotedBy: [DEMO_USER.id],
-      status: "open",
-      createdAt: nowIso(),
-    };
-    setRequests((prev) => [request, ...prev]);
-    return id;
-  }, []);
-
   const upvoteRequest = useCallback((id: string) => {
     setRequests((prev) =>
       prev.map((r) => {
         if (r.id !== id) return r;
+        if (r.requestedById === DEMO_USER.id) return r;
         if (r.upvotedBy.includes(DEMO_USER.id)) return r;
         return {
           ...r,
@@ -511,7 +494,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return claimed ? id : null;
   }, [role]);
 
-  const createValidatedRequest = useCallback(
+  const postOpenNeed = useCallback(
     (input: {
       title: string;
       team: Team;
@@ -520,8 +503,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       prerequisites: RequestPrerequisites;
       validation: RequestValidation;
       stakesLevel: NeedRequest["stakesLevel"];
+      reuseOverrideNote?: string;
+      autoClaimForBuilder?: boolean;
     }): string => {
       const id = slugify(input.title) || `req-${Date.now()}`;
+      const shouldClaim =
+        Boolean(input.autoClaimForBuilder) &&
+        (role === "builder" || role === "admin");
+
       const request: NeedRequest = {
         id,
         title: input.title.trim(),
@@ -530,20 +519,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
         requestedById: DEMO_USER.id,
         team: input.team,
         tags: input.tags,
-        upvotes: 1,
-        upvotedBy: [DEMO_USER.id],
-        status: "open",
+        upvotes: 0,
+        upvotedBy: [],
+        status: shouldClaim ? "claimed" : "open",
+        claimedBy: shouldClaim
+          ? { name: DEMO_USER.name, slackId: DEMO_USER.slackId }
+          : undefined,
+        claimedById: shouldClaim ? DEMO_USER.id : undefined,
         createdAt: nowIso(),
         prerequisites: input.prerequisites,
         validation: input.validation,
         stakesLevel: input.stakesLevel,
-        funnelValidated: true,
         sourceQuery: input.sourceQuery,
+        reuseOverrideNote: input.reuseOverrideNote?.trim() || undefined,
       };
       setRequests((prev) => [request, ...prev]);
       return id;
     },
-    [],
+    [role],
   );
 
   const parkNeed = useCallback(
@@ -571,7 +564,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         prerequisites: input.prerequisites,
         validation: input.validation,
         sourceQuery: input.sourceQuery,
-        funnelValidated: false,
       };
       setRequests((prev) => [request, ...prev]);
       return id;
@@ -584,8 +576,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       requestId: string,
       stack: ChosenStack,
       approach: ChosenApproach,
-    ): string | null => {
+    ): { toolId: string | null; awaitingSignoff: boolean } => {
       let resultId: string | null = null;
+      let awaitingSignoff = false;
 
       setRequests((prev) => {
         const request = prev.find((r) => r.id === requestId);
@@ -596,11 +589,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         if (request.linkedToolId) {
           resultId = request.linkedToolId;
+          const linked = [...approvedTools, ...pendingTools].find(
+            (t) => t.id === request.linkedToolId,
+          );
+          awaitingSignoff = linked?.approvalStatus === "pending";
           return prev;
         }
 
         const toolId = slugify(request.title) || `tool-${Date.now()}`;
         resultId = toolId;
+
+        const needsSignoff = Boolean(
+          stack.needsAdminSignoff ?? request.stakesLevel === "high",
+        );
+        awaitingSignoff = needsSignoff;
+        const approvalStatus = needsSignoff ? "pending" : "approved";
 
         const tool: Tool = {
           id: toolId,
@@ -613,14 +616,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
           team: request.team,
           tags: request.tags,
           accessLevel: request.stakesLevel === "high" ? "request" : "open",
-          sensitive: Boolean(request.prerequisites?.touchesPII),
+          sensitive:
+            request.prerequisites?.touchesPII === "yes" ||
+            request.prerequisites?.touchesPII === "unsure",
           writeCapable: false,
           ownerInstructions:
             request.validation?.currentWorkaround
-              ? `Claimed from validated request. Prior workaround: ${request.validation.currentWorkaround}`
+              ? `Claimed from open need. Prior workaround: ${request.validation.currentWorkaround}`
               : `Claimed from request. Reach out to ${request.requestedBy.slackId} on Slack.`,
           status: "planned",
-          approvalStatus: "approved",
+          approvalStatus,
           submittedBy: DEMO_USER.id,
           usageStats: { views: 0, clicks: 0, helpful: 0 },
           lastUpdated: nowIso(),
@@ -631,20 +636,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
           linkedRequestId: requestId,
         };
 
-        setApprovedTools((approved) => [
-          tool,
-          ...approved.filter((t) => t.id !== toolId),
-        ]);
-        setPendingTools((pending) => pending.filter((t) => t.id !== toolId));
+        if (needsSignoff) {
+          setPendingTools((pending) => [
+            tool,
+            ...pending.filter((t) => t.id !== toolId),
+          ]);
+        } else {
+          setApprovedTools((approved) => [
+            tool,
+            ...approved.filter((t) => t.id !== toolId),
+          ]);
+        }
 
         return prev.map((r) =>
           r.id === requestId ? { ...r, linkedToolId: toolId } : r,
         );
       });
 
-      return resultId;
+      return { toolId: resultId, awaitingSignoff };
     },
-    [role],
+    [role, approvedTools, pendingTools],
   );
 
   const requestBuilderAccess = useCallback(() => {
@@ -827,8 +838,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const recordZeroResultSearch = useCallback((_query: string) => {
-    setZeroResultSearchCount((n) => n + 1);
+  const recordZeroResultSearch = useCallback((query: string) => {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    setZeroResultQueries((prev) => {
+      const existing = prev.find(
+        (item) => item.query.toLowerCase() === trimmed.toLowerCase(),
+      );
+      if (existing) {
+        return prev.map((item) =>
+          item.query.toLowerCase() === trimmed.toLowerCase()
+            ? { ...item, count: item.count + 1 }
+            : item,
+        );
+      }
+      return [{ query: trimmed, count: 1 }, ...prev];
+    });
   }, []);
 
   const value = useMemo(
@@ -845,7 +870,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       myRequests,
       hasTrackingItems,
       flaggedTools,
-      zeroResultSearchCount,
+      zeroResultQueries,
       mockUsers,
       builderAccessRequests,
       submitTool,
@@ -868,10 +893,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       deprecateTool,
       restoreToLive,
       recordZeroResultSearch,
-      fileRequest,
       upvoteRequest,
       claimRequest,
-      createValidatedRequest,
+      postOpenNeed,
       parkNeed,
       completeBuilderFunnel,
       requestBuilderAccess,
@@ -881,6 +905,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       dismissBuilderAccessRequest,
       canFileRequest,
       canSubmitTool,
+      canRegisterNetNewTool,
       canClaimRequest,
       canManageBuilders,
       canApprove,
@@ -905,7 +930,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       myRequests,
       hasTrackingItems,
       flaggedTools,
-      zeroResultSearchCount,
+      zeroResultQueries,
       mockUsers,
       builderAccessRequests,
       submitTool,
@@ -928,10 +953,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       deprecateTool,
       restoreToLive,
       recordZeroResultSearch,
-      fileRequest,
       upvoteRequest,
       claimRequest,
-      createValidatedRequest,
+      postOpenNeed,
       parkNeed,
       completeBuilderFunnel,
       requestBuilderAccess,
@@ -940,6 +964,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       approveBuilderAccessRequest,
       dismissBuilderAccessRequest,
       canSubmitTool,
+      canRegisterNetNewTool,
       canClaimRequest,
       canApprove,
       canEditTool,

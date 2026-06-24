@@ -1,17 +1,7 @@
-import type { Tool, ToolLifecycleStatus, ZeroResultQuery } from "@/lib/types";
+import type { NeedRequest, Tool, ToolLifecycleStatus, ZeroResultQuery } from "@/lib/types";
 
 export const GATE_ELIGIBILITY_NOTE =
   "Approval makes this tool eligible for infra access — the platform team grants the actual access.";
-
-export const MOCK_TOP_ZERO_RESULT_QUERIES: ZeroResultQuery[] = [
-  { query: "figma plugin for PDP crops", count: 14 },
-  { query: "internal LLM router", count: 11 },
-  { query: "zendesk auto-triage replacement", count: 9 },
-  { query: "competitor price API", count: 8 },
-  { query: "bigquery cost dashboard", count: 6 },
-];
-
-export const MOCK_ZERO_RESULTS_BASE_COUNT = 47;
 
 export type AdminMetrics = {
   totalTools: number;
@@ -19,11 +9,13 @@ export type AdminMetrics = {
   submissionsThisWeek: number;
   zeroResultsCount: number;
   topZeroResultQueries: ZeroResultQuery[];
+  parkedSignals: { title: string; reason: string; sourceQuery?: string }[];
 };
 
 export function computeAdminMetrics(
   tools: Tool[],
-  extraZeroResults: number,
+  zeroResultQueries: ZeroResultQuery[],
+  parkedRequests: NeedRequest[],
 ): AdminMetrics {
   const catalog = tools.filter((t) => t.approvalStatus === "approved");
   const statusBreakdown: Record<ToolLifecycleStatus, number> = {
@@ -43,16 +35,26 @@ export function computeAdminMetrics(
     (t) => new Date(t.lastUpdated).getTime() >= weekAgo,
   ).length;
 
-  const liveTop = [...MOCK_TOP_ZERO_RESULT_QUERIES];
-  if (extraZeroResults > 0) {
-    liveTop[0] = { ...liveTop[0], count: liveTop[0].count + extraZeroResults };
-  }
+  const totalZeroResults = zeroResultQueries.reduce((sum, q) => sum + q.count, 0);
+  const topZeroResultQueries = [...zeroResultQueries]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8);
+
+  const parkedSignals = parkedRequests
+    .filter((r) => r.status === "parked")
+    .map((r) => ({
+      title: r.title,
+      reason: r.parkedReason ?? r.problem,
+      sourceQuery: r.sourceQuery,
+    }))
+    .slice(0, 8);
 
   return {
     totalTools: catalog.length,
     statusBreakdown,
     submissionsThisWeek,
-    zeroResultsCount: MOCK_ZERO_RESULTS_BASE_COUNT + extraZeroResults,
-    topZeroResultQueries: liveTop,
+    zeroResultsCount: totalZeroResults,
+    topZeroResultQueries,
+    parkedSignals,
   };
 }

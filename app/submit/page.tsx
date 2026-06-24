@@ -8,7 +8,7 @@ import { ButtonLink } from "@/components/Button";
 import { useApp } from "@/context/AppContext";
 
 function SubmitPageContent() {
-  const { canSubmitTool } = useApp();
+  const { canSubmitTool, canRegisterNetNewTool } = useApp();
 
   if (!canSubmitTool) {
     return (
@@ -33,6 +33,32 @@ function SubmitPageContent() {
     );
   }
 
+  if (!canRegisterNetNewTool) {
+    return (
+      <>
+        <RoleBanner />
+        <EmptyState
+          icon="bulb"
+          title="Start from a need"
+          description="Net-new tools go through guided intake first — post or claim an open need so reuse and dedup run before you build. You can still edit tools you already own."
+          action={
+            <div className="empty-state__action-row">
+              <ButtonLink href="/funnel" variant="primary">
+                Start guided intake
+              </ButtonLink>
+              <ButtonLink href="/requests" variant="secondary">
+                Browse open needs
+              </ButtonLink>
+              <ButtonLink href="/my-submissions" variant="secondary">
+                My tools & needs
+              </ButtonLink>
+            </div>
+          }
+        />
+      </>
+    );
+  }
+
   return (
     <>
       <RoleBanner />
@@ -40,8 +66,8 @@ function SubmitPageContent() {
         <div>
           <h1 className="page-header__title t-display-xs">Submit a tool</h1>
           <p className="page-header__desc t-para-md">
-            Register what you built — make it findable for everyone at Headout.
-            Builder access is granted by an admin.
+            Admin override — register a net-new tool without a claimed need.
+            Builders should use guided intake instead.
           </p>
         </div>
       </div>

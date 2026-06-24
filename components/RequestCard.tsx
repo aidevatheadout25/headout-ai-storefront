@@ -6,18 +6,25 @@ import { Button } from "@/components/Button";
 import { Icon } from "@/components/Icon";
 import { RequestStatusBadge } from "@/components/RequestStatusBadge";
 import { useApp } from "@/context/AppContext";
-import { requestUpvotedByMe } from "@/lib/requests";
+import {
+  canUpvoteRequest,
+  getDemandUpvoteCount,
+  isHighDemand,
+  requestUpvotedByMe,
+} from "@/lib/requests";
 import { formatSubmissionDate } from "@/lib/toolMeta";
 import type { NeedRequest } from "@/lib/types";
 
 type RequestCardProps = {
   request: NeedRequest;
+  compact?: boolean;
 };
 
-export function RequestCard({ request }: RequestCardProps) {
+export function RequestCard({ request, compact = false }: RequestCardProps) {
   const router = useRouter();
   const {
     currentUser,
+    mockUsers,
     canClaimRequest,
     upvoteRequest,
     claimRequest,
@@ -25,6 +32,9 @@ export function RequestCard({ request }: RequestCardProps) {
   } = useApp();
 
   const upvoted = requestUpvotedByMe(request, currentUser.id);
+  const demandVotes = getDemandUpvoteCount(request, mockUsers);
+  const highDemand = isHighDemand(request, mockUsers);
+  const isSubmitter = request.requestedById === currentUser.id;
   const linkedTool = request.linkedToolId
     ? getToolById(request.linkedToolId)
     : undefined;
@@ -37,12 +47,17 @@ export function RequestCard({ request }: RequestCardProps) {
   }
 
   return (
-    <div className="request-card tool-card">
+    <div className={`request-card tool-card${compact ? " request-card--compact" : ""}`}>
       <div className="request-card__header">
         <RequestStatusBadge status={request.status} />
-        {request.funnelValidated && (
-          <span className="request-status request-status--validated t-tag-sm">
-            Validated
+        {highDemand && (
+          <span className="request-status request-status--demand t-tag-sm">
+            High demand
+          </span>
+        )}
+        {request.stakesLevel === "high" && (
+          <span className="request-status request-status--stakes t-tag-sm">
+            High stakes
           </span>
         )}
         <span className="request-card__team t-tag-rg">{request.team}</span>
@@ -51,13 +66,21 @@ export function RequestCard({ request }: RequestCardProps) {
       <h2 className="request-card__title t-heading-rg">{request.title}</h2>
       <p className="request-card__problem t-para-rg">{request.problem}</p>
 
-      <p className="request-card__meta t-para-sm text-muted">
-        Requested by {request.requestedBy.name} ({request.requestedBy.slackId})
-        {" · "}
-        {formatSubmissionDate(request.createdAt)}
-      </p>
+      {!compact && (
+        <p className="request-card__meta t-para-sm text-muted">
+          Requested by {request.requestedBy.name} ({request.requestedBy.slackId})
+          {" · "}
+          {formatSubmissionDate(request.createdAt)}
+        </p>
+      )}
 
-      {request.tags.length > 0 && (
+      {request.status === "parked" && request.parkedReason && (
+        <p className="request-card__parked t-para-sm">
+          Parked: {request.parkedReason}
+        </p>
+      )}
+
+      {request.tags.length > 0 && !compact && (
         <div className="request-card__tags">
           {request.tags.map((tag) => (
             <span key={tag} className="tag-chip t-tag-rg">
@@ -91,30 +114,40 @@ export function RequestCard({ request }: RequestCardProps) {
         </p>
       )}
 
-      <div className="request-card__actions">
-        <button
-          type="button"
-          className={`upvote-btn t-cta-sm${upvoted ? " upvote-btn--active" : ""}`}
-          onClick={() => upvoteRequest(request.id)}
-          disabled={upvoted}
-          aria-pressed={upvoted}
-        >
-          <Icon name="checkmark" size={14} />
-          {upvoted ? "Upvoted" : "Upvote"} ({request.upvotes})
-        </button>
+      {!compact && (
+        <div className="request-card__actions">
+          {!isSubmitter && (
+            <button
+              type="button"
+              className={`upvote-btn t-cta-sm${upvoted ? " upvote-btn--active" : ""}`}
+              onClick={() => upvoteRequest(request.id)}
+              disabled={!canUpvoteRequest(request, currentUser.id) || upvoted}
+              aria-pressed={upvoted}
+            >
+              <Icon name="checkmark" size={14} />
+              {upvoted ? "Upvoted" : "Upvote"} ({demandVotes})
+            </button>
+          )}
 
-        {request.status === "open" && canClaimRequest && (
-          <Button variant="primary" size="sm" onClick={handleClaim}>
-            Claim & build
-          </Button>
-        )}
+          {isSubmitter && (
+            <span className="request-card__hint t-para-sm text-muted">
+              {demandVotes} upvote{demandVotes === 1 ? "" : "s"} from others
+            </span>
+          )}
 
-        {request.status === "open" && !canClaimRequest && (
-          <span className="request-card__hint t-para-sm text-muted">
-            Builders can claim this need
-          </span>
-        )}
-      </div>
+          {request.status === "open" && canClaimRequest && (
+            <Button variant="primary" size="sm" onClick={handleClaim}>
+              Claim & build
+            </Button>
+          )}
+
+          {request.status === "open" && !canClaimRequest && (
+            <span className="request-card__hint t-para-sm text-muted">
+              Builders can claim this need
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -10,10 +10,11 @@ import { Icon } from "@/components/Icon";
 import { RoleBanner } from "@/components/RoleSwitcher";
 import { useApp } from "@/context/AppContext";
 import { filterRegistryTools, getClosestKits } from "@/lib/askBar";
-import { filterBuildingBlocks } from "@/lib/funnel";
+import { filterBuildingBlocks, filterRegistryNeeds } from "@/lib/funnel";
 import { getKitById } from "@/lib/mockData";
 import { sortRegistryTools, type RegistrySort } from "@/lib/registry";
 import { BuildingBlockCard } from "@/components/BuildingBlockCard";
+import { RequestCard } from "@/components/RequestCard";
 import {
   TEAMS,
   TOOL_TYPES,
@@ -31,10 +32,15 @@ const SORT_OPTIONS: { value: RegistrySort; label: string }[] = [
 export function RegistryView() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { approvedTools, buildingBlocks } = useApp();
+  const { approvedTools, buildingBlocks, requests } = useApp();
   const kitParam = searchParams.get("kit") ?? "";
   const tabParam = searchParams.get("tab") ?? "tools";
-  const registryTab = tabParam === "blocks" ? "blocks" : "tools";
+  const registryTab =
+    tabParam === "blocks"
+      ? "blocks"
+      : tabParam === "needs"
+        ? "needs"
+        : "tools";
   const [search, setSearch] = useState(searchParams.get("q") ?? "");
   const [typeFilter, setTypeFilter] = useState("");
   const [teamFilter, setTeamFilter] = useState("");
@@ -46,6 +52,11 @@ export function RegistryView() {
   const filteredBlocks = useMemo(
     () => filterBuildingBlocks(buildingBlocks, search),
     [buildingBlocks, search],
+  );
+
+  const filteredNeeds = useMemo(
+    () => filterRegistryNeeds(requests, search),
+    [requests, search],
   );
 
   const filtered = useMemo(() => {
@@ -129,7 +140,7 @@ export function RegistryView() {
         <div>
           <h1 className="page-header__title t-display-xs">Tool registry</h1>
           <p className="page-header__desc t-para-md">
-            Browse internal tools and reusable building blocks at Headout.
+            Browse tools, building blocks, and open or parked needs at Headout.
           </p>
         </div>
         <ButtonLink href="/funnel" variant="primary">
@@ -155,6 +166,15 @@ export function RegistryView() {
           onClick={() => router.push("/registry?tab=blocks")}
         >
           Building blocks
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={registryTab === "needs"}
+          className={`registry-tabs__btn t-label-rg${registryTab === "needs" ? " registry-tabs__btn--active" : ""}`}
+          onClick={() => router.push("/registry?tab=needs")}
+        >
+          Needs
         </button>
       </div>
 
@@ -228,7 +248,11 @@ export function RegistryView() {
               <input
                 type="search"
                 className="registry-toolbar__input t-para-rg"
-                placeholder="Search tools, tags, owners..."
+                placeholder={
+                  registryTab === "needs"
+                    ? "Search needs, parked reasons, source queries…"
+                    : "Search tools, tags, owners..."
+                }
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 aria-label="Search registry"
@@ -247,7 +271,9 @@ export function RegistryView() {
               <span className="registry-toolbar__count t-label-rg-heavy">
                 {registryTab === "blocks"
                   ? `${filteredBlocks.length} block${filteredBlocks.length === 1 ? "" : "s"}`
-                  : `${filtered.length} tool${filtered.length === 1 ? "" : "s"}`}
+                  : registryTab === "needs"
+                    ? `${filteredNeeds.length} need${filteredNeeds.length === 1 ? "" : "s"}`
+                    : `${filtered.length} tool${filtered.length === 1 ? "" : "s"}`}
               </span>
               {registryTab === "tools" && (
                 <select
@@ -296,6 +322,38 @@ export function RegistryView() {
                 icon="globe"
                 title="No building blocks found"
                 description="Try a different search — blocks are reusable APIs, services, agents, and frameworks."
+              />
+            )
+          ) : registryTab === "needs" ? (
+            filteredNeeds.length > 0 ? (
+              <ul className="request-list">
+                {filteredNeeds.map((request) => (
+                  <li key={request.id} id={request.id}>
+                    <RequestCard request={request} compact />
+                  </li>
+                ))}
+              </ul>
+            ) : search.trim() ? (
+              <EmptyState
+                icon="bulb"
+                title="No needs found"
+                description="Try different words — open and parked needs are searchable here."
+                action={
+                  <ButtonLink href="/funnel" variant="primary">
+                    Post a new need
+                  </ButtonLink>
+                }
+              />
+            ) : (
+              <EmptyState
+                icon="bulb"
+                title="No needs yet"
+                description="Open and parked needs from guided intake appear here."
+                action={
+                  <ButtonLink href="/funnel" variant="primary">
+                    Figure out a need
+                  </ButtonLink>
+                }
               />
             )
           ) : filtered.length > 0 ? (

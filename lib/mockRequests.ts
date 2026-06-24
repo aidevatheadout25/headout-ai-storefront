@@ -59,17 +59,16 @@ export const INITIAL_REQUESTS: NeedRequest[] = [
     upvotedBy: ["tom-walsh", "sofia-reyes", "maya-patel"],
     status: "open",
     createdAt: "2026-06-20T10:00:00Z",
-    funnelValidated: true,
     stakesLevel: "low",
     sourceQuery: "bulk resize campaign images",
     prerequisites: {
       dataSources: "Figma exports, GCS campaign asset bucket",
       systems: "Growth creative workflow, CMS image slots",
       inputsOutputs: "Upload PNG/JPG batches → resized/cropped assets per city spec",
-      touchesPII: false,
-      touchesPayments: false,
-      usesLLM: false,
-      needsExternalDep: false,
+      touchesPII: "no",
+      touchesPayments: "no",
+      usesLLM: "no",
+      needsExternalDep: "no",
     },
     validation: {
       problem:

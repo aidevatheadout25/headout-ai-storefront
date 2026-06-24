@@ -38,7 +38,7 @@ export default function HomePage() {
             Start guided intake
           </Link>
           {" — "}
-          reuse check, validate demand, then post a need.
+          describe the need, check reuse, post for builders to claim.
         </p>
       </section>
 
@@ -49,18 +49,23 @@ export default function HomePage() {
       <section className="cta-strip">
         <div>
           <h2 className="cta-strip__title t-heading-md">
-            {canSubmitTool ? "Built something useful?" : "See what others need"}
+            {canSubmitTool ? "Ready to build?" : "See what others need"}
           </h2>
           <p className="cta-strip__desc t-para-rg">
             {canSubmitTool
-              ? "Register it once — make it findable for everyone at Headout."
-              : "Upvote open requests or use guided intake to validate a new need."}
+              ? "Claim an open need or post a new one — stack and approach come after claim."
+              : "Upvote open needs or use guided intake to describe a new one."}
           </p>
         </div>
         {canSubmitTool ? (
-          <ButtonLink href="/submit" variant="primary">
-            Submit a tool
-          </ButtonLink>
+          <div className="cta-strip__actions">
+            <ButtonLink href="/requests" variant="primary">
+              Browse open needs
+            </ButtonLink>
+            <ButtonLink href="/funnel" variant="secondary">
+              Post a need
+            </ButtonLink>
+          </div>
         ) : (
           <ButtonLink href="/funnel" variant="primary">
             Figure out a need

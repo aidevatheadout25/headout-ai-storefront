@@ -59,7 +59,10 @@ export function Sidebar() {
   if (canSubmitTool) {
     sections.push({
       title: "Build",
-      items: [{ href: "/submit", label: "Submit a tool" }],
+      items: [
+        { href: "/requests", label: "Claim a need" },
+        { href: "/funnel", label: "Post a need" },
+      ],
     });
   }
 

@@ -36,14 +36,16 @@ export type RequestStatus = "open" | "claimed" | "fulfilled" | "parked";
 
 export type StakesLevel = "low" | "high";
 
+export type RiskAnswer = "no" | "yes" | "unsure";
+
 export type RequestPrerequisites = {
   dataSources: string;
   systems: string;
   inputsOutputs: string;
-  touchesPII: boolean;
-  touchesPayments: boolean;
-  usesLLM: boolean;
-  needsExternalDep: boolean;
+  touchesPII: RiskAnswer;
+  touchesPayments: RiskAnswer;
+  usesLLM: RiskAnswer;
+  needsExternalDep: RiskAnswer;
 };
 
 export type RequestValidation = {
@@ -72,9 +74,10 @@ export type NeedRequest = {
   prerequisites?: RequestPrerequisites;
   validation?: RequestValidation;
   stakesLevel?: StakesLevel;
-  funnelValidated?: boolean;
   parkedReason?: string;
   sourceQuery?: string;
+  /** Logged when intake continues past reuse matches — visible to admins */
+  reuseOverrideNote?: string;
 };
 
 export type BuildingBlockKind = "api" | "service" | "agent" | "framework";
@@ -119,7 +122,12 @@ export type ChosenApproach = {
   justification?: string;
 };
 
-export type FunnelStage = "prerequisites" | "validate" | "stack" | "approach" | "complete";
+export type FunnelStage =
+  | "describe"
+  | "prerequisites"
+  | "stack"
+  | "approach"
+  | "complete";
 
 export type ParkedNeed = {
   id: string;
@@ -127,13 +135,6 @@ export type ParkedNeed = {
   reason: string;
   sourceQuery?: string;
   createdAt: string;
-};
-
-export type RequestFormData = {
-  title: string;
-  problem: string;
-  team: Team;
-  tags: string;
 };
 
 export type MockUser = {
