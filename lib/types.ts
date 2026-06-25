@@ -1,4 +1,4 @@
-export type Role = "admin" | "builder" | "viewer";
+export type Role = "member" | "admin";
 
 export type ToolType =
   | "app"
@@ -32,8 +32,6 @@ export type Owner = {
   slackId: string;
 };
 
-export type RequestStatus = "open" | "claimed" | "fulfilled" | "parked";
-
 export type StakesLevel = "low" | "high";
 
 export type RiskAnswer = "no" | "yes" | "unsure";
@@ -56,28 +54,29 @@ export type RequestValidation = {
   expectedValue: string;
 };
 
-export type NeedRequest = {
-  id: string;
-  title: string;
-  problem: string;
-  requestedBy: Owner;
-  requestedById: string;
-  team: Team;
-  tags: string[];
-  upvotes: number;
-  upvotedBy: string[];
-  status: RequestStatus;
-  claimedBy?: Owner;
-  claimedById?: string;
-  linkedToolId?: string;
-  createdAt: string;
-  prerequisites?: RequestPrerequisites;
-  validation?: RequestValidation;
-  stakesLevel?: StakesLevel;
-  parkedReason?: string;
-  sourceQuery?: string;
-  /** Logged when intake continues past reuse matches — visible to admins */
-  reuseOverrideNote?: string;
+export type BuildPath =
+  | "claude-skill"
+  | "claude-skill-mcp"
+  | "replit"
+  | "claude-code"
+  | "real-app";
+
+export type BuildPathRecommendation = {
+  path: BuildPath;
+  headline: string;
+  rationale: string;
+  firstSteps: string[];
+  toolType: ToolType;
+};
+
+export type PmRecommendation = {
+  reasoning: string[];
+  scopedPlan: string;
+  buildPath: BuildPathRecommendation;
+  stakesLevel: StakesLevel;
+  reuseNote?: string;
+  nearMatchNote?: string;
+  stakesNote?: string;
 };
 
 export type BuildingBlockKind = "api" | "service" | "agent" | "framework";
@@ -129,14 +128,6 @@ export type FunnelStage =
   | "approach"
   | "complete";
 
-export type ParkedNeed = {
-  id: string;
-  title: string;
-  reason: string;
-  sourceQuery?: string;
-  createdAt: string;
-};
-
 export type MockUser = {
   id: string;
   name: string;
@@ -144,17 +135,6 @@ export type MockUser = {
   team: Team;
   role: Role;
 };
-
-export type BuilderAccessRequest = {
-  id: string;
-  userId: string;
-  userName: string;
-  userSlackId: string;
-  team: Team;
-  createdAt: string;
-};
-
-export type RequestBoardSort = "demand" | "recent";
 
 /** Internal tallies only — never shown as public scores in v1 UI */
 export type UsageStats = {
@@ -192,7 +172,6 @@ export type Tool = {
   ownerConfirmed: boolean;
   chosenStack?: ChosenStack;
   chosenApproach?: ChosenApproach;
-  linkedRequestId?: string;
 };
 
 export type ToolFlagReasonCategory =
@@ -294,10 +273,28 @@ export const SUBMIT_LIFECYCLE_STATUSES: ToolLifecycleStatus[] = [
 ];
 
 export const ROLE_LABELS: Record<Role, string> = {
+  member: "Member",
   admin: "Admin",
-  builder: "Builder",
-  viewer: "Viewer",
 };
+
+export function formatBuildPath(path: BuildPath): string {
+  switch (path) {
+    case "claude-skill":
+      return "Claude skill";
+    case "claude-skill-mcp":
+      return "Claude skill / MCP";
+    case "replit":
+      return "Replit prototype";
+    case "claude-code":
+      return "Claude Code";
+    case "real-app":
+      return "Production app";
+    default: {
+      const _exhaustive: never = path;
+      return _exhaustive;
+    }
+  }
+}
 
 export function formatBuildingBlockKind(kind: BuildingBlockKind): string {
   switch (kind) {

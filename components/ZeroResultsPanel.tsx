@@ -48,10 +48,10 @@ export function ZeroResultsPanel({ query, kits, leadMessage }: ZeroResultsPanelP
           variant="primary"
           size="sm"
         >
-          Start guided intake
+          Scope in chat
         </ButtonLink>
-        <Link href="/requests" className="zero-results__registry t-para-rg text-link">
-          Browse open requests
+        <Link href="/registry" className="zero-results__registry t-para-rg text-link">
+          Browse catalogue
         </Link>
         <a
           href={STOREFRONT_SLACK_URL}

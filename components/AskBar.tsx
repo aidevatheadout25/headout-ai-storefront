@@ -115,7 +115,7 @@ export function AskBar() {
                 >
                   Start guided intake
                 </Link>
-                {" — "}describe the need, check reuse, then post for builders.
+                {" — "}one sentence, check reuse, shape a plan.
               </p>
             </>
           )}

@@ -7,8 +7,9 @@ type FileNeedPageProps = {
 export default async function FileNeedPage({ searchParams }: FileNeedPageProps) {
   const params = await searchParams;
   const qs = new URLSearchParams();
-  if (params.title?.trim()) {
-    qs.set("q", params.title.trim());
+  const q = params.title?.trim() || params.problem?.trim();
+  if (q) {
+    qs.set("q", q);
   }
-  redirect(qs.toString() ? `/funnel?${qs}` : "/funnel");
+  redirect(qs.toString() ? `/?${qs}` : "/");
 }

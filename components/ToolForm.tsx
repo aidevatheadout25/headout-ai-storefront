@@ -63,11 +63,18 @@ export function ToolForm({ mode, initialData, toolId }: ToolFormProps) {
       const prefillStatus = searchParams.get("status");
       const prefillName = searchParams.get("name");
       const prefillOneLiner = searchParams.get("oneLiner");
+      const prefillType = searchParams.get("type");
+      const validTypes = TOOL_TYPES as readonly string[];
+      const types =
+        prefillType && validTypes.includes(prefillType)
+          ? [prefillType as ToolType]
+          : base.types;
       return {
         ...base,
         status: prefillStatus === "planned" ? "planned" : base.status,
         name: prefillName ?? base.name,
         oneLiner: prefillOneLiner ?? base.oneLiner,
+        types,
       };
     }
 

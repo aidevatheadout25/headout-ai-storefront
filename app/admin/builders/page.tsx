@@ -1,5 +1,6 @@
-import { AdminBuildersView } from "@/components/AdminBuildersView";
+import { redirect } from "next/navigation";
 
+/** @deprecated Builder management removed — everyone can build */
 export default function AdminBuildersPage() {
-  return <AdminBuildersView />;
+  redirect("/admin/approvals");
 }

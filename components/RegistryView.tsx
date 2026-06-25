@@ -10,11 +10,10 @@ import { Icon } from "@/components/Icon";
 import { RoleBanner } from "@/components/RoleSwitcher";
 import { useApp } from "@/context/AppContext";
 import { filterRegistryTools, getClosestKits } from "@/lib/askBar";
-import { filterBuildingBlocks, filterRegistryNeeds } from "@/lib/funnel";
+import { filterBuildingBlocks } from "@/lib/funnel";
 import { getKitById } from "@/lib/mockData";
 import { sortRegistryTools, type RegistrySort } from "@/lib/registry";
 import { BuildingBlockCard } from "@/components/BuildingBlockCard";
-import { RequestCard } from "@/components/RequestCard";
 import {
   TEAMS,
   TOOL_TYPES,
@@ -32,15 +31,10 @@ const SORT_OPTIONS: { value: RegistrySort; label: string }[] = [
 export function RegistryView() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { approvedTools, buildingBlocks, requests } = useApp();
+  const { approvedTools, buildingBlocks } = useApp();
   const kitParam = searchParams.get("kit") ?? "";
   const tabParam = searchParams.get("tab") ?? "tools";
-  const registryTab =
-    tabParam === "blocks"
-      ? "blocks"
-      : tabParam === "needs"
-        ? "needs"
-        : "tools";
+  const registryTab = tabParam === "blocks" ? "blocks" : "tools";
   const [search, setSearch] = useState(searchParams.get("q") ?? "");
   const [typeFilter, setTypeFilter] = useState("");
   const [teamFilter, setTeamFilter] = useState("");
@@ -52,11 +46,6 @@ export function RegistryView() {
   const filteredBlocks = useMemo(
     () => filterBuildingBlocks(buildingBlocks, search),
     [buildingBlocks, search],
-  );
-
-  const filteredNeeds = useMemo(
-    () => filterRegistryNeeds(requests, search),
-    [requests, search],
   );
 
   const filtered = useMemo(() => {
@@ -79,19 +68,27 @@ export function RegistryView() {
 
   const zeroResultContext = useMemo(() => {
     if (search.trim()) return search.trim();
-    if (activeKit) return activeKit.name;
     if (typeFilter) return formatToolType(typeFilter as ToolType);
     if (teamFilter) return teamFilter;
+    if (activeKit) return activeKit.name;
     return "";
-  }, [search, activeKit, typeFilter, teamFilter]);
+  }, [search, typeFilter, teamFilter, activeKit]);
 
-  if (search) {
-    activeChips.push({
-      key: "search",
-      label: `Search: ${search}`,
-      onRemove: () => setSearch(""),
-    });
+  function toggleType(type: ToolType) {
+    setTypeFilter((prev) => (prev === type ? "" : type));
   }
+
+  function toggleTeam(team: Team) {
+    setTeamFilter((prev) => (prev === team ? "" : team));
+  }
+
+  function clearFilters() {
+    setSearch("");
+    setTypeFilter("");
+    setTeamFilter("");
+    router.push("/registry");
+  }
+
   if (typeFilter) {
     activeChips.push({
       key: "type",
@@ -109,27 +106,9 @@ export function RegistryView() {
   if (activeKit) {
     activeChips.push({
       key: "kit",
-      label: `Kit: ${activeKit.name}`,
+      label: activeKit.name,
       onRemove: () => router.push("/registry"),
     });
-  }
-
-  function toggleType(type: ToolType) {
-    setTypeFilter((current) => (current === type ? "" : type));
-  }
-
-  function toggleTeam(team: Team) {
-    setTeamFilter((current) => (current === team ? "" : team));
-  }
-
-  function clearAllFilters() {
-    setSearch("");
-    setTypeFilter("");
-    setTeamFilter("");
-    if (activeKit) {
-      router.push("/registry");
-      return;
-    }
   }
 
   return (
@@ -140,11 +119,11 @@ export function RegistryView() {
         <div>
           <h1 className="page-header__title t-display-xs">Tool registry</h1>
           <p className="page-header__desc t-para-md">
-            Browse tools, building blocks, and open or parked needs at Headout.
+            Browse tools and building blocks at Headout — reuse before you build.
           </p>
         </div>
-        <ButtonLink href="/funnel" variant="primary">
-          Guided intake
+        <ButtonLink href="/" variant="primary">
+          Open chat
         </ButtonLink>
       </div>
 
@@ -166,15 +145,6 @@ export function RegistryView() {
           onClick={() => router.push("/registry?tab=blocks")}
         >
           Building blocks
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={registryTab === "needs"}
-          className={`registry-tabs__btn t-label-rg${registryTab === "needs" ? " registry-tabs__btn--active" : ""}`}
-          onClick={() => router.push("/registry?tab=needs")}
-        >
-          Needs
         </button>
       </div>
 
@@ -233,10 +203,10 @@ export function RegistryView() {
           {hasActiveFilters && (
             <button
               type="button"
-              className="registry-sidebar__clear t-para-sm text-link"
-              onClick={clearAllFilters}
+              className="registry-sidebar__clear t-cta-sm"
+              onClick={clearFilters}
             >
-              Clear all filters
+              Clear filters
             </button>
           )}
         </aside>
@@ -244,37 +214,24 @@ export function RegistryView() {
         <div className="registry-main">
           <div className="registry-toolbar">
             <div className="registry-toolbar__search">
-              <Icon name="globe" size={18} className="registry-toolbar__icon" />
+              <Icon name="search" size={18} className="registry-toolbar__icon" />
               <input
                 type="search"
                 className="registry-toolbar__input t-para-rg"
-                placeholder={
-                  registryTab === "needs"
-                    ? "Search needs, parked reasons, source queries…"
-                    : "Search tools, tags, owners..."
-                }
+                placeholder="Search tools…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 aria-label="Search registry"
               />
             </div>
-
-            <button
-              type="button"
-              className="registry-toolbar__filters-btn btn btn--secondary btn--sm t-cta-sm"
-              onClick={() => setMobileFiltersOpen(true)}
-            >
-              Filters
-            </button>
-
-            <div className="registry-toolbar__meta">
-              <span className="registry-toolbar__count t-label-rg-heavy">
-                {registryTab === "blocks"
-                  ? `${filteredBlocks.length} block${filteredBlocks.length === 1 ? "" : "s"}`
-                  : registryTab === "needs"
-                    ? `${filteredNeeds.length} need${filteredNeeds.length === 1 ? "" : "s"}`
-                    : `${filtered.length} tool${filtered.length === 1 ? "" : "s"}`}
-              </span>
+            <div className="registry-toolbar__actions">
+              <button
+                type="button"
+                className="registry-toolbar__filters-btn t-label-rg"
+                onClick={() => setMobileFiltersOpen(true)}
+              >
+                Filters
+              </button>
               {registryTab === "tools" && (
                 <select
                   className="registry-toolbar__sort t-para-rg"
@@ -324,38 +281,6 @@ export function RegistryView() {
                 description="Try a different search — blocks are reusable APIs, services, agents, and frameworks."
               />
             )
-          ) : registryTab === "needs" ? (
-            filteredNeeds.length > 0 ? (
-              <ul className="request-list">
-                {filteredNeeds.map((request) => (
-                  <li key={request.id} id={request.id}>
-                    <RequestCard request={request} compact />
-                  </li>
-                ))}
-              </ul>
-            ) : search.trim() ? (
-              <EmptyState
-                icon="bulb"
-                title="No needs found"
-                description="Try different words — open and parked needs are searchable here."
-                action={
-                  <ButtonLink href="/funnel" variant="primary">
-                    Post a new need
-                  </ButtonLink>
-                }
-              />
-            ) : (
-              <EmptyState
-                icon="bulb"
-                title="No needs yet"
-                description="Open and parked needs from guided intake appear here."
-                action={
-                  <ButtonLink href="/funnel" variant="primary">
-                    Figure out a need
-                  </ButtonLink>
-                }
-              />
-            )
           ) : filtered.length > 0 ? (
             <div className="registry-grid">
               {filtered.map((tool) => (
@@ -386,8 +311,8 @@ export function RegistryView() {
                   : "The registry is empty. Register what you've built so others can find it."
               }
               action={
-                <ButtonLink href="/funnel" variant="primary">
-                  Figure out a need
+                <ButtonLink href="/" variant="primary">
+                  Open chat
                 </ButtonLink>
               }
             />

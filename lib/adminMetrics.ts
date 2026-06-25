@@ -1,4 +1,4 @@
-import type { NeedRequest, Tool, ToolLifecycleStatus, ZeroResultQuery } from "@/lib/types";
+import type { Tool, ToolLifecycleStatus, ZeroResultQuery } from "@/lib/types";
 
 export const GATE_ELIGIBILITY_NOTE =
   "Approval makes this tool eligible for infra access — the platform team grants the actual access.";
@@ -9,13 +9,11 @@ export type AdminMetrics = {
   submissionsThisWeek: number;
   zeroResultsCount: number;
   topZeroResultQueries: ZeroResultQuery[];
-  parkedSignals: { title: string; reason: string; sourceQuery?: string }[];
 };
 
 export function computeAdminMetrics(
   tools: Tool[],
   zeroResultQueries: ZeroResultQuery[],
-  parkedRequests: NeedRequest[],
 ): AdminMetrics {
   const catalog = tools.filter((t) => t.approvalStatus === "approved");
   const statusBreakdown: Record<ToolLifecycleStatus, number> = {
@@ -40,21 +38,11 @@ export function computeAdminMetrics(
     .sort((a, b) => b.count - a.count)
     .slice(0, 8);
 
-  const parkedSignals = parkedRequests
-    .filter((r) => r.status === "parked")
-    .map((r) => ({
-      title: r.title,
-      reason: r.parkedReason ?? r.problem,
-      sourceQuery: r.sourceQuery,
-    }))
-    .slice(0, 8);
-
   return {
     totalTools: catalog.length,
     statusBreakdown,
     submissionsThisWeek,
     zeroResultsCount: totalZeroResults,
     topZeroResultQueries,
-    parkedSignals,
   };
 }

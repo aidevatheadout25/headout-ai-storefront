@@ -18,11 +18,11 @@ const STATUS_ORDER: ToolLifecycleStatus[] = [
 ];
 
 export function AdminMetricsView() {
-  const { allTools, zeroResultQueries, requests, canApprove } = useApp();
+  const { allTools, zeroResultQueries, canApprove } = useApp();
 
   const metrics = useMemo(
-    () => computeAdminMetrics(allTools, zeroResultQueries, requests),
-    [allTools, zeroResultQueries, requests],
+    () => computeAdminMetrics(allTools, zeroResultQueries),
+    [allTools, zeroResultQueries],
   );
 
   if (!canApprove) {
@@ -30,7 +30,7 @@ export function AdminMetricsView() {
       <EmptyState
         icon="shield-tick"
         title="Admin access required"
-        description="Switch to Admin role in the header to view metrics."
+        description="Switch to Admin role in the sidebar to view metrics."
       />
     );
   }
@@ -45,8 +45,8 @@ export function AdminMetricsView() {
         <div>
           <h1 className="page-header__title t-display-xs">Admin metrics</h1>
           <p className="page-header__desc t-para-md">
-            Catalog health from this session — zero-result searches and parked
-            needs feed roadmap signal.
+            Catalog health from this session — zero-result searches signal gaps
+            in the catalogue.
           </p>
         </div>
         <Link href="/admin/approvals" className="btn btn--secondary btn--sm t-cta-sm">
@@ -64,7 +64,7 @@ export function AdminMetricsView() {
         <article className="stat-card tool-card">
           <span className="stat-card__label t-label-rg-heavy">Submissions this week</span>
           <p className="stat-card__value t-display-xs">{metrics.submissionsThisWeek}</p>
-          <p className="stat-card__hint t-para-sm text-muted">Ideas + go-live reviews</p>
+          <p className="stat-card__hint t-para-sm text-muted">Registrations + updates</p>
         </article>
 
         <article className="stat-card tool-card">
@@ -72,7 +72,7 @@ export function AdminMetricsView() {
           <p className="stat-card__value t-display-xs">{metrics.zeroResultsCount}</p>
           <p className="stat-card__hint t-para-sm text-muted">
             {hasLiveZeroResults
-              ? "Captured from ask-bar this session"
+              ? "Captured from chat this session"
               : "Search with no match to populate"}
           </p>
         </article>
@@ -96,7 +96,7 @@ export function AdminMetricsView() {
         <h2 className="metrics-section__title t-heading-sm">Top zero-result queries</h2>
         <p className="metrics-section__desc t-para-sm text-muted">
           {hasLiveZeroResults
-            ? "From homepage search when nothing matched."
+            ? "From chat when nothing matched the catalogue."
             : "No zero-result searches yet this session."}
         </p>
         {metrics.topZeroResultQueries.length > 0 ? (
@@ -115,29 +115,6 @@ export function AdminMetricsView() {
           <p className="t-para-sm text-muted">Try a search that returns no tools.</p>
         )}
       </section>
-
-      {metrics.parkedSignals.length > 0 && (
-        <section className="metrics-section">
-          <h2 className="metrics-section__title t-heading-sm">Parked needs</h2>
-          <p className="metrics-section__desc t-para-sm text-muted">
-            Declined during intake — searchable in registry under needs.
-          </p>
-          <ul className="metrics-parked-list">
-            {metrics.parkedSignals.map((item) => (
-              <li key={`${item.title}-${item.reason}`} className="metrics-parked-row">
-                <span className="t-para-rg">
-                  <strong>{item.title}</strong> — {item.reason}
-                </span>
-                {item.sourceQuery && (
-                  <span className="t-para-sm text-muted">
-                    Search: {item.sourceQuery}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
     </>
   );
 }

@@ -31,9 +31,9 @@ export function FirstRunExplainer() {
   return (
     <div className="first-run-strip" role="status">
       <p className="first-run-strip__text t-para-rg">
-        Find an internal tool before you build one. Search first — or{" "}
-        <Link href="/funnel" className="first-run-strip__cta t-cta-sm">
-          start guided intake
+        Find an internal tool before you build one. Start on{" "}
+        <Link href="/" className="first-run-strip__cta t-cta-sm">
+          home
         </Link>
         .
       </p>

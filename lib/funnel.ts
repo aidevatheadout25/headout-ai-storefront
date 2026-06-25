@@ -5,7 +5,6 @@ import type {
   ChosenApproach,
   ChosenStack,
   DecisionRule,
-  NeedRequest,
   RequestPrerequisites,
   RequestValidation,
   RiskAnswer,
@@ -166,34 +165,91 @@ export function matchDecisionRules(haystack: string): DecisionRule[] {
   );
 }
 
-export function findNearDuplicateRequests(
-  validation: RequestValidation,
-  title: string,
-  requests: NeedRequest[],
-): NeedRequest[] {
-  const query = `${title} ${validation.problem} ${validation.whoHasIt}`.toLowerCase();
-  const keywords = query.split(/\s+/).filter((w) => w.length > 3);
-  if (keywords.length === 0) return [];
+export const FUNNEL_BUILD_TYPES = [
+  "dashboard",
+  "mcp",
+  "skill",
+  "app",
+  "script",
+] as const satisfies readonly ToolType[];
 
-  return requests
-    .filter((r) => r.status === "open" || r.status === "claimed")
-    .map((request) => {
-      const haystack =
-        `${request.title} ${request.problem} ${request.tags.join(" ")}`.toLowerCase();
-      const score = keywords.filter((k) => haystack.includes(k)).length;
-      return { request, score };
-    })
-    .filter(({ score }) => score >= 2)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 2)
-    .map(({ request }) => request);
+export function synthesizeIntakePlan(
+  sentence: string,
+  validation: RequestValidation,
+): string {
+  const who = validation.whoHasIt.trim();
+  const problem = validation.problem.trim();
+  const impact = validation.expectedValue.trim();
+  const parts: string[] = [];
+
+  const need = sentence.trim().replace(/\.$/, "");
+  if (need) {
+    const normalized = need.replace(/^[Tt]o\s+/, "");
+    parts.push(
+      `You want to ${normalized.charAt(0).toLowerCase()}${normalized.slice(1)}.`,
+    );
+  }
+
+  if (problem) {
+    const p =
+      problem.charAt(0).toLowerCase() + problem.slice(1).replace(/\.$/, "");
+    parts.push(`Today, ${p}.`);
+  }
+
+  if (who) {
+    parts.push(`This affects ${who.replace(/\.$/, "")}.`);
+  }
+
+  if (impact) {
+    const i =
+      impact.charAt(0).toLowerCase() + impact.slice(1).replace(/\.$/, "");
+    parts.push(`Solving it would ${i}.`);
+  }
+
+  return parts.join(" ") || "We'll refine this plan as you build.";
 }
 
 export function recommendApproach(
   prerequisites: RequestPrerequisites,
   validation: RequestValidation,
+  sentence = "",
 ): ChosenApproach {
-  const haystack = `${validation.problem} ${prerequisites.inputsOutputs} ${prerequisites.systems}`.toLowerCase();
+  const haystack =
+    `${sentence} ${validation.problem} ${validation.expectedValue} ${validation.whoHasIt} ${prerequisites.inputsOutputs} ${prerequisites.systems}`.toLowerCase();
+
+  if (
+    haystack.includes("dashboard") ||
+    haystack.includes("metrics") ||
+    haystack.includes("analytics") ||
+    haystack.includes("looker") ||
+    haystack.includes("grafana") ||
+    haystack.includes("report") ||
+    haystack.includes("kpi") ||
+    haystack.includes("chart")
+  ) {
+    return {
+      form: "dashboard",
+      recommendation:
+        "Read-heavy metrics and monitoring — build as a dashboard others can bookmark.",
+    };
+  }
+
+  if (
+    haystack.includes("script") ||
+    haystack.includes("cron") ||
+    haystack.includes("cli") ||
+    haystack.includes("scheduled") ||
+    haystack.includes("batch job") ||
+    (haystack.includes("automate") &&
+      !haystack.includes("ui") &&
+      !haystack.includes("agent"))
+  ) {
+    return {
+      form: "script",
+      recommendation:
+        "Batch or scheduled work without a UI — start as a script on the golden-path stack.",
+    };
+  }
 
   if (
     prerequisites.usesLLM === "yes" &&
@@ -224,9 +280,9 @@ export function recommendApproach(
   if (
     haystack.includes("ui") ||
     haystack.includes("upload") ||
-    haystack.includes("dashboard") ||
     haystack.includes("human") ||
-    haystack.includes("browser")
+    haystack.includes("browser") ||
+    haystack.includes("form")
   ) {
     return {
       form: "app",
@@ -296,32 +352,5 @@ export function filterBuildingBlocks(
     const haystack =
       `${block.name} ${block.description} ${block.capabilityTags.join(" ")} ${block.kind}`.toLowerCase();
     return q.split(/\s+/).every((word) => haystack.includes(word));
-  });
-}
-
-export function filterRegistryNeeds(
-  requests: NeedRequest[],
-  search: string,
-): NeedRequest[] {
-  const q = search.toLowerCase().trim();
-  const pool = requests.filter(
-    (r) => r.status === "open" || r.status === "claimed" || r.status === "parked",
-  );
-  if (!q) return pool;
-
-  return pool.filter((request) => {
-    const haystack = [
-      request.title,
-      request.problem,
-      request.tags.join(" "),
-      request.parkedReason ?? "",
-      request.sourceQuery ?? "",
-      request.reuseOverrideNote ?? "",
-      request.validation?.problem ?? "",
-      request.validation?.whoHasIt ?? "",
-    ]
-      .join(" ")
-      .toLowerCase();
-    return q.split(/\s+/).every((word) => word.length < 2 || haystack.includes(word));
   });
 }

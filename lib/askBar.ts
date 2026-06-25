@@ -126,12 +126,8 @@ export function getClosestKits(query: string, limit = 3) {
 
 export function buildFunnelUrl(query: string): string {
   const trimmed = query.trim();
-  const params = new URLSearchParams();
-  if (trimmed) {
-    params.set("q", trimmed);
-  }
-  const qs = params.toString();
-  return qs ? `/funnel?${qs}` : "/funnel";
+  if (!trimmed) return "/";
+  return `/?q=${encodeURIComponent(trimmed)}`;
 }
 
 /** @deprecated Use buildFunnelUrl — file-need redirects to funnel */

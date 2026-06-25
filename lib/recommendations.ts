@@ -2,20 +2,17 @@ import type { Role, Team, Tool } from "@/lib/types";
 
 /** Mock team shifts with role so recommendations visibly change in the demo. */
 export const ROLE_MOCK_TEAM: Record<Role, Team> = {
-  viewer: "Growth",
-  builder: "Applied AI",
+  member: "Applied AI",
   admin: "Platform",
 };
 
 const ROLE_TYPE_BOOST: Record<Role, string[]> = {
-  viewer: ["dashboard", "app", "slack-bot"],
-  builder: ["skill", "mcp", "script", "plugin"],
+  member: ["skill", "mcp", "app", "dashboard", "script"],
   admin: ["dashboard", "mcp", "plugin"],
 };
 
 const ROLE_TAG_BOOST: Record<Role, string[]> = {
-  viewer: ["analytics", "growth", "pricing", "scraping"],
-  builder: ["claude", "agents", "mcp", "scraping"],
+  member: ["claude", "agents", "mcp", "growth", "analytics"],
   admin: ["platform", "auth", "bigquery", "debug", "booking"],
 };
 
@@ -38,7 +35,7 @@ export function getRecommendedTools(
       if (tool.tags.some((tag) => tagBoost.has(tag))) score += 15;
 
       if (role === "admin" && tool.accessLevel !== "open") score += 10;
-      if (role === "builder" && tool.submittedBy === "alex-kim") score += 25;
+      if (tool.submittedBy === "alex-kim") score += 15;
 
       return { tool, score };
     })

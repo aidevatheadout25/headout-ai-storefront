@@ -8,7 +8,7 @@ type RoleSwitcherProps = {
   layout?: "inline" | "sidebar";
 };
 
-const ROLES: Role[] = ["viewer", "builder", "admin"];
+const ROLES: Role[] = ["member", "admin"];
 
 export function RoleSwitcher({ layout = "inline" }: RoleSwitcherProps) {
   const { role, setRole } = useApp();
@@ -36,22 +36,20 @@ export function RoleSwitcher({ layout = "inline" }: RoleSwitcherProps) {
         ))}
       </div>
       <p className="role-switcher__caption t-label-sm text-muted">
-        Demo: roles are admin-assigned in production.
+        Demo: everyone can find and build; admin governs the catalogue.
       </p>
     </div>
   );
 }
 
 export function RoleBanner() {
-  const { role, canSubmitTool, canClaimRequest, canApprove } = useApp();
+  const { role, canApprove } = useApp();
 
   const messages: Record<Role, string> = {
-    viewer:
-      "You're a viewer — search, file needs, upvote requests, and track your own demand. Builder access is admin-granted.",
-    builder:
-      "You're a builder — file needs, submit tools, claim requests, and maintain what you own.",
+    member:
+      "Find tools, scope new ideas with the PM chat, build yourself, and register back to the catalogue.",
     admin:
-      "You're an admin — approve tools, moderate flags, manage builders, and grant builder access.",
+      "Approve new catalogue entries, moderate flags, and deprecate tools.",
   };
 
   return (
@@ -59,19 +57,9 @@ export function RoleBanner() {
       <p className="role-banner__text t-para-sm">
         <strong className="t-label-rg-heavy">{ROLE_LABELS[role]} mode:</strong>{" "}
         {messages[role]}
-        {canApprove && role === "admin" && (
+        {canApprove && (
           <span className="role-banner__badge t-tag-sm">
             Admin queues visible
-          </span>
-        )}
-        {canSubmitTool && role === "builder" && (
-          <span className="role-banner__badge t-tag-sm">
-            Submit & claim enabled
-          </span>
-        )}
-        {canClaimRequest && role === "admin" && (
-          <span className="role-banner__badge t-tag-sm">
-            Can claim requests
           </span>
         )}
       </p>

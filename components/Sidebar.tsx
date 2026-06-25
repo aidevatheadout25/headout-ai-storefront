@@ -28,43 +28,26 @@ function navClass(pathname: string, href: string) {
 export function Sidebar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const {
-    canApprove,
-    canSubmitTool,
-    pendingTools,
-    flaggedTools,
-    builderAccessRequests,
-  } = useApp();
+  const { canApprove, pendingTools, flaggedTools } = useApp();
 
   const approvalBadgeCount = pendingTools.length + flaggedTools.length;
-  const buildersBadgeCount = builderAccessRequests.length;
 
   const sections: NavSection[] = [
     {
       title: "Discover",
       items: [
         { href: "/", label: "Home" },
-        { href: "/registry", label: "Registry" },
+        { href: "/registry", label: "Browse catalogue" },
       ],
     },
     {
-      title: "Demand",
+      title: "You",
       items: [
-        { href: "/requests", label: "Requests" },
-        { href: "/my-submissions", label: "My requests" },
+        { href: "/my-submissions", label: "My activity" },
+        { href: "/submit", label: "Register a tool" },
       ],
     },
   ];
-
-  if (canSubmitTool) {
-    sections.push({
-      title: "Build",
-      items: [
-        { href: "/requests", label: "Claim a need" },
-        { href: "/funnel", label: "Post a need" },
-      ],
-    });
-  }
 
   if (canApprove) {
     sections.push({
@@ -77,12 +60,6 @@ export function Sidebar() {
           admin: true,
         },
         { href: "/admin/metrics", label: "Metrics", admin: true },
-        {
-          href: "/admin/builders",
-          label: "Builders",
-          badge: buildersBadgeCount,
-          admin: true,
-        },
       ],
     });
   }

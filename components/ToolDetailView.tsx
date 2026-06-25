@@ -318,8 +318,8 @@ export function ToolDetailView() {
               Flag for admin review
             </h2>
             <p className="modal-card__desc t-para-sm text-muted">
-              Viewers and builders can&apos;t archive or deprecate directly — flag
-              an issue and admins will act in the approval queue.
+              Flag an issue and admins will act in the approval queue. You can&apos;t
+              archive or deprecate directly unless you own the tool.
             </p>
             <div className="form-field">
               <label htmlFor="flag-reason" className="form-field__label t-label-rg-heavy">
