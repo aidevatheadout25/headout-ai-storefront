@@ -7,8 +7,8 @@ export const ROLE_MOCK_TEAM: Record<Role, Team> = {
 };
 
 const ROLE_TYPE_BOOST: Record<Role, string[]> = {
-  member: ["skill", "mcp", "app", "dashboard", "script"],
-  admin: ["dashboard", "mcp", "plugin"],
+  member: ["skill", "docs", "mcp", "app", "script"],
+  admin: ["docs", "app", "mcp", "plugin"],
 };
 
 const ROLE_TAG_BOOST: Record<Role, string[]> = {

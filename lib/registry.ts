@@ -48,6 +48,12 @@ export const TYPE_TAG_STYLES: Record<
     bgDark: "var(--color-oceanblue-900)",
     colorDark: "var(--color-oceanblue-300)",
   },
+  docs: {
+    bg: "var(--color-subtlegreen-200)",
+    color: "var(--color-subtlegreen-800)",
+    bgDark: "var(--color-subtlegreen-800)",
+    colorDark: "var(--color-subtlegreen-300)",
+  },
   mcp: {
     bg: "var(--color-peachyorange-200)",
     color: "var(--color-peachyorange-800)",
@@ -71,11 +77,5 @@ export const TYPE_TAG_STYLES: Record<
     color: "var(--color-candy-800)",
     bgDark: "var(--color-candy-800)",
     colorDark: "var(--color-candy-300)",
-  },
-  dashboard: {
-    bg: "var(--color-subtlegreen-200)",
-    color: "var(--color-subtlegreen-800)",
-    bgDark: "var(--color-subtlegreen-800)",
-    colorDark: "var(--color-subtlegreen-300)",
   },
 };

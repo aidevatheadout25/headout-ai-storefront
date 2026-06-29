@@ -3,11 +3,11 @@ export type Role = "member" | "admin";
 export type ToolType =
   | "app"
   | "skill"
+  | "docs"
   | "mcp"
   | "plugin"
   | "script"
-  | "slack-bot"
-  | "dashboard";
+  | "slack-bot";
 
 export type AccessLevel = "open" | "request" | "sensitive";
 
@@ -242,12 +242,44 @@ export type AskResult = AskToolResult | AskFallbackResult;
 export const TOOL_TYPES: ToolType[] = [
   "app",
   "skill",
+  "docs",
   "mcp",
   "plugin",
   "script",
   "slack-bot",
-  "dashboard",
 ];
+
+export type CatalogueCategory = {
+  label: string;
+  href: string;
+  type?: ToolType;
+  tab?: "blocks";
+};
+
+/** Browse catalogue subcategories — surfaced in sidebar nav and registry deep links. */
+export const CATALOGUE_CATEGORIES: CatalogueCategory[] = [
+  { label: "All tools", href: "/registry" },
+  { label: "Apps", href: "/registry?type=app", type: "app" },
+  { label: "Skills", href: "/registry?type=skill", type: "skill" },
+  { label: "Docs", href: "/registry?type=docs", type: "docs" },
+  { label: "MCPs", href: "/registry?type=mcp", type: "mcp" },
+  { label: "Plugins", href: "/registry?type=plugin", type: "plugin" },
+  { label: "Scripts", href: "/registry?type=script", type: "script" },
+  { label: "Slack bots", href: "/registry?type=slack-bot", type: "slack-bot" },
+  {
+    label: "Building blocks",
+    href: "/registry?tab=blocks",
+    tab: "blocks",
+  },
+];
+
+/** Legacy URLs may still pass `dashboard` — treat as app. */
+export function normalizeCatalogueTypeParam(value: string): ToolType | "" {
+  const normalized = value === "dashboard" ? "app" : value;
+  return TOOL_TYPES.includes(normalized as ToolType)
+    ? (normalized as ToolType)
+    : "";
+}
 
 export const TEAMS: Team[] = [
   "Platform",

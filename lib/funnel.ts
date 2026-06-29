@@ -166,10 +166,9 @@ export function matchDecisionRules(haystack: string): DecisionRule[] {
 }
 
 export const FUNNEL_BUILD_TYPES = [
-  "dashboard",
+  "app",
   "mcp",
   "skill",
-  "app",
   "script",
 ] as const satisfies readonly ToolType[];
 
@@ -228,9 +227,9 @@ export function recommendApproach(
     haystack.includes("chart")
   ) {
     return {
-      form: "dashboard",
+      form: "app",
       recommendation:
-        "Read-heavy metrics and monitoring — build as a dashboard others can bookmark.",
+        "Read-heavy metrics and monitoring — build as an app others can bookmark.",
     };
   }
 

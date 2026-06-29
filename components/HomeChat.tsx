@@ -397,6 +397,7 @@ export function HomeChat() {
       setStarted(true);
       if (chipId === "browse") {
         router.push("/registry");
+        router.refresh();
         return;
       }
 

@@ -1,10 +1,11 @@
-import { Suspense } from "react";
 import { RegistryView } from "@/components/RegistryView";
+import type { RegistryUrlParams } from "@/lib/registryNav";
 
-export default function RegistryPage() {
-  return (
-    <Suspense fallback={<p className="t-para-md">Loading registry...</p>}>
-      <RegistryView />
-    </Suspense>
-  );
+type RegistryPageProps = {
+  searchParams: Promise<RegistryUrlParams>;
+};
+
+export default async function RegistryPage({ searchParams }: RegistryPageProps) {
+  const params = await searchParams;
+  return <RegistryView urlParams={params} />;
 }

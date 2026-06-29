@@ -1,7 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { ToolCard } from "@/components/ToolCard";
 import { EmptyState } from "@/components/EmptyState";
 import { ZeroResultsPanel } from "@/components/ZeroResultsPanel";
@@ -9,17 +8,19 @@ import { ButtonLink } from "@/components/Button";
 import { Icon } from "@/components/Icon";
 import { RoleBanner } from "@/components/RoleSwitcher";
 import { useApp } from "@/context/AppContext";
+import { useRegistryNavigation } from "@/hooks/useRegistryNavigation";
 import { filterRegistryTools, getClosestKits } from "@/lib/askBar";
 import { filterBuildingBlocks } from "@/lib/funnel";
 import { getKitById } from "@/lib/mockData";
 import { sortRegistryTools, type RegistrySort } from "@/lib/registry";
+import type { RegistryUrlParams } from "@/lib/registryNav";
 import { BuildingBlockCard } from "@/components/BuildingBlockCard";
 import {
+  CATALOGUE_CATEGORIES,
   TEAMS,
-  TOOL_TYPES,
   formatToolType,
+  normalizeCatalogueTypeParam,
   type Team,
-  type ToolType,
 } from "@/lib/types";
 
 const SORT_OPTIONS: { value: RegistrySort; label: string }[] = [
@@ -28,18 +29,40 @@ const SORT_OPTIONS: { value: RegistrySort; label: string }[] = [
   { value: "a-z", label: "A–Z" },
 ];
 
-export function RegistryView() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
+type RegistryViewProps = {
+  urlParams: RegistryUrlParams;
+};
+
+export function RegistryView({ urlParams }: RegistryViewProps) {
+  const navigateRegistry = useRegistryNavigation();
   const { approvedTools, buildingBlocks } = useApp();
-  const kitParam = searchParams.get("kit") ?? "";
-  const tabParam = searchParams.get("tab") ?? "tools";
+  const kitParam = urlParams.kit ?? "";
+  const tabParam = urlParams.tab ?? "tools";
   const registryTab = tabParam === "blocks" ? "blocks" : "tools";
-  const [search, setSearch] = useState(searchParams.get("q") ?? "");
-  const [typeFilter, setTypeFilter] = useState("");
+  const typeFilter = normalizeCatalogueTypeParam(urlParams.type ?? "");
+  const [search, setSearch] = useState(urlParams.q ?? "");
   const [teamFilter, setTeamFilter] = useState("");
   const [sort, setSort] = useState<RegistrySort>("most-used");
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+
+  useEffect(() => {
+    setSearch(urlParams.q ?? "");
+  }, [urlParams.q]);
+
+  const activeCategory = useMemo(
+    () =>
+      CATALOGUE_CATEGORIES.find(
+        (category) =>
+          category.type === typeFilter ||
+          (category.tab === "blocks" && registryTab === "blocks") ||
+          (!category.type &&
+            !category.tab &&
+            registryTab === "tools" &&
+            !typeFilter &&
+            !kitParam),
+      ),
+    [typeFilter, registryTab, kitParam],
+  );
 
   const activeKit = kitParam ? getKitById(kitParam) : undefined;
 
@@ -68,15 +91,11 @@ export function RegistryView() {
 
   const zeroResultContext = useMemo(() => {
     if (search.trim()) return search.trim();
-    if (typeFilter) return formatToolType(typeFilter as ToolType);
+    if (typeFilter) return formatToolType(typeFilter);
     if (teamFilter) return teamFilter;
     if (activeKit) return activeKit.name;
     return "";
   }, [search, typeFilter, teamFilter, activeKit]);
-
-  function toggleType(type: ToolType) {
-    setTypeFilter((prev) => (prev === type ? "" : type));
-  }
 
   function toggleTeam(team: Team) {
     setTeamFilter((prev) => (prev === team ? "" : team));
@@ -84,16 +103,23 @@ export function RegistryView() {
 
   function clearFilters() {
     setSearch("");
-    setTypeFilter("");
     setTeamFilter("");
-    router.push("/registry");
+    if (registryTab === "blocks") {
+      navigateRegistry("/registry?tab=blocks");
+      return;
+    }
+    navigateRegistry(typeFilter ? `/registry?type=${typeFilter}` : "/registry");
   }
+
+  const toolsTabHref = typeFilter
+    ? `/registry?type=${typeFilter}`
+    : "/registry";
 
   if (typeFilter) {
     activeChips.push({
       key: "type",
-      label: formatToolType(typeFilter as ToolType),
-      onRemove: () => setTypeFilter(""),
+      label: formatToolType(typeFilter),
+      onRemove: () => navigateRegistry("/registry"),
     });
   }
   if (teamFilter) {
@@ -107,7 +133,7 @@ export function RegistryView() {
     activeChips.push({
       key: "kit",
       label: activeKit.name,
-      onRemove: () => router.push("/registry"),
+      onRemove: () => navigateRegistry("/registry"),
     });
   }
 
@@ -117,9 +143,17 @@ export function RegistryView() {
 
       <div className="page-header">
         <div>
-          <h1 className="page-header__title t-display-xs">Tool registry</h1>
+          <h1 className="page-header__title t-display-xs">
+            {activeCategory && (typeFilter || registryTab === "blocks")
+              ? activeCategory.label
+              : "Tool registry"}
+          </h1>
           <p className="page-header__desc t-para-md">
-            Browse tools and building blocks at Headout — reuse before you build.
+            {registryTab === "blocks"
+              ? "Reusable APIs, services, agents, and frameworks at Headout."
+              : typeFilter
+                ? `${formatToolType(typeFilter)} in the catalogue — reuse before you build.`
+                : "Browse tools and building blocks at Headout — reuse before you build."}
           </p>
         </div>
         <ButtonLink href="/" variant="primary">
@@ -133,7 +167,7 @@ export function RegistryView() {
           role="tab"
           aria-selected={registryTab === "tools"}
           className={`registry-tabs__btn t-label-rg${registryTab === "tools" ? " registry-tabs__btn--active" : ""}`}
-          onClick={() => router.push("/registry")}
+          onClick={() => navigateRegistry(toolsTabHref)}
         >
           Tools
         </button>
@@ -142,7 +176,7 @@ export function RegistryView() {
           role="tab"
           aria-selected={registryTab === "blocks"}
           className={`registry-tabs__btn t-label-rg${registryTab === "blocks" ? " registry-tabs__btn--active" : ""}`}
-          onClick={() => router.push("/registry?tab=blocks")}
+          onClick={() => navigateRegistry("/registry?tab=blocks")}
         >
           Building blocks
         </button>
@@ -162,24 +196,6 @@ export function RegistryView() {
             >
               <Icon name="cross" size={18} />
             </button>
-          </div>
-
-          <div className="registry-sidebar__section">
-            <h3 className="registry-sidebar__label t-label-rg-heavy">Type</h3>
-            <div className="registry-sidebar__options">
-              {TOOL_TYPES.map((type) => (
-                <button
-                  key={type}
-                  type="button"
-                  className={`registry-filter-btn t-label-rg${
-                    typeFilter === type ? " registry-filter-btn--active" : ""
-                  }`}
-                  onClick={() => toggleType(type)}
-                >
-                  {formatToolType(type)}
-                </button>
-              ))}
-            </div>
           </div>
 
           <div className="registry-sidebar__section">

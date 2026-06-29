@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { Providers } from "@/components/Providers";
 import "./globals.css";
@@ -6,7 +7,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Headout AI Storefront",
   description:
-    "Internal registry and discovery layer for tools, apps, skills, plugins, and MCPs built at Headout.",
+    "Internal registry and discovery layer for tools, apps, skills, docs, plugins, and MCPs built at Headout.",
 };
 
 export default function RootLayout({
@@ -22,7 +23,9 @@ export default function RootLayout({
       <body>
         <Providers>
           <div className="app-shell">
-            <Sidebar />
+            <Suspense fallback={null}>
+              <Sidebar />
+            </Suspense>
             <div className="app-content">
               <main className="app-main">{children}</main>
             </div>

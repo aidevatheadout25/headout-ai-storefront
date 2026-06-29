@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Register a Tool — Chat Prototype</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script
+      crossorigin
+      src="https://unpkg.com/react@18/umd/react.development.js"
+    ></script>
+    <script
+      crossorigin
+      src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"
+    ></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  </head>
+  <body class="antialiased bg-slate-100">
+    <div id="root"></div>
+    <script>
+      fetch("./App.jsx")
+        .then((r) => r.text())
+        .then((code) => {
+          const { code: compiled } = Babel.transform(code, {
+            presets: [["react", { runtime: "classic" }]],
+          });
+          // eslint-disable-next-line no-eval
+          eval(compiled);
+        })
+        .catch((err) => {
+          document.getElementById("root").innerHTML =
+            '<p style="padding:2rem;color:#b91c1c;font-family:sans-serif">Failed to load App.jsx: ' +
+            err.message +
+            "</p>";
+        });
+    </script>
+  </body>
+</html>
