@@ -4545,7 +4545,7 @@ html[data-theme="dark"] .home-chat__composer {
   );
 }
 
-/* ======= Register tool chat ======= */
+/* ======= Register a tool (chat) ======= */
 .app-shell:has(.submit-page) {
   height: 100dvh;
   max-height: 100dvh;
@@ -4592,6 +4592,7 @@ html[data-theme="dark"] .home-chat__composer {
 .submit-page__header .page-header__desc {
   font-size: 0.875rem;
   line-height: 1.4;
+  max-width: 42rem;
 }
 
 .register-chat {
@@ -4635,7 +4636,7 @@ html[data-theme="dark"] .home-chat__composer {
 
 @media (min-width: 64rem) {
   .register-chat__pane--chat {
-    flex: 1 1 60%;
+    flex: 1 1 58%;
     min-width: 0;
     border-bottom: none;
     border-right: 1px solid var(--divider-primary);
@@ -4653,91 +4654,6 @@ html[data-theme="dark"] .home-chat__composer {
   .register-chat__chat-toolbar {
     display: none;
   }
-}
-
-.register-chat__entry {
-  flex-shrink: 0;
-  margin: 0 var(--space-16);
-  padding: var(--space-12);
-  border: 1px solid var(--divider-primary);
-  border-radius: var(--radius-12);
-  background: var(--surface-white);
-}
-
-.register-chat__entry-lead {
-  margin: 0 0 var(--space-10);
-}
-
-.register-chat__entry-options {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-10);
-}
-
-@media (min-width: 40rem) {
-  .register-chat__entry-options {
-    flex-direction: row;
-    align-items: flex-end;
-    gap: var(--space-16);
-  }
-}
-
-.register-chat__entry-option {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-6);
-}
-
-.register-chat__entry-label {
-  color: var(--text-secondary);
-}
-
-.register-chat__entry-file-input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.register-chat__entry-input,
-.register-chat__entry-filename {
-  width: 100%;
-  padding: var(--space-8) var(--space-10);
-  border: 1px solid var(--divider-primary);
-  border-radius: var(--radius-8);
-  background: var(--surface-white);
-  color: var(--text-primary);
-}
-
-.register-chat__entry-filename {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.register-chat__entry-input:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.register-chat__entry-link-row {
-  display: flex;
-  gap: var(--space-8);
-  align-items: center;
-}
-
-.register-chat__entry-link-row .register-chat__entry-input,
-.register-chat__entry-link-row .register-chat__entry-filename {
-  flex: 1;
-  min-width: 0;
 }
 
 .register-chat__thread {
@@ -4776,16 +4692,17 @@ html[data-theme="dark"] .home-chat__composer {
   align-items: center;
   justify-content: center;
   background: var(--color-purps-20);
+  color: var(--color-purps-700);
   flex-shrink: 0;
-  font-size: 0.875rem;
 }
 
 .register-chat__message--user .register-chat__avatar {
   background: var(--color-joymustard-100);
+  color: var(--color-joymustard-800);
 }
 
 .register-chat__bubble {
-  max-width: 85%;
+  max-width: 90%;
   padding: var(--space-12) var(--space-16);
   border-radius: var(--radius-12);
   background: var(--surface-white);
@@ -4833,6 +4750,93 @@ html[data-theme="dark"] .home-chat__composer {
 
 .register-chat__line--gap {
   margin-top: var(--space-8);
+}
+
+.register-chat__build-action {
+  margin-top: var(--space-12);
+}
+
+/* Inline Zep ingest card (inside assistant bubble) */
+.register-chat__zep-card {
+  margin-top: var(--space-12);
+  padding-top: var(--space-12);
+  border-top: 1px solid var(--divider-primary);
+}
+
+.register-chat__zep-card-lead {
+  margin: 0 0 var(--space-10);
+  color: var(--text-grey-2);
+}
+
+.register-chat__zep-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.register-chat__zep-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.register-chat__zep-upload {
+  flex-shrink: 0;
+  padding: var(--space-8) var(--space-12);
+  border-radius: var(--radius-12);
+  border: 1px solid var(--divider-primary);
+  background: var(--surface-grey-1);
+  color: var(--text-grey-1);
+  cursor: pointer;
+}
+
+.register-chat__zep-upload:hover:not(:disabled) {
+  border-color: var(--cta-primary);
+  background: var(--color-purps-20);
+}
+
+.register-chat__zep-upload:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.register-chat__zep-or {
+  flex-shrink: 0;
+}
+
+.register-chat__zep-link-row {
+  display: flex;
+  flex: 1;
+  min-width: min(100%, 12rem);
+  gap: var(--space-8);
+  align-items: center;
+}
+
+.register-chat__zep-link-input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-8) var(--space-12);
+  border: 1px solid var(--divider-primary);
+  border-radius: var(--radius-12);
+  background: var(--surface-white);
+}
+
+.register-chat__zep-link-input:focus {
+  outline: none;
+  border-color: var(--cta-primary);
+  box-shadow: 0 0 0 2px var(--color-purps-20);
+}
+
+.register-chat__zep-error {
+  margin: var(--space-8) 0 0;
+  color: var(--text-error, #c41e3a);
 }
 
 .register-chat__chips {
@@ -4884,7 +4888,8 @@ html[data-theme="dark"] .home-chat__composer {
   box-shadow: 0 0 0 3px var(--color-purps-20);
 }
 
-.register-chat__pane--preview {
+/* Listing receipt (read-only summary) */
+.register-chat__pane--receipt {
   display: none;
   flex-direction: column;
   flex: 1 1 auto;
@@ -4895,29 +4900,29 @@ html[data-theme="dark"] .home-chat__composer {
 }
 
 @media (min-width: 64rem) {
-  .register-chat__pane--preview {
+  .register-chat__pane--receipt {
     display: flex;
-    flex: 1 1 40%;
+    flex: 1 1 42%;
   }
 }
 
-.register-chat__pane--preview-open {
+.register-chat__pane--receipt-open {
   display: flex;
   min-height: 0;
 }
 
 @media (max-width: 63.99rem) {
-  .register-chat__pane--preview-open {
+  .register-chat__pane--receipt-open {
     flex: 1 1 45%;
     border-top: 1px solid var(--divider-primary);
   }
 
-  .register-chat__pane--chat:has(+ .register-chat__pane--preview-open) {
+  .register-chat__pane--chat:has(+ .register-chat__pane--receipt-open) {
     flex: 1 1 55%;
   }
 }
 
-.register-chat__preview-header {
+.register-receipt__header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -4927,15 +4932,15 @@ html[data-theme="dark"] .home-chat__composer {
   flex-shrink: 0;
 }
 
-.register-chat__preview-title {
+.register-receipt__title {
   margin: 0;
 }
 
-.register-chat__preview-meta {
+.register-receipt__meta {
   margin: var(--space-4) 0 0;
 }
 
-.register-chat__preview-toggle {
+.register-receipt__toggle {
   display: none;
   padding: var(--space-6) var(--space-10);
   border: 1px solid var(--divider-primary);
@@ -4945,101 +4950,108 @@ html[data-theme="dark"] .home-chat__composer {
   cursor: pointer;
 }
 
-@media (min-width: 48rem) and (max-width: 63.99rem) {
-  .register-chat__preview-toggle {
+@media (max-width: 63.99rem) {
+  .register-receipt__toggle {
     display: inline-flex;
   }
 }
 
-.register-chat__progress {
-  height: 0.25rem;
-  background: var(--surface-grey-2);
+.register-receipt__progress {
+  padding: var(--space-12) var(--space-16);
+  border-bottom: 1px solid var(--divider-primary);
   flex-shrink: 0;
 }
 
-.register-chat__progress-fill {
-  height: 100%;
-  background: var(--cta-primary);
-  transition: width 0.45s ease-out;
+.register-receipt__progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  margin-bottom: var(--space-8);
 }
 
-.register-chat__preview-body {
+.register-receipt__progress-track {
+  height: 0.25rem;
+  border-radius: var(--radius-4);
+  background: var(--surface-grey-2);
+  overflow: hidden;
+}
+
+.register-receipt__progress-fill {
+  height: 100%;
+  background: var(--cta-primary);
+  transition: width 0.35s ease-out;
+}
+
+.register-receipt__body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: var(--space-16);
   display: flex;
   flex-direction: column;
-  gap: var(--space-10);
+  gap: 0;
   background: var(--surface-grey-1);
 }
 
-.register-chat__field {
-  padding: var(--space-10) var(--space-12);
-  border-radius: var(--radius-8);
-  border: 1px dashed var(--divider-primary);
-  background: var(--surface-grey-2);
-  transition: background 0.45s ease, border-color 0.45s ease, box-shadow 0.45s ease;
+.register-receipt__row {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr;
+  gap: var(--space-12);
+  padding: var(--space-10) 0;
+  border-bottom: 1px solid var(--divider-primary);
+  transition: background 0.35s ease;
 }
 
-.register-chat__field--filled {
-  border-style: solid;
-  background: var(--surface-white);
+.register-receipt__row:last-child {
+  border-bottom: none;
 }
 
-.register-chat__field--flash {
+.register-receipt__row--flash {
   background: var(--color-forest-green-50);
-  border-color: var(--color-forest-green-300);
-  box-shadow: 0 0 0 2px var(--color-forest-green-100);
+  margin: 0 calc(-1 * var(--space-8));
+  padding-left: var(--space-8);
+  padding-right: var(--space-8);
+  border-radius: var(--radius-8);
 }
 
-.register-chat__field-head {
+.register-receipt__label {
+  color: var(--text-grey-3);
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-8);
-  margin-bottom: var(--space-4);
+  flex-direction: column;
+  gap: var(--space-4);
 }
 
-.register-chat__field-label {
+.register-receipt__optional {
   color: var(--text-grey-3);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-weight: 400;
 }
 
-.register-chat__field-opt {
-  color: var(--text-grey-3);
-}
-
-.register-chat__field-value {
-  margin: 0;
-  color: var(--text-grey-2);
-}
-
-.register-chat__field--filled .register-chat__field-value {
+.register-receipt__value {
   color: var(--text-grey-1);
-  font-weight: 500;
+  word-break: break-word;
 }
 
-.register-chat__field--empty .register-chat__field-value {
-  font-style: italic;
+.register-receipt__row--unset .register-receipt__value {
   color: var(--text-grey-3);
 }
 
-.register-chat__dedup {
+.register-receipt__dedup {
   display: flex;
   flex-direction: column;
   gap: var(--space-10);
-  margin-top: var(--space-8);
+  margin-top: var(--space-16);
+  padding-top: var(--space-16);
+  border-top: 1px solid var(--divider-primary);
 }
 
-.register-chat__preview-footer {
+.register-receipt__footer {
   padding: var(--space-16);
   border-top: 1px solid var(--divider-primary);
   flex-shrink: 0;
 }
 
-.register-chat__register-btn {
+.register-receipt__register-btn {
   width: 100%;
 }
 
@@ -5082,18 +5094,11 @@ html[data-theme="dark"] .register-chat__bubble,
 html[data-theme="dark"] .register-chat__composer,
 html[data-theme="dark"] .register-chat__chip,
 html[data-theme="dark"] .register-chat__input,
-html[data-theme="dark"] .register-chat__entry,
-html[data-theme="dark"] .register-chat__entry-input,
-html[data-theme="dark"] .register-chat__entry-filename {
+html[data-theme="dark"] .register-chat__zep-link-input {
   background: var(--surface-grey-2);
 }
 
-html[data-theme="dark"] .register-chat__field--filled {
-  background: var(--surface-grey-1);
-}
-
-html[data-theme="dark"] .register-chat__field--flash {
+html[data-theme="dark"] .register-receipt__row--flash {
   background: var(--color-forest-green-900);
-  border-color: var(--color-forest-green-600);
 }
 

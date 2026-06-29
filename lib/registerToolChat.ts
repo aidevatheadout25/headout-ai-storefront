@@ -15,6 +15,21 @@ import {
 export const REGISTER_CHAT_OPENING =
   "Let's get your tool listed. What does it do, in a sentence or two?";
 
+export const REGISTER_ENTRY_FORK_MESSAGE =
+  "What are you registering today? Pick the closest match — we'll take it from there.";
+
+export const ENTRY_FORK_CHIPS = [
+  "I built a Zep",
+  "I built another tool",
+  "I want to build something new",
+] as const;
+
+export type EntryForkChip = (typeof ENTRY_FORK_CHIPS)[number];
+
+export function isEntryForkChip(text: string): text is EntryForkChip {
+  return (ENTRY_FORK_CHIPS as readonly string[]).includes(text);
+}
+
 export type RegisterChatField =
   | "name"
   | "oneLiner"
@@ -456,6 +471,9 @@ export function getQuickReplies(
   lastAgentText: string,
   record: ToolFormData,
 ): string[] {
+  if (lastAgentText.includes("What are you registering")) {
+    return [...ENTRY_FORK_CHIPS];
+  }
   if (lastAgentText.includes("What should we call")) {
     return [];
   }
@@ -526,15 +544,21 @@ export function openingMessage(prefill?: Partial<ToolFormData>): string {
   if (prefill?.oneLiner) {
     return `Got the one-liner. ${FIELD_QUESTIONS.name}`;
   }
-  return REGISTER_CHAT_OPENING;
+  if (prefill?.name) {
+    return `I see you're registering **${prefill.name}**. ${FIELD_QUESTIONS.oneLiner}`;
+  }
+  return REGISTER_ENTRY_FORK_MESSAGE;
 }
 
 export function buildZepReviewAgentMessage(): string {
   return (
-    "I read your Zep and drafted the listing — check the preview. Two things I need you to confirm: who can access it, and the owning team.\n\n" +
+    "I drafted the listing — check the summary on the right. Two things I need you to confirm: who can access it, and the owning team.\n\n" +
     FIELD_QUESTIONS.accessLevel
   );
 }
+
+export const BUILD_NEW_ZEPS_MESSAGE =
+  "Building happens in Zeps — a conversational builder, not this form. Open it in a new tab when you're ready; come back here to register the link when it's done.";
 
 export function applyZepAnalysisDraft(
   record: ToolFormData,

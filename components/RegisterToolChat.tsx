@@ -14,9 +14,12 @@ import { Button, ButtonLink } from "@/components/Button";
 import { Icon } from "@/components/Icon";
 import { ToolCard } from "@/components/ToolCard";
 import { useApp } from "@/context/AppContext";
-import { DEMO_USER, findDedupMatches } from "@/lib/mockData";
+import { findDedupMatches } from "@/lib/mockData";
+import { mapManifestDeterministic } from "@/lib/analyzeZep";
 import {
+  BUILD_NEW_ZEPS_MESSAGE,
   PREVIEW_FIELDS,
+  REGISTER_CHAT_OPENING,
   applyZepAnalysisDraft,
   buildAgentReply,
   buildZepReviewAgentMessage,
@@ -28,13 +31,19 @@ import {
   flashFieldsFromDraft,
   getQuickReplies,
   getRequiredFields,
+  isEntryForkChip,
   isRegisterComplete,
   isRegisterFieldFilled,
   nextMissingField,
   openingMessage,
   type RegisterChatField,
 } from "@/lib/registerToolChat";
-import { fetchZepManifest, parseZepManifest, type ZepManifest } from "@/lib/zeps";
+import {
+  buildZepsBuilderUrl,
+  fetchZepManifest,
+  parseZepManifest,
+  type ZepManifest,
+} from "@/lib/zeps";
 import { GATE_ELIGIBILITY_NOTE } from "@/lib/adminMetrics";
 import {
   TOOL_TYPES,
@@ -44,11 +53,26 @@ import {
 
 const TYPING_DELAY_MS = 600;
 
-type ChatMessage = {
-  id: string;
-  role: "agent" | "user";
-  text: string;
-};
+type ChatMessage =
+  | {
+      id: string;
+      role: "agent" | "user";
+      kind: "text";
+      text: string;
+    }
+  | {
+      id: string;
+      role: "agent";
+      kind: "zep-ingest";
+      text: string;
+    }
+  | {
+      id: string;
+      role: "agent";
+      kind: "build-zeps";
+      text: string;
+      buildUrl: string;
+    };
 
 function msgId(): string {
   return `reg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -65,6 +89,82 @@ function renderAgentText(text: string) {
       />
     );
   });
+}
+
+type ZepIngestCardProps = {
+  analyzing: boolean;
+  error: string | null;
+  link: string;
+  onLinkChange: (value: string) => void;
+  onFileUpload: (event: ChangeEvent<HTMLInputElement>) => void;
+  onLinkSubmit: () => void;
+  fileInputRef: React.RefObject<HTMLInputElement | null>;
+};
+
+function ZepIngestCard({
+  analyzing,
+  error,
+  link,
+  onLinkChange,
+  onFileUpload,
+  onLinkSubmit,
+  fileInputRef,
+}: ZepIngestCardProps) {
+  return (
+    <div className="register-chat__zep-card">
+      <p className="register-chat__zep-card-lead t-para-sm">
+        Upload a JSON export or paste the Zeps runtime link.
+      </p>
+      <div className="register-chat__zep-card-actions">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json,application/json"
+          className="register-chat__zep-file-input"
+          disabled={analyzing}
+          onChange={onFileUpload}
+          aria-label="Upload a Zep JSON export"
+          tabIndex={-1}
+        />
+        <button
+          type="button"
+          className="register-chat__zep-upload t-para-sm"
+          disabled={analyzing}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          Upload JSON
+        </button>
+        <span className="register-chat__zep-or t-para-sm text-muted" aria-hidden>
+          or
+        </span>
+        <div className="register-chat__zep-link-row">
+          <input
+            type="url"
+            className="register-chat__zep-link-input t-para-sm"
+            value={link}
+            onChange={(e) => onLinkChange(e.target.value)}
+            disabled={analyzing}
+            placeholder="Paste Zeps link…"
+            aria-label="Zeps agent link"
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="primary"
+            disabled={!link.trim() || analyzing}
+            onClick={onLinkSubmit}
+          >
+            {analyzing ? "Drafting…" : "Draft listing"}
+          </Button>
+        </div>
+      </div>
+      {error && (
+        <p className="register-chat__zep-error t-para-sm" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
 }
 
 export function RegisterToolChat() {
@@ -99,13 +199,15 @@ export function RegisterToolChat() {
     [initialForm.name, initialForm.oneLiner],
   );
 
+  const skippedEntryFork = Boolean(prefillRef.name || prefillRef.oneLiner);
+
   const [record, setRecord] = useState<ToolFormData>(initialForm);
   const [messages, setMessages] = useState<ChatMessage[]>(() => [
-    { id: msgId(), role: "agent", text: openingMessage(prefillRef) },
+    { id: msgId(), role: "agent", kind: "text", text: openingMessage(prefillRef) },
   ]);
   const [input, setInput] = useState("");
   const [zepLink, setZepLink] = useState("");
-  const [zepFileName, setZepFileName] = useState("");
+  const [zepError, setZepError] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [typing, setTyping] = useState(false);
   const [flashFields, setFlashFields] = useState<Set<RegisterChatField>>(new Set());
@@ -119,6 +221,7 @@ export function RegisterToolChat() {
   const complete = isRegisterComplete(record);
   const dedupMatches = findDedupMatches(record.name, record.oneLiner, allTools);
   const isPlanned = record.status === "planned";
+  const progressPct = Math.round((requiredFilled / requiredFields.length) * 100);
 
   const scrollToBottom = useCallback(() => {
     const el = threadRef.current;
@@ -131,95 +234,147 @@ export function RegisterToolChat() {
     setTyping(true);
     window.setTimeout(() => {
       setTyping(false);
-      setMessages((prev) => [...prev, { id: msgId(), role: "agent", text }]);
+      setMessages((prev) => [
+        ...prev,
+        { id: msgId(), role: "agent", kind: "text", text },
+      ]);
     }, TYPING_DELAY_MS);
   }, []);
 
-  const analyzeAndPrefill = useCallback(
+  const prefillFromManifest = useCallback(
     async (manifest: ZepManifest) => {
-      if (typing || registered || analyzing) return;
-
       setAnalyzing(true);
+      setZepError(null);
       try {
-        const res = await fetch("/api/analyze-zep", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ manifest }),
-        });
-
-        if (!res.ok) {
-          throw new Error("analyze failed");
+        let draft: Partial<ToolFormData>;
+        try {
+          const res = await fetch("/api/analyze-zep", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ manifest }),
+          });
+          draft = res.ok
+            ? ((await res.json()) as Partial<ToolFormData>)
+            : mapManifestDeterministic(manifest);
+        } catch {
+          draft = mapManifestDeterministic(manifest);
         }
-
-        const draft = (await res.json()) as Partial<ToolFormData>;
         setRecord((prev) => applyZepAnalysisDraft(prev, draft));
         const flash = flashFieldsFromDraft(draft);
         setFlashFields(new Set(flash));
         window.setTimeout(() => setFlashFields(new Set()), 1200);
+        setMessages((prev) =>
+          prev.filter((m) => m.kind !== "zep-ingest"),
+        );
         pushAgentMessage(buildZepReviewAgentMessage());
       } catch {
-        pushAgentMessage(
-          "Couldn't analyze that Zep — try again or use the manual flow below.",
-        );
+        setZepError("Couldn't analyze that Zep — check the file or link and try again.");
       } finally {
         setAnalyzing(false);
       }
     },
-    [analyzing, typing, registered, pushAgentMessage],
+    [pushAgentMessage],
   );
 
   const handleZepFileUpload = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0];
       event.target.value = "";
-      if (!file || typing || registered || analyzing) return;
+      if (!file || analyzing) return;
 
-      setZepFileName(file.name);
+      setMessages((prev) => [
+        ...prev,
+        { id: msgId(), role: "user", kind: "text", text: `Uploaded Zep: ${file.name}` },
+      ]);
 
       const text = await file.text();
       const manifest = parseZepManifest(text);
       if (!manifest) {
-        setZepFileName("");
-        pushAgentMessage(
-          "Couldn't read that file — upload a JSON Zep export.",
-        );
+        setZepError("Couldn't read that file — upload a JSON Zep export.");
         return;
       }
 
-      setMessages((prev) => [
-        ...prev,
-        { id: msgId(), role: "user", text: `Uploaded Zep: ${file.name}` },
-      ]);
-      await analyzeAndPrefill(manifest);
-      setZepFileName("");
+      await prefillFromManifest(manifest);
     },
-    [analyzeAndPrefill, analyzing, pushAgentMessage, registered, typing],
+    [analyzing, prefillFromManifest],
   );
 
-  const handleZepLinkAnalyze = useCallback(async () => {
+  const handleZepLinkSubmit = useCallback(async () => {
     const url = zepLink.trim();
-    if (!url || typing || registered || analyzing) return;
+    if (!url || analyzing) return;
 
-    setMessages((prev) => [...prev, { id: msgId(), role: "user", text: url }]);
+    setMessages((prev) => [
+      ...prev,
+      { id: msgId(), role: "user", kind: "text", text: url },
+    ]);
     setZepLink("");
 
     const manifest = await fetchZepManifest(url);
     if (!manifest) {
-      pushAgentMessage(
-        "That doesn't look like a Zeps link — try again or upload JSON.",
-      );
+      setZepError("That doesn't look like a Zeps link — try again or upload JSON.");
       return;
     }
 
-    await analyzeAndPrefill(manifest);
-  }, [analyzeAndPrefill, analyzing, pushAgentMessage, registered, typing, zepLink]);
+    await prefillFromManifest(manifest);
+  }, [analyzing, prefillFromManifest, zepLink]);
+
+  const handleEntryChoice = useCallback(
+    (choice: string) => {
+      setMessages((prev) => [
+        ...prev,
+        { id: msgId(), role: "user", kind: "text", text: choice },
+      ]);
+
+      if (choice === "I built a Zep") {
+        setZepError(null);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: msgId(),
+            role: "agent",
+            kind: "zep-ingest",
+            text: "Share your Zep — I'll draft the listing from it.",
+          },
+        ]);
+        return;
+      }
+
+      if (choice === "I built another tool") {
+        pushAgentMessage(REGISTER_CHAT_OPENING);
+        return;
+      }
+
+      if (choice === "I want to build something new") {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: msgId(),
+            role: "agent",
+            kind: "build-zeps",
+            text: BUILD_NEW_ZEPS_MESSAGE,
+            buildUrl: buildZepsBuilderUrl(),
+          },
+        ]);
+      }
+    },
+    [pushAgentMessage],
+  );
 
   const handleSend = useCallback(
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed || typing || analyzing || registered) return;
 
-      setMessages((prev) => [...prev, { id: msgId(), role: "user", text: trimmed }]);
+      if (isEntryForkChip(trimmed) && !skippedEntryFork) {
+        setInput("");
+        handleEntryChoice(trimmed);
+        return;
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        { id: msgId(), role: "user", kind: "text", text: trimmed },
+      ]);
       setInput("");
 
       setRecord((prev) => {
@@ -242,7 +397,7 @@ export function RegisterToolChat() {
         return next;
       });
     },
-    [typing, analyzing, registered, pushAgentMessage],
+    [typing, analyzing, registered, skippedEntryFork, handleEntryChoice, pushAgentMessage],
   );
 
   const handleRegister = useCallback(() => {
@@ -254,7 +409,6 @@ export function RegisterToolChat() {
         record.ownerInstructions || "Ping the owner on Slack — include your use case.",
     };
     submitTool(payload);
-    console.log("Registered tool:", JSON.stringify(payload, null, 2));
     setRegistered(true);
     pushAgentMessage(
       `✅ **${record.name}** is submitted! Pending admin approval before it appears in search.`,
@@ -262,11 +416,16 @@ export function RegisterToolChat() {
   }, [complete, record, submitTool, pushAgentMessage]);
 
   const lastAgent = [...messages].reverse().find((m) => m.role === "agent");
+  const lastAgentText =
+    lastAgent?.kind === "text" || lastAgent?.kind === "zep-ingest"
+      ? lastAgent.text
+      : lastAgent?.kind === "build-zeps"
+        ? lastAgent.text
+        : "";
   const quickReplies =
     registered || typing || analyzing
       ? []
-      : getQuickReplies(lastAgent?.text ?? "", record);
-  const entryDisabled = typing || registered || analyzing;
+      : getQuickReplies(lastAgentText, record);
 
   if (registered) {
     return (
@@ -321,77 +480,9 @@ export function RegisterToolChat() {
               onClick={() => setPreviewOpen((o) => !o)}
             >
               {previewOpen
-                ? "Hide preview"
-                : `Preview (${requiredFilled}/${requiredFields.length})`}
+                ? "Hide summary"
+                : `Summary (${requiredFilled}/${requiredFields.length})`}
             </button>
-          </div>
-
-          <div className="register-chat__entry">
-            <p className="register-chat__entry-lead t-para-sm text-muted">
-              Have a Zep already? Start from the artifact — we&apos;ll draft the
-              listing.
-            </p>
-            <div className="register-chat__entry-options">
-              <div className="register-chat__entry-option">
-                <span className="register-chat__entry-label t-label-sm">
-                  Upload a Zep
-                </span>
-                <div className="register-chat__entry-link-row">
-                  <input
-                    ref={zepFileInputRef}
-                    type="file"
-                    accept=".json,application/json"
-                    className="register-chat__entry-file-input"
-                    disabled={entryDisabled}
-                    onChange={handleZepFileUpload}
-                    aria-label="Upload a Zep JSON export"
-                    tabIndex={-1}
-                  />
-                  <span
-                    className={`register-chat__entry-input register-chat__entry-filename t-para-sm${
-                      zepFileName ? "" : " text-muted"
-                    }`}
-                    aria-hidden
-                  >
-                    {zepFileName || "JSON export (.json)"}
-                  </span>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    disabled={entryDisabled}
-                    onClick={() => zepFileInputRef.current?.click()}
-                  >
-                    {analyzing ? "Analyzing…" : "Choose file"}
-                  </Button>
-                </div>
-              </div>
-              <div className="register-chat__entry-option">
-                <span className="register-chat__entry-label t-label-sm">
-                  Paste a Zeps link
-                </span>
-                <div className="register-chat__entry-link-row">
-                  <input
-                    type="url"
-                    className="register-chat__entry-input t-para-sm"
-                    value={zepLink}
-                    onChange={(e) => setZepLink(e.target.value)}
-                    disabled={entryDisabled}
-                    placeholder="https://zeps-taupe.vercel.app/…"
-                    aria-label="Zeps agent link"
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    disabled={!zepLink.trim() || entryDisabled}
-                    onClick={() => void handleZepLinkAnalyze()}
-                  >
-                    {analyzing ? "Analyzing…" : "Analyze"}
-                  </Button>
-                </div>
-              </div>
-            </div>
           </div>
 
           <div ref={threadRef} className="register-chat__thread">
@@ -402,10 +493,47 @@ export function RegisterToolChat() {
                   className={`register-chat__message register-chat__message--${m.role}`}
                 >
                   <div className="register-chat__avatar" aria-hidden>
-                    {m.role === "agent" ? "🤖" : "👤"}
+                    {m.role === "agent" ? (
+                      <Icon name="spark" size={16} />
+                    ) : (
+                      <Icon name="user" size={16} />
+                    )}
                   </div>
                   <div className="register-chat__bubble">
-                    {m.role === "agent" ? renderAgentText(m.text) : (
+                    {m.kind === "zep-ingest" ? (
+                      <>
+                        <p className="register-chat__line t-para-rg">{m.text}</p>
+                        <ZepIngestCard
+                          analyzing={analyzing}
+                          error={zepError}
+                          link={zepLink}
+                          onLinkChange={(value) => {
+                            setZepLink(value);
+                            setZepError(null);
+                          }}
+                          onFileUpload={handleZepFileUpload}
+                          onLinkSubmit={() => void handleZepLinkSubmit()}
+                          fileInputRef={zepFileInputRef}
+                        />
+                      </>
+                    ) : m.kind === "build-zeps" ? (
+                      <>
+                        <p className="register-chat__line t-para-rg">{m.text}</p>
+                        <div className="register-chat__build-action">
+                          <ButtonLink
+                            href={m.buildUrl}
+                            variant="primary"
+                            size="sm"
+                            external
+                          >
+                            Build with Zeps
+                            <Icon name="arrow-right" size={16} />
+                          </ButtonLink>
+                        </div>
+                      </>
+                    ) : m.role === "agent" ? (
+                      renderAgentText(m.text)
+                    ) : (
                       <p className="register-chat__line t-para-rg">{m.text}</p>
                     )}
                   </div>
@@ -414,7 +542,7 @@ export function RegisterToolChat() {
               {typing && (
                 <li className="register-chat__message register-chat__message--agent">
                   <div className="register-chat__avatar" aria-hidden>
-                    🤖
+                    <Icon name="spark" size={16} />
                   </div>
                   <div className="register-chat__bubble register-chat__bubble--typing">
                     <span className="register-chat__dot" />
@@ -464,75 +592,74 @@ export function RegisterToolChat() {
         </section>
 
         <section
-          className={`register-chat__pane register-chat__pane--preview ${
-            previewOpen ? "register-chat__pane--preview-open" : ""
+          className={`register-chat__pane register-chat__pane--receipt ${
+            previewOpen ? "register-chat__pane--receipt-open" : ""
           }`}
         >
-          <div className="register-chat__preview-header">
+          <div className="register-receipt__header">
             <div>
-              <h2 className="register-chat__preview-title t-heading-sm">Tool preview</h2>
-              <p className="register-chat__preview-meta t-para-sm text-muted">
-                {requiredFilled}/{requiredFields.length} required
-                {complete ? " · ready to register" : ""}
+              <h2 className="register-receipt__title t-heading-sm">Listing summary</h2>
+              <p className="register-receipt__meta t-para-sm text-muted">
+                Live from the conversation — not editable here
               </p>
             </div>
             <button
               type="button"
-              className="register-chat__preview-toggle t-para-sm"
+              className="register-receipt__toggle t-para-sm"
               onClick={() => setPreviewOpen((o) => !o)}
             >
               {previewOpen ? "Hide" : "Show"}
             </button>
           </div>
 
-          <div className="register-chat__progress">
-            <div
-              className="register-chat__progress-fill"
-              style={{
-                width: `${Math.round((requiredFilled / requiredFields.length) * 100)}%`,
-              }}
-            />
+          <div className="register-receipt__progress">
+            <div className="register-receipt__progress-head">
+              <span className="t-label-sm">{requiredFilled}/{requiredFields.length} required</span>
+              {complete && (
+                <span className="t-para-sm text-muted">Ready to register</span>
+              )}
+            </div>
+            <div className="register-receipt__progress-track">
+              <div
+                className="register-receipt__progress-fill"
+                style={{ width: `${progressPct}%` }}
+              />
+            </div>
           </div>
 
-          <div className="register-chat__preview-body">
+          <div className="register-receipt__body">
             {PREVIEW_FIELDS.map((field) => {
               const filled = isRegisterFieldFilled(record, field);
               const optional = !requiredFields.includes(field);
               return (
                 <div
                   key={field}
-                  className={`register-chat__field ${
-                    flashFields.has(field) ? "register-chat__field--flash" : ""
-                  } ${filled ? "register-chat__field--filled" : "register-chat__field--empty"}`}
+                  className={`register-receipt__row ${
+                    flashFields.has(field) ? "register-receipt__row--flash" : ""
+                  } ${filled ? "register-receipt__row--set" : "register-receipt__row--unset"}`}
                 >
-                  <div className="register-chat__field-head">
-                    <span className="register-chat__field-label t-label-sm">
-                      {fieldLabel(field)}
-                    </span>
-                    {optional && !filled && (
-                      <span className="register-chat__field-opt t-tag-sm">optional</span>
+                  <span className="register-receipt__label t-label-sm">
+                    {fieldLabel(field)}
+                    {optional && (
+                      <span className="register-receipt__optional t-tag-sm">optional</span>
                     )}
-                  </div>
-                  <p className="register-chat__field-value t-para-sm">
-                    {filled
-                      ? fieldDisplayValue(record, field)
-                      : `Add ${fieldLabel(field).toLowerCase()}…`}
-                  </p>
+                  </span>
+                  <span className="register-receipt__value t-para-sm">
+                    {filled ? fieldDisplayValue(record, field) : "—"}
+                  </span>
                 </div>
               );
             })}
 
-            <div className="register-chat__field register-chat__field--filled">
-              <div className="register-chat__field-head">
-                <span className="register-chat__field-label t-label-sm">Owner</span>
-              </div>
-              <p className="register-chat__field-value t-para-sm">
+            <div className="register-receipt__row register-receipt__row--set">
+              <span className="register-receipt__label t-label-sm">Owner</span>
+              <span className="register-receipt__value t-para-sm">
                 {record.ownerName} ({record.ownerSlackId})
-              </p>
+              </span>
             </div>
 
             {dedupMatches.length > 0 && record.name && record.oneLiner && (
-              <div className="register-chat__dedup">
+              <div className="register-receipt__dedup">
                 <p className="t-subheading-rg">Might already exist</p>
                 <div className="tool-grid tool-grid--compact">
                   {dedupMatches.map((tool) => (
@@ -543,12 +670,12 @@ export function RegisterToolChat() {
             )}
           </div>
 
-          <div className="register-chat__preview-footer">
+          <div className="register-receipt__footer">
             <Button
               variant="primary"
               disabled={!complete}
               onClick={handleRegister}
-              className="register-chat__register-btn"
+              className="register-receipt__register-btn"
             >
               {isPlanned ? "Register idea" : "Submit for review"}
             </Button>

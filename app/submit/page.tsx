@@ -12,9 +12,8 @@ function SubmitPageContent() {
         <div>
           <h1 className="page-header__title t-display-xs">Register a tool</h1>
           <p className="page-header__desc t-para-md">
-            Tell us about what you built in plain language — we&apos;ll fill the
-            listing as you go. New entries need admin approval before they appear
-            in search.
+            Tell us what you built in the chat — the listing summary updates as you
+            go. New entries need admin approval before they appear in search.
           </p>
         </div>
       </div>

@@ -44,14 +44,33 @@ type ToolFormProps = {
   mode: "create" | "edit" | "edit-pending" | "resubmit";
   initialData?: ToolFormData;
   toolId?: string;
+  /** Controlled listing (submit flow). */
+  value?: ToolFormData;
+  onChange?: (data: ToolFormData) => void;
+  /** Parent handles create submit + success UI. */
+  onCreateSubmit?: (data: ToolFormData) => void;
+  submitDisabled?: boolean;
+  afterHeader?: ReactNode;
+  beforeActions?: ReactNode;
 };
 
-export function ToolForm({ mode, initialData, toolId }: ToolFormProps) {
+export function ToolForm({
+  mode,
+  initialData,
+  toolId,
+  value,
+  onChange,
+  onCreateSubmit,
+  submitDisabled,
+  afterHeader,
+  beforeActions,
+}: ToolFormProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { allTools, submitTool, updateTool, updatePendingTool, resubmitRejectedTool } = useApp();
   const demoErrors = searchParams.get("demo") === "errors";
-  const [form, setForm] = useState<ToolFormData>(() => {
+  const isControlled = value !== undefined && onChange !== undefined;
+  const [internalForm, setInternalForm] = useState<ToolFormData>(() => {
     const base: ToolFormData = initialData ?? {
       ...EMPTY_FORM,
       ownerName: DEMO_USER.name,
@@ -80,6 +99,7 @@ export function ToolForm({ mode, initialData, toolId }: ToolFormProps) {
 
     return base;
   });
+  const form = isControlled ? value : internalForm;
   const [readmePulled, setReadmePulled] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [submitFailed, setSubmitFailed] = useState(false);
@@ -93,23 +113,33 @@ export function ToolForm({ mode, initialData, toolId }: ToolFormProps) {
     key: K,
     value: ToolFormData[K],
   ) {
-    setForm((prev) => {
+    const apply = (prev: ToolFormData) => {
       const next = { ...prev, [key]: value };
       if (key === "accessLevel" && value === "sensitive") {
         next.sensitive = true;
       }
       return next;
-    });
+    };
+    if (isControlled) {
+      onChange!(apply(form));
+    } else {
+      setInternalForm(apply);
+    }
   }
 
   function toggleType(type: ToolType) {
-    setForm((prev) => {
+    const apply = (prev: ToolFormData) => {
       const has = prev.types.includes(type);
       const types = has
         ? prev.types.filter((t) => t !== type)
         : [...prev.types, type];
       return { ...prev, types: types.length > 0 ? types : [type] };
-    });
+    };
+    if (isControlled) {
+      onChange!(apply(form));
+    } else {
+      setInternalForm(apply);
+    }
   }
 
   function handleGithubBlur() {
@@ -131,6 +161,10 @@ export function ToolForm({ mode, initialData, toolId }: ToolFormProps) {
     }
 
     setSubmitFailed(false);
+    if (mode === "create" && onCreateSubmit) {
+      onCreateSubmit(form);
+      return;
+    }
     if (mode === "create") {
       submitTool(form);
       setSubmitted(true);
@@ -159,7 +193,7 @@ export function ToolForm({ mode, initialData, toolId }: ToolFormProps) {
     );
   }
 
-  if (submitted && mode === "create") {
+  if (submitted && mode === "create" && !onCreateSubmit) {
     return (
       <div className="confirmation-card">
         <div className="confirmation-card__icon">
@@ -204,6 +238,8 @@ export function ToolForm({ mode, initialData, toolId }: ToolFormProps) {
 
   return (
     <form className="tool-form" onSubmit={handleSubmit}>
+      {afterHeader}
+
       <div className="form-field">
         <label htmlFor="name" className="form-field__label t-label-rg-heavy">
           Name
@@ -491,7 +527,12 @@ export function ToolForm({ mode, initialData, toolId }: ToolFormProps) {
       </div>
 
       <div className="tool-form__actions">
-        <Button type="submit" variant="primary">
+        {beforeActions}
+        <Button
+          type="submit"
+          variant="primary"
+          disabled={submitDisabled}
+        >
           {mode === "create"
             ? isPlanned
               ? "Register idea"
