@@ -1,26 +1,27 @@
 "use client";
 
 import { Suspense } from "react";
-import { ToolForm } from "@/components/ToolForm";
+import { RegisterToolChat } from "@/components/RegisterToolChat";
 import { RoleBanner } from "@/components/RoleSwitcher";
 
 function SubmitPageContent() {
   return (
-    <>
+    <div className="submit-page">
       <RoleBanner />
-      <div className="page-header">
+      <div className="page-header submit-page__header">
         <div>
           <h1 className="page-header__title t-display-xs">Register a tool</h1>
           <p className="page-header__desc t-para-md">
-            Add what you built to the catalogue. New entries need admin approval
-            before they appear in search.
+            Tell us about what you built in plain language — we&apos;ll fill the
+            listing as you go. New entries need admin approval before they appear
+            in search.
           </p>
         </div>
       </div>
-      <Suspense fallback={<p className="t-para-md">Loading form…</p>}>
-        <ToolForm mode="create" />
+      <Suspense fallback={<p className="t-para-md">Loading…</p>}>
+        <RegisterToolChat />
       </Suspense>
-    </>
+    </div>
   );
 }
 
