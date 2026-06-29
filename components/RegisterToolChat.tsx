@@ -217,6 +217,17 @@ export function RegisterToolChat() {
     <div className="register-chat">
       <div className="register-chat__layout">
         <section className="register-chat__pane register-chat__pane--chat">
+          <div className="register-chat__chat-toolbar">
+            <button
+              type="button"
+              className="register-chat__mobile-preview-btn t-para-sm"
+              onClick={() => setPreviewOpen((o) => !o)}
+            >
+              {previewOpen
+                ? "Hide preview"
+                : `Preview (${requiredFilled}/${requiredFields.length})`}
+            </button>
+          </div>
           <div ref={threadRef} className="register-chat__thread">
             <ul className="register-chat__messages">
               {messages.map((m) => (
@@ -378,14 +389,6 @@ export function RegisterToolChat() {
           </div>
         </section>
       </div>
-
-      <button
-        type="button"
-        className="register-chat__mobile-preview-btn t-para-sm"
-        onClick={() => setPreviewOpen((o) => !o)}
-      >
-        {previewOpen ? "Hide preview" : `Preview (${requiredFilled}/${requiredFields.length})`}
-      </button>
     </div>
   );
 }
