@@ -78,4 +78,10 @@ export const TYPE_TAG_STYLES: Record<
     bgDark: "var(--color-candy-800)",
     colorDark: "var(--color-candy-300)",
   },
+  zep: {
+    bg: "var(--color-purps-200)",
+    color: "var(--color-purps-700)",
+    bgDark: "var(--color-purps-900)",
+    colorDark: "var(--color-purps-300)",
+  },
 };

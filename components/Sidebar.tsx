@@ -12,12 +12,14 @@ import {
   registryParamsFromSearchParams,
 } from "@/lib/registryNav";
 import { CATALOGUE_CATEGORIES } from "@/lib/types";
+import { buildZepsBuilderUrl } from "@/lib/zeps";
 
 type NavItem = {
   href: string;
   label: string;
   badge?: number;
   admin?: boolean;
+  external?: boolean;
 };
 
 type NavSection = {
@@ -76,6 +78,11 @@ export function Sidebar() {
       items: [
         { href: "/my-submissions", label: "My activity" },
         { href: "/submit", label: "Register a tool" },
+        {
+          href: buildZepsBuilderUrl(),
+          label: "Build with Zeps",
+          external: true,
+        },
       ],
     },
   ];
@@ -123,20 +130,38 @@ export function Sidebar() {
       <div key={section.title} className="app-sidebar__section">
         <p className="app-sidebar__section-title t-label-sm">{section.title}</p>
         <ul className="app-sidebar__list">
-          {section.items.map((item) => (
-            <li key={item.href}>
-              <Link
-                href={item.href}
-                className={`${navClass(isItemActive(item.href))}${item.admin ? " app-sidebar__link--admin" : ""}`}
-                onClick={closeMobile}
-              >
-                {item.label}
-                {item.badge !== undefined && item.badge > 0 && (
-                  <span className="app-sidebar__badge">{item.badge}</span>
+          {section.items.map((item) => {
+            const className = `${navClass(isItemActive(item.href))}${item.admin ? " app-sidebar__link--admin" : ""}`;
+            return (
+              <li key={item.href}>
+                {item.external ? (
+                  <a
+                    href={item.href}
+                    className={className}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={closeMobile}
+                  >
+                    {item.label}
+                    {item.badge !== undefined && item.badge > 0 && (
+                      <span className="app-sidebar__badge">{item.badge}</span>
+                    )}
+                  </a>
+                ) : (
+                  <Link
+                    href={item.href}
+                    className={className}
+                    onClick={closeMobile}
+                  >
+                    {item.label}
+                    {item.badge !== undefined && item.badge > 0 && (
+                      <span className="app-sidebar__badge">{item.badge}</span>
+                    )}
+                  </Link>
                 )}
-              </Link>
-            </li>
-          ))}
+              </li>
+            );
+          })}
           {section.catalogue && (
             <li className="app-sidebar__catalogue">
               <button

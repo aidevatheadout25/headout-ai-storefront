@@ -7,7 +7,8 @@ export type ToolType =
   | "mcp"
   | "plugin"
   | "script"
-  | "slack-bot";
+  | "slack-bot"
+  | "zep";
 
 export type AccessLevel = "open" | "request" | "sensitive";
 
@@ -247,6 +248,7 @@ export const TOOL_TYPES: ToolType[] = [
   "plugin",
   "script",
   "slack-bot",
+  "zep",
 ];
 
 export type CatalogueCategory = {
@@ -266,6 +268,7 @@ export const CATALOGUE_CATEGORIES: CatalogueCategory[] = [
   { label: "Plugins", href: "/registry?type=plugin", type: "plugin" },
   { label: "Scripts", href: "/registry?type=script", type: "script" },
   { label: "Slack bots", href: "/registry?type=slack-bot", type: "slack-bot" },
+  { label: "Zeps", href: "/registry?type=zep", type: "zep" },
   {
     label: "Building blocks",
     href: "/registry?tab=blocks",
@@ -343,6 +346,8 @@ export function formatToolType(type: ToolType): string {
       return "Slack bot";
     case "mcp":
       return "MCP";
+    case "zep":
+      return "Zep";
     default:
       return type.charAt(0).toUpperCase() + type.slice(1);
   }

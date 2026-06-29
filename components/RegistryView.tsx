@@ -22,6 +22,7 @@ import {
   normalizeCatalogueTypeParam,
   type Team,
 } from "@/lib/types";
+import { buildZepsBuilderUrl } from "@/lib/zeps";
 
 const SORT_OPTIONS: { value: RegistrySort; label: string }[] = [
   { value: "most-used", label: "Most used" },
@@ -303,15 +304,26 @@ export function RegistryView({ urlParams }: RegistryViewProps) {
                 <ToolCard key={tool.id} tool={tool} variant="catalog" />
               ))}
             </div>
+          ) : hasActiveFilters && search.trim() ? (
+            <EmptyState
+              icon="globe"
+              title="No tools found"
+              description="Nothing matches — build it with Zeps."
+              action={
+                <ButtonLink
+                  href={buildZepsBuilderUrl({ prompt: search.trim() })}
+                  variant="primary"
+                  external
+                >
+                  Build with Zeps
+                </ButtonLink>
+              }
+            />
           ) : hasActiveFilters ? (
             <ZeroResultsPanel
               query={zeroResultContext}
               kits={getClosestKits(zeroResultContext)}
-              leadMessage={
-                search
-                  ? undefined
-                  : `Nothing matched your filters${zeroResultContext ? ` (${zeroResultContext})` : ""} — try these next steps instead of stopping here.`
-              }
+              leadMessage={`Nothing matched your filters${zeroResultContext ? ` (${zeroResultContext})` : ""} — try these next steps instead of stopping here.`}
             />
           ) : (
             <EmptyState

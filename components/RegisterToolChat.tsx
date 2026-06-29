@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type FormEvent,
 } from "react";
 import { Button, ButtonLink } from "@/components/Button";
@@ -16,19 +17,24 @@ import { useApp } from "@/context/AppContext";
 import { DEMO_USER, findDedupMatches } from "@/lib/mockData";
 import {
   PREVIEW_FIELDS,
+  applyZepAnalysisDraft,
   buildAgentReply,
+  buildZepReviewAgentMessage,
   countRequiredFilled,
   emptyRegisterForm,
   extractFromMessage,
   fieldDisplayValue,
   fieldLabel,
+  flashFieldsFromDraft,
   getQuickReplies,
   getRequiredFields,
   isRegisterComplete,
   isRegisterFieldFilled,
+  nextMissingField,
   openingMessage,
   type RegisterChatField,
 } from "@/lib/registerToolChat";
+import { fetchZepManifest, parseZepManifest, type ZepManifest } from "@/lib/zeps";
 import { GATE_ELIGIBILITY_NOTE } from "@/lib/adminMetrics";
 import {
   TOOL_TYPES,
@@ -98,11 +104,15 @@ export function RegisterToolChat() {
     { id: msgId(), role: "agent", text: openingMessage(prefillRef) },
   ]);
   const [input, setInput] = useState("");
+  const [zepLink, setZepLink] = useState("");
+  const [zepFileName, setZepFileName] = useState("");
+  const [analyzing, setAnalyzing] = useState(false);
   const [typing, setTyping] = useState(false);
   const [flashFields, setFlashFields] = useState<Set<RegisterChatField>>(new Set());
   const [previewOpen, setPreviewOpen] = useState(false);
   const [registered, setRegistered] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
+  const zepFileInputRef = useRef<HTMLInputElement>(null);
 
   const requiredFields = getRequiredFields(record);
   const requiredFilled = countRequiredFilled(record);
@@ -125,16 +135,100 @@ export function RegisterToolChat() {
     }, TYPING_DELAY_MS);
   }, []);
 
+  const analyzeAndPrefill = useCallback(
+    async (manifest: ZepManifest) => {
+      if (typing || registered || analyzing) return;
+
+      setAnalyzing(true);
+      try {
+        const res = await fetch("/api/analyze-zep", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ manifest }),
+        });
+
+        if (!res.ok) {
+          throw new Error("analyze failed");
+        }
+
+        const draft = (await res.json()) as Partial<ToolFormData>;
+        setRecord((prev) => applyZepAnalysisDraft(prev, draft));
+        const flash = flashFieldsFromDraft(draft);
+        setFlashFields(new Set(flash));
+        window.setTimeout(() => setFlashFields(new Set()), 1200);
+        pushAgentMessage(buildZepReviewAgentMessage());
+      } catch {
+        pushAgentMessage(
+          "Couldn't analyze that Zep — try again or use the manual flow below.",
+        );
+      } finally {
+        setAnalyzing(false);
+      }
+    },
+    [analyzing, typing, registered, pushAgentMessage],
+  );
+
+  const handleZepFileUpload = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (!file || typing || registered || analyzing) return;
+
+      setZepFileName(file.name);
+
+      const text = await file.text();
+      const manifest = parseZepManifest(text);
+      if (!manifest) {
+        setZepFileName("");
+        pushAgentMessage(
+          "Couldn't read that file — upload a JSON Zep export.",
+        );
+        return;
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        { id: msgId(), role: "user", text: `Uploaded Zep: ${file.name}` },
+      ]);
+      await analyzeAndPrefill(manifest);
+      setZepFileName("");
+    },
+    [analyzeAndPrefill, analyzing, pushAgentMessage, registered, typing],
+  );
+
+  const handleZepLinkAnalyze = useCallback(async () => {
+    const url = zepLink.trim();
+    if (!url || typing || registered || analyzing) return;
+
+    setMessages((prev) => [...prev, { id: msgId(), role: "user", text: url }]);
+    setZepLink("");
+
+    const manifest = await fetchZepManifest(url);
+    if (!manifest) {
+      pushAgentMessage(
+        "That doesn't look like a Zeps link — try again or upload JSON.",
+      );
+      return;
+    }
+
+    await analyzeAndPrefill(manifest);
+  }, [analyzeAndPrefill, analyzing, pushAgentMessage, registered, typing, zepLink]);
+
   const handleSend = useCallback(
     (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed || typing || registered) return;
+      if (!trimmed || typing || analyzing || registered) return;
 
       setMessages((prev) => [...prev, { id: msgId(), role: "user", text: trimmed }]);
       setInput("");
 
       setRecord((prev) => {
-        const { updates, confirmations } = extractFromMessage(trimmed, prev);
+        const expectingField = nextMissingField(prev);
+        const { updates, confirmations } = extractFromMessage(
+          trimmed,
+          prev,
+          expectingField,
+        );
         const next = { ...prev, ...updates };
 
         window.setTimeout(() => {
@@ -148,7 +242,7 @@ export function RegisterToolChat() {
         return next;
       });
     },
-    [typing, registered, pushAgentMessage],
+    [typing, analyzing, registered, pushAgentMessage],
   );
 
   const handleRegister = useCallback(() => {
@@ -169,7 +263,10 @@ export function RegisterToolChat() {
 
   const lastAgent = [...messages].reverse().find((m) => m.role === "agent");
   const quickReplies =
-    registered || typing ? [] : getQuickReplies(lastAgent?.text ?? "", record);
+    registered || typing || analyzing
+      ? []
+      : getQuickReplies(lastAgent?.text ?? "", record);
+  const entryDisabled = typing || registered || analyzing;
 
   if (registered) {
     return (
@@ -228,6 +325,75 @@ export function RegisterToolChat() {
                 : `Preview (${requiredFilled}/${requiredFields.length})`}
             </button>
           </div>
+
+          <div className="register-chat__entry">
+            <p className="register-chat__entry-lead t-para-sm text-muted">
+              Have a Zep already? Start from the artifact — we&apos;ll draft the
+              listing.
+            </p>
+            <div className="register-chat__entry-options">
+              <div className="register-chat__entry-option">
+                <span className="register-chat__entry-label t-label-sm">
+                  Upload a Zep
+                </span>
+                <div className="register-chat__entry-link-row">
+                  <input
+                    ref={zepFileInputRef}
+                    type="file"
+                    accept=".json,application/json"
+                    className="register-chat__entry-file-input"
+                    disabled={entryDisabled}
+                    onChange={handleZepFileUpload}
+                    aria-label="Upload a Zep JSON export"
+                    tabIndex={-1}
+                  />
+                  <span
+                    className={`register-chat__entry-input register-chat__entry-filename t-para-sm${
+                      zepFileName ? "" : " text-muted"
+                    }`}
+                    aria-hidden
+                  >
+                    {zepFileName || "JSON export (.json)"}
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={entryDisabled}
+                    onClick={() => zepFileInputRef.current?.click()}
+                  >
+                    {analyzing ? "Analyzing…" : "Choose file"}
+                  </Button>
+                </div>
+              </div>
+              <div className="register-chat__entry-option">
+                <span className="register-chat__entry-label t-label-sm">
+                  Paste a Zeps link
+                </span>
+                <div className="register-chat__entry-link-row">
+                  <input
+                    type="url"
+                    className="register-chat__entry-input t-para-sm"
+                    value={zepLink}
+                    onChange={(e) => setZepLink(e.target.value)}
+                    disabled={entryDisabled}
+                    placeholder="https://zeps-taupe.vercel.app/…"
+                    aria-label="Zeps agent link"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={!zepLink.trim() || entryDisabled}
+                    onClick={() => void handleZepLinkAnalyze()}
+                  >
+                    {analyzing ? "Analyzing…" : "Analyze"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div ref={threadRef} className="register-chat__thread">
             <ul className="register-chat__messages">
               {messages.map((m) => (
@@ -287,11 +453,11 @@ export function RegisterToolChat() {
               className="register-chat__input t-para-rg"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              disabled={typing}
+              disabled={typing || analyzing}
               placeholder="Type your answer…"
               aria-label="Your message"
             />
-            <Button type="submit" size="sm" disabled={!input.trim() || typing}>
+            <Button type="submit" size="sm" disabled={!input.trim() || typing || analyzing}>
               Send
             </Button>
           </form>

@@ -1,4 +1,5 @@
 import { DEMO_USER } from "@/lib/mockData";
+import { isZepsUrl } from "@/lib/zeps";
 import {
   SUBMIT_LIFECYCLE_STATUSES,
   TEAMS,
@@ -49,13 +50,14 @@ const TYPE_KEYWORDS: Record<ToolType, string[]> = {
   plugin: ["plugin", "middleware", "extension"],
   script: ["script", "cli", "cron", "scraper", "python script"],
   "slack-bot": ["slack bot", "slack-bot", "slackbot"],
+  zep: ["zep", "zeps", "zeps agent"],
 };
 
 export function emptyRegisterForm(): ToolFormData {
   return {
     name: "",
     oneLiner: "",
-    types: ["app"],
+    types: [],
     link: "",
     ownerName: DEMO_USER.name,
     ownerSlackId: DEMO_USER.slackId,
@@ -168,6 +170,7 @@ function extractOneLiner(text: string, record: ToolFormData): string | null {
     extractTeam(text) ||
     extractAccessLevel(text);
 
+  if (text.length >= 12 && !hasStructured && !record.oneLiner) return text.trim();
   if (text.length >= 20 && !hasStructured) return text.trim();
   if (text.length >= 35 && !record.oneLiner && !hasStructured) return text.trim();
   return null;
@@ -244,7 +247,82 @@ export type ExtractResult = {
   confirmations: string[];
 };
 
-export function extractFromMessage(text: string, record: ToolFormData): ExtractResult {
+function confirmationForUpdates(updates: Partial<ToolFormData>): string[] {
+  const confirmations: string[] = [];
+  if (updates.name) confirmations.push(`name set to "${updates.name}"`);
+  if (updates.oneLiner) confirmations.push("one-liner captured");
+  if (updates.types?.length)
+    confirmations.push(`type set to ${formatToolType(updates.types[0])}`);
+  if (updates.status) confirmations.push(`status set to ${updates.status}`);
+  if (updates.team) confirmations.push(`team set to ${updates.team}`);
+  if (updates.accessLevel) confirmations.push(`access set to ${updates.accessLevel}`);
+  if (updates.link) confirmations.push(`link set to ${updates.link}`);
+  if (updates.githubUrl) confirmations.push(`GitHub URL set to ${updates.githubUrl}`);
+  if (updates.tags) confirmations.push(`tags set to ${updates.tags}`);
+  if (updates.description) confirmations.push("description captured");
+  if (updates.ownerInstructions) confirmations.push("owner instructions captured");
+  return confirmations;
+}
+
+/** Plain answer for the field the agent just asked about. */
+function directFieldUpdate(
+  text: string,
+  field: RegisterChatField,
+  record: ToolFormData,
+): Partial<ToolFormData> | null {
+  const trimmed = text.trim();
+  if (!trimmed || /^skip$/i.test(trimmed)) return null;
+
+  switch (field) {
+    case "name": {
+      if (trimmed.length < 2 || trimmed.length > 80 || extractUrl(text)) return null;
+      const cleaned = trimmed.replace(/^["']|["']$/g, "");
+      if (record.name === cleaned) return null;
+      return { name: cleaned };
+    }
+    case "oneLiner": {
+      if (trimmed.length < 8 || extractUrl(text)) return null;
+      if (record.oneLiner === trimmed) return null;
+      return { oneLiner: trimmed };
+    }
+    case "types": {
+      const type = extractType(text);
+      if (!type || record.types.includes(type)) return null;
+      return { types: [type] };
+    }
+    case "status": {
+      const status = extractStatus(text);
+      if (!status || record.status === status) return null;
+      return { status };
+    }
+    case "team": {
+      const team = extractTeam(text);
+      if (!team || record.team === team) return null;
+      return { team };
+    }
+    case "accessLevel": {
+      const accessLevel = extractAccessLevel(text);
+      if (!accessLevel || record.accessLevel === accessLevel) return null;
+      const patch: Partial<ToolFormData> = { accessLevel };
+      if (accessLevel === "sensitive") patch.sensitive = true;
+      return patch;
+    }
+    case "link": {
+      if (/skip/i.test(trimmed) && record.status === "planned") return null;
+      const url = extractUrl(text);
+      if (!url || record.link === url) return null;
+      return { link: url };
+    }
+    default:
+      return null;
+  }
+}
+
+export function extractFromMessage(
+  text: string,
+  record: ToolFormData,
+  expectingField: RegisterChatField | null = null,
+): ExtractResult {
   const updates: Partial<ToolFormData> = { ...extractCorrections(text) };
   const confirmations: string[] = [];
 
@@ -254,6 +332,20 @@ export function extractFromMessage(text: string, record: ToolFormData): ExtractR
       if (url !== record.githubUrl) {
         updates.githubUrl = url;
         confirmations.push(`GitHub URL set to ${url}`);
+      }
+    } else if (isZepsUrl(url)) {
+      // Publish-back: a Zeps link means this is a built agent. Mark it a live Zep.
+      if (url !== record.link) {
+        updates.link = url;
+        confirmations.push(`Zeps agent linked — runs caller-bound at ${url}`);
+      }
+      if (!record.types.includes("zep")) {
+        updates.types = ["zep"];
+        confirmations.push("type set to Zep");
+      }
+      if (record.status === "planned") {
+        updates.status = "live";
+        confirmations.push("status set to live");
       }
     } else if (url !== record.link) {
       updates.link = url;
@@ -322,6 +414,16 @@ export function extractFromMessage(text: string, record: ToolFormData): ExtractR
     confirmations.push("owner instructions captured");
   }
 
+  const merged = { ...record, ...updates };
+
+  if (expectingField && !isRegisterFieldFilled(merged, expectingField)) {
+    const direct = directFieldUpdate(text, expectingField, record);
+    if (direct) {
+      Object.assign(updates, direct);
+      confirmations.push(...confirmationForUpdates(direct));
+    }
+  }
+
   return { updates, confirmations };
 }
 
@@ -354,7 +456,13 @@ export function getQuickReplies(
   lastAgentText: string,
   record: ToolFormData,
 ): string[] {
-  if (lastAgentText.includes("authenticate") || lastAgentText.includes("access")) {
+  if (lastAgentText.includes("What should we call")) {
+    return [];
+  }
+  if (lastAgentText.includes("What does it do")) {
+    return [];
+  }
+  if (lastAgentText.includes("authenticate") || lastAgentText.includes("Who can access")) {
     return ["Open to everyone", "Request access", "Sensitive / restricted"];
   }
   if (lastAgentText.includes("type is it")) {
@@ -419,4 +527,42 @@ export function openingMessage(prefill?: Partial<ToolFormData>): string {
     return `Got the one-liner. ${FIELD_QUESTIONS.name}`;
   }
   return REGISTER_CHAT_OPENING;
+}
+
+export function buildZepReviewAgentMessage(): string {
+  return (
+    "I read your Zep and drafted the listing — check the preview. Two things I need you to confirm: who can access it, and the owning team.\n\n" +
+    FIELD_QUESTIONS.accessLevel
+  );
+}
+
+export function applyZepAnalysisDraft(
+  record: ToolFormData,
+  draft: Partial<ToolFormData>,
+): ToolFormData {
+  return {
+    ...record,
+    ...(draft.name ? { name: draft.name } : {}),
+    ...(draft.oneLiner ? { oneLiner: draft.oneLiner } : {}),
+    ...(draft.description ? { description: draft.description } : {}),
+    ...(draft.types?.length ? { types: draft.types } : {}),
+    ...(draft.tags ? { tags: draft.tags } : {}),
+    ...(draft.team ? { team: draft.team } : {}),
+    ...(draft.link ? { link: draft.link } : {}),
+    status: "live",
+  };
+}
+
+export function flashFieldsFromDraft(
+  draft: Partial<ToolFormData>,
+): RegisterChatField[] {
+  const fields: RegisterChatField[] = ["status"];
+  if (draft.name) fields.push("name");
+  if (draft.oneLiner) fields.push("oneLiner");
+  if (draft.description) fields.push("description");
+  if (draft.types?.length) fields.push("types");
+  if (draft.tags) fields.push("tags");
+  if (draft.team) fields.push("team");
+  if (draft.link) fields.push("link");
+  return fields;
 }

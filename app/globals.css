@@ -4655,6 +4655,91 @@ html[data-theme="dark"] .home-chat__composer {
   }
 }
 
+.register-chat__entry {
+  flex-shrink: 0;
+  margin: 0 var(--space-16);
+  padding: var(--space-12);
+  border: 1px solid var(--divider-primary);
+  border-radius: var(--radius-12);
+  background: var(--surface-white);
+}
+
+.register-chat__entry-lead {
+  margin: 0 0 var(--space-10);
+}
+
+.register-chat__entry-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+}
+
+@media (min-width: 40rem) {
+  .register-chat__entry-options {
+    flex-direction: row;
+    align-items: flex-end;
+    gap: var(--space-16);
+  }
+}
+
+.register-chat__entry-option {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.register-chat__entry-label {
+  color: var(--text-secondary);
+}
+
+.register-chat__entry-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.register-chat__entry-input,
+.register-chat__entry-filename {
+  width: 100%;
+  padding: var(--space-8) var(--space-10);
+  border: 1px solid var(--divider-primary);
+  border-radius: var(--radius-8);
+  background: var(--surface-white);
+  color: var(--text-primary);
+}
+
+.register-chat__entry-filename {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.register-chat__entry-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.register-chat__entry-link-row {
+  display: flex;
+  gap: var(--space-8);
+  align-items: center;
+}
+
+.register-chat__entry-link-row .register-chat__entry-input,
+.register-chat__entry-link-row .register-chat__entry-filename {
+  flex: 1;
+  min-width: 0;
+}
+
 .register-chat__thread {
   flex: 1;
   min-height: 0;
@@ -4996,7 +5081,10 @@ html[data-theme="dark"] .register-chat__layout,
 html[data-theme="dark"] .register-chat__bubble,
 html[data-theme="dark"] .register-chat__composer,
 html[data-theme="dark"] .register-chat__chip,
-html[data-theme="dark"] .register-chat__input {
+html[data-theme="dark"] .register-chat__input,
+html[data-theme="dark"] .register-chat__entry,
+html[data-theme="dark"] .register-chat__entry-input,
+html[data-theme="dark"] .register-chat__entry-filename {
   background: var(--surface-grey-2);
 }
 

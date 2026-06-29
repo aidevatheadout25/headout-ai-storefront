@@ -25,6 +25,7 @@ import {
   STOREFRONT_SLACK_CHANNEL,
 } from "@/lib/toolMeta";
 import { GATE_ELIGIBILITY_NOTE } from "@/lib/adminMetrics";
+import { buildZepsBuilderUrl } from "@/lib/zeps";
 import {
   TOOL_FLAG_REASON_CATEGORIES,
   formatFlagReasonCategory,
@@ -553,9 +554,25 @@ export function ToolDetailView() {
                 )}
               </div>
             ) : isApproved && isPlanned ? (
-              <p className="sidebar-card__note t-para-rg text-muted">
-                No link yet — contact the owner to collaborate on this idea.
-              </p>
+              <div className="build-with-zeps">
+                <ButtonLink
+                  href={buildZepsBuilderUrl({
+                    name: tool.name,
+                    prompt: tool.oneLiner,
+                    source: `storefront:${tool.id}`,
+                  })}
+                  variant="primary"
+                  size="rg"
+                  external
+                >
+                  Build with Zeps
+                  <Icon name="arrow-right" size={18} />
+                </ButtonLink>
+                <p className="sidebar-card__note t-para-sm text-muted">
+                  No engineer needed — Zeps builds it in a chat. When it&apos;s
+                  done, paste the link back here to list it as a live Zep.
+                </p>
+              </div>
             ) : isApproved && tool.linkUnreachable ? (
               <p className="sidebar-card__note t-para-rg text-muted">
                 Link unreachable — contact the owner for an updated URL.
