@@ -1,0 +1,38 @@
+---
+description: Commit local changes before ending a conversation when there are changes
+alwaysApply: true
+---
+
+# Commit at conversation end
+
+Before you finish a conversation (last response, task complete, or user signs off), commit any uncommitted work in the repo.
+
+## When this applies
+
+Run this checklist when wrapping up — not after every message, only when the conversation is ending and the session produced or left uncommitted changes.
+
+## Required steps
+
+1. Run `git status` and `git diff` to see what changed.
+2. If there are **no changes** (clean working tree, nothing untracked that belongs in the repo), skip — do not create empty commits.
+3. If there are changes:
+   - Stage only relevant files (never `.env`, credentials, or secrets).
+   - Commit with a concise message that explains **why** (follow existing repo commit style).
+4. After commit, run `git status` once to confirm a clean working tree (or note any intentionally unstaged files).
+5. In your final message, briefly state what was committed (branch + short summary), or why commit was skipped.
+
+## Do not push
+
+- Do **not** push to the remote unless the user explicitly asks in that conversation.
+- If the branch is ahead of remote after commit, mention that locally — do not push automatically.
+
+## Git safety (still required)
+
+- Never skip hooks (`--no-verify`) unless the user explicitly asked.
+- Never amend unless the user's commit rules allow it.
+- Do not commit files that likely contain secrets — warn the user instead.
+
+## If commit fails
+
+- Report the error (e.g. pre-commit hook failure) and what remains uncommitted.
+- Fix hook issues and create a **new** commit — do not amend a failed commit unless amend rules apply.
