@@ -1,0 +1,120 @@
+# Replit Build Brief — Storefront v1 (chat-based meta-catalogue)
+
+Paste this into Replit instead of "remove all mocks and make it functional." It is
+scoped on purpose so the agent builds *our* design, not its own.
+
+---
+
+## What this app is (read first, don't skip)
+A **meta-catalogue of internal AI tools** with a **chat front door**. It indexes tools
+of every kind (Zeps agents, Claude skills, Replit apps, MCPs, dashboards, Slack bots,
+scripts, docs) and **routes** people to them. It **never runs** the tools — it lists and
+links. Zeps is one *feed* into the catalogue, not the catalogue itself.
+
+The repo you imported encodes an OLDER design. Treat this as a **targeted rewrite**, not a
+"make the mocks work" pass. Follow the REMOVE / BUILD / KEEP / STUB lists exactly.
+
+## Navigation — EVERYTHING happens from the home page (critical)
+The home page (`/`) **is** the product: one chat. There are no separate pages or navbar
+links for "Register a tool" or "Build with Zeps." Every action originates from the home
+conversation:
+- **Find** → type a need in the home chat → tool-cards appear in the thread.
+- **Build** → happens when the chat finds no match → the agent offers it *in the thread*
+  (recommends a builder; not a nav item, not Zeps-only).
+- **Register / "+ Add a tool"** → a small affordance on the home page itself (e.g. a quiet
+  button near the chat that drops a "paste a URL" step *into the conversation*) — NOT a
+  navbar link, NOT a separate route.
+
+Allowed navbar items are minimal and read-only: e.g. Home, Browse/All tools, My tools.
+Nothing in the navbar should start a build or a registration flow. If you find action
+links in the nav (likely left over because the GitHub import was stale), remove them.
+
+## Hard constraints
+- This is a **modified Next.js (App Router)**. Before writing any Next.js code, read
+  `node_modules/next/dist/docs/` and `AGENTS.md`. Do not swap frameworks or routing.
+- The **front door is CHAT**, not a search box. One conversational input. The user
+  describes a need in plain language; the agent replies and renders matching tools as
+  **cards inline in the thread**. Never show a keyword search box.
+- "Semantic search" is a **tool the chat agent calls** (`search_catalogue`), not a UI.
+
+## REMOVE (obsolete — delete or disable)
+- **Navbar destinations for actions.** Right now the navbar has "Register a tool" and
+  "Build with Zeps" (and similar) as separate links/pages. DELETE them from the nav. These
+  are NOT places you navigate to — they are outcomes of the home conversation. Also remove
+  the standalone `/submit` and `/build` routes (or make them redirect to `/`).
+- The three-door intent model as a *user choice*: search / build / register chips and any
+  mode the user must pick. Intent is inferred by the agent, never selected.
+- `lib/pm.ts`, `lib/funnel.ts` — the scripted PM scoping heuristics.
+- The approval-gated submission flow (pending → admin approve). v1 has no approval queue.
+- `buildZepsBuilderUrl` as the only build path. Build is now builder-agnostic.
+- `components/DemoModePicker.tsx`, `lib/demoScenarios.ts` — scripted presenter demos.
+- In-memory `context/AppContext.tsx` as the source of truth for tools.
+
+## BUILD (v1 scope — discovery only)
+1. **Postgres + pgvector** (Replit Postgres is fine). One table `tools` (schema below).
+2. **Seed ~25 REAL, mixed-type tools** (see `tools-seed.json` if present, else create
+   realistic rows): a few Replit apps, a few Claude skills, a few Zeps agents, 1-2
+   dashboards/Slack bots. Variety of types is the whole point.
+3. **Embeddings**: on insert, embed `title + description + tags` into the `embedding`
+   column (any embedding API). 
+4. **Chat endpoint** (`POST /api/chat`): a single LLM agent loop with ONE tool,
+   `search_catalogue(query)` → embeds the query, does a pgvector cosine lookup, returns
+   the top matches. The agent:
+   - asks ONE natural follow-up if the need is vague,
+   - answers conversationally AND returns matches as structured tool-cards,
+   - when nothing fits, offers **build** (recommend a builder — Replit / Claude skill /
+     Claude Code / Zeps — don't force Zeps) or **request a tool**, in the same thread.
+5. **Tool card**: title, type, one-line description, owner, where it lives, and a button
+   that routes out (deeplink/URL). Render inline in the chat.
+6. **"+ Add a tool"** (quiet side action): paste a URL → an LLM infers
+   name/type/description/tags → insert row. This is the only registration path in v1.
+
+## KEEP (reuse from the repo)
+- Visual scaffolding / styling / layout shell.
+- `lib/zeps.ts` helpers (`isZepsUrl`) and `lib/analyzeZep.ts` for URL→metadata inference
+  on the "+ Add" path.
+- `lib/types.ts` `ToolType` union (extend as needed).
+
+## STUB (external dependency — do NOT fake a live connection)
+- **Zeps sync.** There is no service token to read Zeps today (`/api/zeps`,`/api/skills`
+  are session-gated). Put it behind one interface:
+  ```ts
+  // lib/feeds/zeps.ts
+  export async function getZepsTools(): Promise<ToolRecord[]> {
+    // v1: return seeded Zep-type rows. Swap to the real Zeps read API once a
+    // service token / read contract exists. Do NOT invent an unauthenticated call.
+  }
+  ```
+- Identity/SSO and per-user visibility filtering: v1 shows org-visible tools to everyone.
+  Leave a `visibility` column and a `canView()` seam, but don't build cross-app auth.
+
+## `tools` table (v1 fields)
+```
+id            uuid pk
+type          text   -- zep | skill | replit | claude-skill | mcp | app | docs | script | slack-bot
+title         text
+description   text
+tags          text[]
+owner         text
+source        text   -- 'seed' | 'manual' | 'zeps-sync'
+url           text   -- deeplink / external URL (where it lives)
+visibility    text   -- private | team | org  (default 'org' in v1)
+embedding     vector -- pgvector, from title+description+tags
+created_at    timestamptz
+updated_at    timestamptz
+```
+(Defer for v2: access prereqs, invocation facets, schedule, usage/health, cost, version,
+status/last_verified. Leave room but don't build them now.)
+
+## Acceptance test (v1 is done when)
+1. I open the app and see a chat prompt, not a search box.
+2. I type "I need to summarize support tickets each morning" → the agent replies and shows
+   2-4 relevant tools as cards, across mixed types.
+3. I click a card → it routes me to where the tool lives.
+4. I type something with no match → the agent offers to build it (suggesting a builder) or
+   to request it — in the same conversation.
+5. "+ Add a tool" → paste a URL → a new tool appears in the catalogue and is findable.
+
+## What Replit CANNOT do here (don't let it pretend)
+- It cannot create the Zeps read contract or SSO — those are external. Use the seed/stub.
+- It cannot make the old three-door flow "correct" — that design was retired on purpose.
