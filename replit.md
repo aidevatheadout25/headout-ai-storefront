@@ -7,6 +7,7 @@ A **chat-first meta-catalogue** of the internal AI tools, apps, skills, docs, pl
 - `pnpm --filter @workspace/api-server run dev` — run the API server (binds `PORT`)
 - `pnpm --filter @workspace/storefront run dev` — run the Vite frontend (binds `PORT`)
 - `pnpm run typecheck` — full typecheck across all packages
+- `pnpm --filter @workspace/api-server run test` — retrieval-quality + no-match regression checks for the chat (runs against the seeded DB; registered as the `test` validation step)
 - `pnpm run build` — typecheck + build all packages (needs `PORT` + `BASE_PATH`, injected by the platform)
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - `pnpm --filter @workspace/api-server exec tsx src/lib/seed.ts` — (re)seed ~25 tools with embeddings (idempotent)
