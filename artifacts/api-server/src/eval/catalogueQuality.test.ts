@@ -9,6 +9,12 @@
  * Run with: `pnpm --filter @workspace/api-server run test`
  * Requires: DATABASE_URL (seeded). The no-match block additionally needs the
  * Replit OpenAI AI integration env and is skipped when it is absent.
+ *
+ * Note: as of the pgvector HNSW (vector_cosine_ops) index on `tools.embedding`,
+ * `searchCatalogue` is served by an approximate-nearest-neighbour scan rather
+ * than a full table scan. These fixtures double as the retrieval sanity check
+ * that indexing did not change which tools surface; the index existence + the
+ * planner using it are pinned separately in catalogueIndex.test.ts.
  */
 import { test, before, describe } from "node:test";
 import assert from "node:assert/strict";

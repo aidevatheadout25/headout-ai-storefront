@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  index,
   pgTable,
   uuid,
   text,
@@ -43,7 +44,16 @@ export const toolsTable = pgTable("tools", {
   manageTokenHash: text("manage_token_hash"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => [
+  // Approximate-nearest-neighbour index for semantic search. HNSW with the
+  // cosine operator class so `1 - cosineDistance(embedding, query)` (i.e.
+  // ORDER BY embedding <=> query) can use the index instead of a full scan.
+  // Keeps chat retrieval fast as the catalogue grows to hundreds of tools.
+  index("tools_embedding_hnsw_idx").using(
+    "hnsw",
+    table.embedding.op("vector_cosine_ops"),
+  ),
+]);
 
 export const insertToolSchema = createInsertSchema(toolsTable).omit({
   id: true,

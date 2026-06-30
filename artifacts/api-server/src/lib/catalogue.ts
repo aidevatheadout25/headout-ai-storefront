@@ -4,7 +4,7 @@ import {
   type ToolRow,
   type InsertTool,
 } from "@workspace/db";
-import { and, cosineDistance, desc, eq, getTableColumns, sql } from "drizzle-orm";
+import { and, asc, cosineDistance, desc, eq, getTableColumns, sql } from "drizzle-orm";
 import { createHash, randomBytes } from "node:crypto";
 import { embed } from "./embeddings";
 
@@ -125,15 +125,17 @@ export async function searchCatalogue(
   if (!trimmed) return [];
 
   const queryEmbedding = await embed(trimmed);
-  const similarity = sql<number>`1 - (${cosineDistance(
-    toolsTable.embedding,
-    queryEmbedding,
-  )})`;
+  // Order by the raw cosine distance ascending (smaller = closer). This is the
+  // bare `embedding <=> query` form the pgvector HNSW (vector_cosine_ops) index
+  // can serve — ordering by `1 - distance` DESC would defeat the index. We still
+  // project `similarity = 1 - distance` so callers keep a 0..1 score.
+  const distance = cosineDistance(toolsTable.embedding, queryEmbedding);
+  const similarity = sql<number>`1 - (${distance})`;
 
   const rows = await db
     .select({ ...getTableColumns(toolsTable), similarity })
     .from(toolsTable)
-    .orderBy(desc(similarity))
+    .orderBy(asc(distance))
     .limit(k);
 
   return rows
