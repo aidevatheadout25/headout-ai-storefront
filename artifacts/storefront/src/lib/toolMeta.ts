@@ -7,6 +7,26 @@ export const STOREFRONT_SLACK_URL =
 /** Mock Slack channel for improvement requests — not email. */
 export const IMPROVEMENT_REQUEST_SLACK_URL = STOREFRONT_SLACK_URL;
 
+/**
+ * Builder options offered when the catalogue has no match. The concierge is not
+ * forced to Zeps — Zeps is one internal option among several public builders.
+ * (Zeps is rendered separately because its link is seeded with the user's ask.)
+ */
+export type BuilderOption = { id: string; label: string; url: string };
+export const BUILDER_OPTIONS: BuilderOption[] = [
+  { id: "replit", label: "Build on Replit", url: "https://replit.com" },
+  {
+    id: "claude-code",
+    label: "Build with Claude Code",
+    url: "https://www.anthropic.com/claude-code",
+  },
+  {
+    id: "claude-skill",
+    label: "Make a Claude skill",
+    url: "https://docs.claude.com/en/docs/agents-and-tools/agent-skills/overview",
+  },
+];
+
 const SUBMITTER_LABELS: Record<string, string> = {
   "alex-kim": "Alex Kim (@alex.kim)",
   "jordan-lee": "Jordan Lee (@jordan.lee)",

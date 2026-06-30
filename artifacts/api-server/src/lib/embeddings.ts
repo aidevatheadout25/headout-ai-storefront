@@ -2,10 +2,12 @@
  * Local, key-free text embeddings via @huggingface/transformers
  * (all-MiniLM-L6-v2, 384-dim, mean-pooled + normalized).
  *
- * Neither the OpenAI nor Gemini Replit AI integrations expose an embeddings
- * endpoint, so the catalogue's semantic search runs entirely on a local ONNX
- * model. The model weights are downloaded once from the HF hub and cached on
- * disk; the pipeline is lazily instantiated and memoized for the process.
+ * Both the OpenAI and Gemini Replit AI integrations explicitly list the
+ * embeddings API under "Unsupported Capabilities", so the catalogue's semantic
+ * search runs entirely on a local ONNX model — keeping it key-free rather than
+ * forcing the user to supply their own provider API key. The model weights are
+ * downloaded once from the HF hub and cached on disk; the pipeline is lazily
+ * instantiated and memoized for the process.
  */
 
 export const EMBEDDING_DIMENSIONS = 384;

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import Link from "@/compat/next-link";
 import { TypeTags } from "@/components/TypeTags";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -13,13 +14,54 @@ type ToolCardProps = {
   variant?: "default" | "catalog";
 };
 
+/**
+ * Card shell. When the tool is directly openable (live, open-access, safe
+ * http(s) link) the whole card routes the user OUT to where the tool lives,
+ * opening in a new tab. Otherwise — planned ideas, gated/sensitive access, or
+ * tools without a usable link — it falls back to the internal detail page.
+ */
+function CardShell({
+  openExternal,
+  href,
+  className,
+  children,
+}: {
+  openExternal: boolean;
+  href: string;
+  className: string;
+  children: ReactNode;
+}) {
+  if (openExternal) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={className}
+      >
+        {children}
+      </a>
+    );
+  }
+  return (
+    <Link href={href} className={className}>
+      {children}
+    </Link>
+  );
+}
+
 export function ToolCard({ tool, variant = "default" }: ToolCardProps) {
   const isPlanned = tool.status === "planned";
-  const showGoToTool = canOpenToolLink(tool);
+  const openExternal = canOpenToolLink(tool);
+  const href = openExternal ? tool.link : `/tools/${tool.id}`;
 
   if (variant === "catalog") {
     return (
-      <Link href={`/tools/${tool.id}`} className="tool-card tool-card--catalog">
+      <CardShell
+        openExternal={openExternal}
+        href={href}
+        className="tool-card tool-card--catalog"
+      >
         <div className="tool-card__header">
           <TypeTags types={tool.types} />
           <div className="tool-card__badges">
@@ -42,16 +84,16 @@ export function ToolCard({ tool, variant = "default" }: ToolCardProps) {
             <span className="tool-card__team t-label-sm">{tool.team}</span>
           </div>
           <span className="tool-card__cta t-cta-sm">
-            {isPlanned ? "View idea" : showGoToTool ? "Go to tool" : "View details"}
-            <Icon name="arrow-right" size={14} />
+            {isPlanned ? "View idea" : openExternal ? "Go to tool" : "View details"}
+            <Icon name={openExternal ? "globe" : "arrow-right"} size={14} />
           </span>
         </div>
-      </Link>
+      </CardShell>
     );
   }
 
   return (
-    <Link href={`/tools/${tool.id}`} className="tool-card">
+    <CardShell openExternal={openExternal} href={href} className="tool-card">
       <div className="tool-card__header">
         <TypeTags types={tool.types} />
         <div className="tool-card__badges">
@@ -69,6 +111,6 @@ export function ToolCard({ tool, variant = "default" }: ToolCardProps) {
           <span className="tool-card__team t-label-sm">{tool.team}</span>
         </div>
       </div>
-    </Link>
+    </CardShell>
   );
 }

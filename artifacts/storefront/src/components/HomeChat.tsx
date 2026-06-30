@@ -14,7 +14,7 @@ import {
   sendChat,
   type ChatTurn,
 } from "@/lib/api";
-import { STOREFRONT_SLACK_URL } from "@/lib/toolMeta";
+import { BUILDER_OPTIONS, STOREFRONT_SLACK_URL } from "@/lib/toolMeta";
 import { buildZepsBuilderUrl } from "@/lib/zeps";
 import type { Tool } from "@/lib/types";
 
@@ -206,8 +206,8 @@ export function HomeChat() {
                 {message.noMatch && (
                   <div className="chat-bubble__nomatch">
                     <p className="t-para-sm text-muted">
-                      Nothing in the catalogue matches yet. You can build it with
-                      Zeps, or request it from the team.
+                      Nothing in the catalogue matches yet. You could build it —
+                      with Zeps, Replit, or Claude — or request it from the team.
                     </p>
                     <div className="chat-bubble__nomatch-actions">
                       <ButtonLink
@@ -221,9 +221,20 @@ export function HomeChat() {
                         Build with Zeps
                         <Icon name="arrow-right" size={16} />
                       </ButtonLink>
+                      {BUILDER_OPTIONS.map((builder) => (
+                        <ButtonLink
+                          key={builder.id}
+                          href={builder.url}
+                          variant="secondary"
+                          size="sm"
+                          external
+                        >
+                          {builder.label}
+                        </ButtonLink>
+                      ))}
                       <ButtonLink
                         href={STOREFRONT_SLACK_URL}
-                        variant="secondary"
+                        variant="tertiary"
                         size="sm"
                         external
                       >
