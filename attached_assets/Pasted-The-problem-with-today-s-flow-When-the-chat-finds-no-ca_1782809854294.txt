@@ -1,0 +1,73 @@
+The problem with today's flow
+
+When the chat finds no catalogue match, it asks one or two shallow questions and immediately
+recommends a builder (e.g. "build it in Replit"). It does this even when:
+
+
+it never confirmed an existing tool doesn't already solve it,
+the "problem" answer is just a restatement of the mechanism, not a real scenario,
+the named systems (Slack, CRM, JourneyHQ, Meta Ads…) may have no usable API/access,
+"who uses it" contradicts the original problem (e.g. names a team, then says "just me").
+
+
+The recommendation ends up confident but ungrounded. Fix that with a gate.
+
+BUILD — a pre-recommendation gate (the agent must pass all 4 before recommending a builder)
+
+Add this as explicit steps in the chat agent's system prompt + loop. The agent may NOT output a
+build recommendation until all four are satisfied. Ask ONE question at a time, conversationally.
+
+
+Reuse check (already have the tool). Call search_catalogue on the need. If anything
+plausibly fits, show it and ask "does this already cover it?" before proceeding. Only continue
+to build if the user says no.
+One concrete scenario. Require a real moment, not a mechanism. Reject answers that just
+restate the solution ("it pulls status from everywhere"). A valid scenario names: a trigger
+("Monday 9am"), an actor, and a desired outcome ("see all 35 campaigns, one row each, RAG status
+per channel"). If the answer is a restatement, push back once: "That's how it'd work — give me
+one real moment where this hurts today."
+Per-system feasibility. For each system the user names (Slack / CRM / JourneyHQ / Meta Ads /
+etc.), ask whether we have API access or a connector for it, or whether it's manual-only today.
+Capture the answer per system. Treat "unsure / no API / manual-only" as a blocker to a fully
+automated build — it changes the recommendation (see below).
+Reconcile who. If the stated problem names people or a count (e.g. "Neha and George",
+"30–40 campaigns") that conflicts with the "who uses it" answer (e.g. "just me"), ask one
+question to reconcile. Don't silently collapse a team tool into a personal one.
+
+
+BUILD — builder-agnostic recommendation (replace "always Replit/always Zeps")
+
+After the gate, recommend the cheapest path that works, in this order:
+
+
+No-build / manual first — if feasibility (#3) is unproven for the systems that matter, or the
+need is one person / low frequency. Recommend a shared tracker (Sheet/Notion) or a Slack workflow,
+and automating only the feeds that do have APIs. Say plainly: "Don't build the full app yet."
+Claude skill — repeatable text-in/text-out, no shared UI.
+Replit app — needs a UI, integrations are confirmed-feasible, small user count.
+Zeps — no-code agent fits and the user wants conversational build.
+Real app / Platform — many users, production, or high-stakes data.
+
+
+Show a one-line rationale tied to what the user actually said (the scenario, the feasible systems,
+the reconciled audience). Never name a builder the feasibility check contradicts.
+
+KEEP (do not change)
+
+
+The chat front door, search_catalogue, tool cards, "+ Add a tool", seed data, the stack.
+The single-input conversational UX. The gate is extra questions, not new screens.
+
+
+Acceptance test (this change is done when)
+
+
+I describe a multi-system need with no catalogue match → the agent runs reuse-check, then asks
+for a concrete scenario, then asks feasibility per named system, then reconciles who — one
+question at a time — before any recommendation.
+If I answer the scenario question with a mechanism restatement, the agent pushes back once.
+If I say a key system is manual-only / no API, the agent recommends a manual-first or partial
+path and explicitly says not to build the full app yet — it does NOT recommend a full build.
+If the problem named a team but I say "just me", the agent asks one reconciling question.
+When feasibility is confirmed and a UI is needed, it recommends Replit (or the fitting builder)
+with a rationale that references my scenario and the confirmed systems — not a generic pitch.
