@@ -1,0 +1,75 @@
+# Replit prompt — let the concierge register a tool in chat
+
+Targeted change to the concierge agent only. Do NOT rebuild the app, change the stack, or touch
+catalogue search, tool cards, seed data, or the existing "+ Add a tool" button flow. Keep the
+single-input chat UX.
+
+## The bug
+Registration already exists in the product: the "Add a tool" affordance flips the input to
+paste-a-link mode and calls `addToolChat({url})` → `POST /tools/add-chat`, which infers and inserts
+the tool. But the **conversational concierge** (`api-server/src/lib/chatAgent.ts` → `runChat`) knows
+nothing about it. Its system prompt only covers (1) find an existing tool and (2) hand off to a
+builder. So when a user just talks to the concierge —
+
+> "Cool, I built it." … "How do I register it?"
+
+— the agent has no registration instruction and no register tool, so it dead-ends at "contact the
+platform team on Slack." A user who never notices the button literally cannot register by talking.
+
+## Fix — make the concierge aware of registration and able to start it in-thread
+
+Mirror the existing `hand_off_to_builder` pattern. Add a third path the agent can take.
+
+### 1. New tool + stage in `chatAgent.ts`
+- Add a `start_registration` function tool. The agent calls it when the user signals they've
+  already built/finished something and want to list/register/add it to the catalogue (e.g. "I built
+  X", "how do I register this", "add my tool", or they paste a link to a thing they made).
+  Arguments: `{ url?: string, name?: string }` — all optional; pass the link if the user gave one.
+- Extend `FunnelStage` with `"register"`. Add a `ChatResult` field
+  `registration: { url: string | null } | null` (null unless this turn started registration).
+- When `start_registration` is called, return `stage: "register"` with the captured url. The closing
+  message should be warm and plain: "You can register it right here — paste the link (or confirm the
+  one you gave) and I'll add it to the catalogue." Do NOT send them to Slack for registration.
+
+### 2. Update the system prompt
+Add a registration branch to the funnel rules: if the user indicates they have ALREADY built/finished
+a tool and want it listed/registered/added, do NOT treat it as a find or a build hand-off — call
+`start_registration` (with the link if provided) and tell them it happens right here. Slack is only a
+fallback for access/permissions questions, never the answer to "how do I register."
+
+### 3. Propagate the widened union (these files share the type — required or it won't compile)
+- `storefront/src/lib/api.ts` — the duplicated `BuilderId`/`FunnelStage` definitions: add
+  `"register"` to `FunnelStage` and the `registration` field to the chat result type.
+- `api-server/src/lib/conversations.ts` — `appendTurn` / read mapping persist `stage` and now
+  `registration`; widen the `stage` narrowing at the read site so `"register"` survives a round-trip.
+- `api-server/src/routes/chat.ts` — include `registration` in the persisted/returned payload.
+
+### 4. Render it in `HomeChat.tsx`
+When a message has `stage === "register"`, drive the EXISTING add-tool flow — do not build a new
+screen. Switch the composer into the existing paste-a-link mode and, if `registration.url` is
+present, pre-fill/submit it straight to `addToolChat` (the same call the "Add a tool" button uses).
+A pasted link mid-conversation that the agent routed to registration should reach `addToolChat`, not
+the LLM. Reuse the existing "already in the catalogue / added" result messages.
+
+## Out of scope
+- No new routes/screens/panels. Reuse `/tools/add-chat`, `addToolChat`, and the existing paste-link
+  composer mode.
+- No change to search, builder hand-off, tool cards, seed data, or stack.
+- No approval-queue or auth changes.
+
+## Acceptance test (done when)
+1. In normal chat I say "I built a tool, how do I register it?" → the concierge offers to register it
+   right here and asks for the link. It does NOT tell me to go to Slack.
+2. I paste the link in that same conversation → the tool is inferred and added (existing add-chat
+   flow), and I get the existing "Added **X** — View it →" confirmation.
+3. If I paste a link to something I built without asking → the concierge recognises it as a finished
+   tool and offers to register it, rather than searching or handing off to a builder.
+4. Asking "how do I register" still works from the "+ Add a tool" button exactly as before — that
+   path is unchanged.
+5. Existing find, build-gate, and no-match behaviours are unchanged; the build-gate funnel tests
+   still pass.
+
+## Add one test
+In `api-server/src/eval/catalogueQuality.test.ts`, add a case (in the AI-gated funnel describe block):
+a user message indicating they already built a tool and want to register it must return
+`stage === "register"` and must NOT return `stage === "handoff"` or a Slack-only message.
