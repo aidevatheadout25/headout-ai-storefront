@@ -3,33 +3,52 @@ import { openai, OPENAI_MODEL } from "./openaiClient";
 import { searchCatalogue, MIN_MATCH_SIMILARITY, type ApiTool } from "./catalogue";
 
 const MODEL = OPENAI_MODEL;
-const MAX_TURNS = 5;
+const MAX_TURNS = 8;
 
 export type ChatTurn = { role: "user" | "assistant"; content: string };
 
-/** The single best-fit builder the concierge can hand a scoped need off to. */
-export type BuilderId = "replit" | "claude-code" | "claude-skill" | "zeps";
+/**
+ * The recommendation the concierge makes at the end of the funnel.
+ *
+ * Cheapest-path ordering (ascending cost/complexity):
+ *   manual       — start without building; use a shared tracker, spreadsheet, or Slack workflow
+ *   claude-skill — a reusable Claude skill (text-in / text-out, no UI, no hosting)
+ *   replit       — full app or UI, confirmed integrations, small user count
+ *   zeps         — no-code conversational agent or workflow
+ *   real-app     — production-grade platform for many users / high-stakes
+ */
+export type BuilderId =
+  | "manual"
+  | "claude-skill"
+  | "replit"
+  | "claude-code"
+  | "zeps"
+  | "real-app";
 
 const BUILDER_IDS: BuilderId[] = [
+  "manual",
+  "claude-skill",
   "replit",
   "claude-code",
-  "claude-skill",
   "zeps",
+  "real-app",
 ];
 
 const BUILDER_LABELS: Record<BuilderId, string> = {
+  manual: "a manual-first approach (no build yet)",
+  "claude-skill": "a Claude skill",
   replit: "Replit",
   "claude-code": "Claude Code",
-  "claude-skill": "a Claude skill",
   zeps: "Zeps",
+  "real-app": "a full production platform",
 };
 
 /**
  * Where the build-gate funnel has landed for this reply:
  * - `chat`: a normal answer, clarifying question, match presentation, or one of
  *   the scoping questions — the build/Slack hand-off UI must NOT render.
- * - `handoff`: the funnel has cleared search + confirmation + scoping, so the
- *   hand-off UI may render with `recommendedBuilder` as the primary action.
+ * - `handoff`: the funnel has cleared all four gates, so the hand-off UI may
+ *   render with `recommendedBuilder` as the primary action.
  */
 export type FunnelStage = "chat" | "handoff";
 
@@ -40,7 +59,7 @@ export type ChatResult = {
    *  the UI on its own anymore — the hand-off UI is gated on `stage`. */
   noMatch: boolean;
   stage: FunnelStage;
-  /** Set only at the hand-off stage: the single best-fit builder, chosen by fit. */
+  /** Set only at the hand-off stage: the single best-fit path, chosen by cheapest-path-that-works. */
   recommendedBuilder: BuilderId | null;
   /** A concise build brief synthesised from the scoping answers, for pre-fill. */
   buildPrompt: string | null;
@@ -48,28 +67,51 @@ export type ChatResult = {
 
 const SYSTEM_PROMPT = `You are the concierge for the Headout AI Storefront — an internal meta-catalogue of the AI tools, apps, skills, docs, plugins, MCPs and Zeps that Headout teams have built.
 
-Your job is to help a teammate FIND an existing internal tool before anyone builds anything new. You are a router, not a runner: never execute, operate, or pretend to operate any tool — only point people to the right one. Building is the END of a funnel, never a first move.
+Your job is to help a teammate FIND an existing internal tool before anyone builds anything new. You are a router, not a runner: never execute, operate, or pretend to operate any tool — only point people to the right one. Building is the END of a four-gate funnel, never a first move.
 
-Follow this funnel STRICTLY, in order. Never skip a step.
+Follow this funnel STRICTLY, in order, one question at a time. Never skip a gate. Never bundle two questions into one message.
 
-1) ALWAYS SEARCH FIRST. For EVERY request — including an explicit "build me X" or "I want to make Y" — call search_catalogue before anything else. Rewrite vague asks into a concise capability description first. You may search again with different phrasing if results are weak. NEVER suggest or offer to build before you have searched.
+━━ GATE 1 — REUSE CHECK ━━
+For EVERY request — including an explicit "build me X" — call search_catalogue before anything else. Rewrite vague asks into a concise capability description first. You may search again with different phrasing if results are weak.
 
-2) IF MATCHES COME BACK, present them and ask whether one fits. Name each tool by its EXACT name from the results with a one-line reason it fits (at most 3, only genuine matches; the UI renders a card for every tool you name, so never name a tool you are not recommending). Then ask plainly: does one of these cover your need, or is what you want meaningfully different? Do NOT move toward building while a plausible match is unconfirmed.
+If matches come back: present them (at most 3, genuine matches only; name each by its EXACT name from the results with one line on why it fits — the UI renders a card for every tool you name). Then ask plainly: does one of these cover your need, or is what you want meaningfully different?
 
-3) ONLY WHEN NOTHING RELEVANT EXISTS, or the user says the matches don't fit, gather scope. Ask up to THREE short questions, ONE AT A TIME — wait for each answer before asking the next:
-   a) one concrete scenario it must handle,
-   b) what data / systems / tools it needs to touch,
-   c) who will use it and how often.
-   Do not bundle them into one message, and do not hand off before you have the answers.
+Do NOT move toward building while a plausible match is unconfirmed. Only proceed to Gate 2 when the user confirms nothing fits.
 
-4) ONLY AFTER you have the scoping answers, call hand_off_to_builder EXACTLY ONCE with the single best-fit builder and a one-line reason. Choose by fit — do NOT default to Zeps:
-   - replit: full apps, UIs, backends, databases, anything hosted.
-   - claude-code: code-heavy automation inside an existing repo / developer workflow.
-   - claude-skill: a reusable Claude skill/instruction packaged for teammates.
-   - zeps: a no-code conversational agent or workflow built and run in Zeps.
-   After the call, write ONE warm closing sentence naming the recommended builder and why, and note they can also request it from the platform team on Slack.
+━━ GATE 2 — CONCRETE SCENARIO ━━
+Ask: "What's ONE concrete scenario this must handle?" The answer must name a TRIGGER (what event starts it), an ACTOR (who does it), and a DESIRED OUTCOME (what the actor gets).
 
-Hard rules: never recommend building before searching; never call hand_off_to_builder before the scoping answers are in; never name or invent a tool that was not in the search results. If a request is genuinely ambiguous BEFORE you can even search, ask exactly one short clarifying question. Be concise and warm — no preamble, no markdown headers, and never claim to run a tool yourself.`;
+If the user restates the mechanism instead of a real moment — for example "it pulls status from everywhere" or "it aggregates data automatically" — push back EXACTLY ONCE: "Can you give me a specific moment? Something like: [actor] needs to [trigger], and wants [outcome]." Do NOT proceed until you have a real scenario or the user has failed the one pushback. If they fail the pushback, accept what you have and continue.
+
+━━ GATE 3 — FEASIBILITY ━━
+For every system or data source the user has named (CRM, Slack, Google Calendar, etc.), ask: "For [system], is there an API or connector you can use, or is it manual / export-only / unsure?"
+
+Ask about one system at a time if there are several. Record: confirmed-API, manual-only, or unsure.
+
+If ANY key system is manual-only or unsure, you must NOT recommend a full automated build. The right call is manual-first (shared tracker, spreadsheet, or Slack workflow), automating only the feeds that have confirmed APIs.
+
+━━ GATE 4 — AUDIENCE RECONCILIATION ━━
+If the user's original framing named a team, a department, or a headcount (e.g. "30 people", "the ops team") but a later answer says "just me" or "only I'll use it", ask ONE reconciling question: "Just to make sure — is this for you alone, or does the whole [team/group] need it?" Do not silently collapse a team need into a personal tool.
+
+━━ RECOMMENDATION ━━
+Only AFTER all four gates are resolved, call record_recommendation EXACTLY ONCE — including for the manual/no-build path. The tool call is required for EVERY recommendation, whether you are saying "build this" or "don't build this yet". Without the tool call the recommendation is lost and the UI cannot render it. Pick the CHEAPEST PATH THAT ACTUALLY WORKS — in this order:
+
+1. manual — when feasibility is unproven (manual-only or unsure systems) OR the audience is one person with low frequency. Tell the user plainly NOT to build the full app yet; recommend starting with a shared tracker, Slack workflow, or spreadsheet, and automating only what has a confirmed API.
+2. claude-skill — when the need is repeatable text-in / text-out with no UI and no live system integrations required.
+3. replit — when a UI is genuinely needed AND integrations are confirmed AND the user count is small.
+4. zeps — when the need is a no-code conversational agent or workflow.
+5. real-app — when there are many users, production requirements, or high-stakes data handling.
+
+NEVER name a builder the feasibility answers contradict (e.g. do not recommend a full automated app when a key system is manual-only). NEVER default to Zeps or Replit out of habit.
+
+After calling record_recommendation, write ONE warm closing sentence. It must name the recommended path AND reference the user's concrete scenario AND the feasible systems. If the recommendation is "manual", explicitly say not to build the full app yet and why. Also mention the platform team on Slack as an alternative.
+
+Hard rules:
+- Never recommend building before searching.
+- Never call record_recommendation before all four gates are resolved.
+- Never name or invent a tool that was not in the search results.
+- If a request is genuinely ambiguous BEFORE you can even search, ask exactly one short clarifying question.
+- Be concise and warm — no preamble, no markdown headers, never claim to run a tool yourself.`;
 
 const SEARCH_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: "function",
@@ -95,9 +137,9 @@ const SEARCH_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
 const HANDOFF_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: "function",
   function: {
-    name: "hand_off_to_builder",
+    name: "record_recommendation",
     description:
-      "Call this ONLY after you have (1) searched the catalogue, (2) confirmed nothing existing fits, and (3) collected the three scoping answers. It signals that the funnel has reached the build hand-off stage and records the single best-fit builder. Never call it before scoping is complete.",
+      "Record the final recommendation once all four gates are resolved: (1) reuse-check — user confirmed nothing existing fits, (2) concrete scenario with trigger+actor+outcome collected, (3) feasibility per named system captured (API confirmed or manual-only noted), (4) audience reconciled. REQUIRED for every outcome — including 'do not build yet' / manual-first paths. This is how the UI surfaces the recommendation; without this call the recommendation is invisible. Never call before all four gates are resolved.",
     parameters: {
       type: "object",
       properties: {
@@ -105,16 +147,17 @@ const HANDOFF_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
           type: "string",
           enum: BUILDER_IDS,
           description:
-            "The single best-fit builder chosen by fit (do NOT default to Zeps).",
+            "The cheapest path that actually works: manual > claude-skill > replit > claude-code > zeps > real-app. NEVER default to Zeps or Replit — pick by fit and feasibility.",
         },
         reason: {
           type: "string",
-          description: "One short sentence on why this builder fits the scoped need.",
+          description:
+            "One short sentence on why this path fits — must reference the user's concrete scenario AND the feasible systems AND the reconciled audience.",
         },
         prompt: {
           type: "string",
           description:
-            "A concise build brief synthesised from the scoping answers, used to pre-fill the builder.",
+            "A concise build brief synthesised from the scoping answers, used to pre-fill the builder (or empty string for the manual path).",
         },
       },
       required: ["builder", "reason", "prompt"],
@@ -142,8 +185,8 @@ function parseHandoff(rawArgs: string): Handoff {
   }
   const builder = BUILDER_IDS.includes(parsed.builder as BuilderId)
     ? (parsed.builder as BuilderId)
-    : // Never silently fall back to Zeps; default to the most general builder.
-      "replit";
+    : // Never silently fall back to a specific builder; use the most conservative default.
+      "manual";
   return {
     builder,
     reason: typeof parsed.reason === "string" ? parsed.reason : "",
@@ -190,6 +233,47 @@ export async function runChat(history: ChatTurn[]): Promise<ChatResult> {
     const toolCalls = choice.tool_calls ?? [];
     if (toolCalls.length === 0) {
       const message = choice.content ?? "";
+
+      // If the LLM gave a text response without calling record_recommendation,
+      // check whether the conversation has passed all four gates (no catalogue
+      // matches + enough user turns = scoping is done). If so, force one final
+      // call with tool_choice required so the recommendation is always recorded
+      // as a proper handoff and the UI renders the card.
+      if (handoff === null && found.size === 0) {
+        const userTurns = messages.filter((m) => m.role === "user").length;
+        if (userTurns >= 3) {
+          try {
+            const forced = await openai.chat.completions.create({
+              model: MODEL,
+              messages: [
+                ...messages,
+                {
+                  role: "system" as const,
+                  content:
+                    "All scoping information has been gathered. You MUST now call record_recommendation to register your recommendation — including if your recommendation is the manual/no-build path. The UI cannot surface the recommendation without this call.",
+                },
+              ],
+              tools: [HANDOFF_TOOL],
+              tool_choice: {
+                type: "function",
+                function: { name: "record_recommendation" },
+              },
+            });
+            const forcedChoice = forced.choices[0]?.message;
+            if (forcedChoice?.tool_calls) {
+              for (const call of forcedChoice.tool_calls) {
+                if (call.function.name === "record_recommendation") {
+                  handoff = parseHandoff(call.function.arguments);
+                  break;
+                }
+              }
+            }
+          } catch {
+            // Forced finalization failed — fall through with text-only result.
+          }
+        }
+      }
+
       // At hand-off the closing line need not re-name a tool, so don't gate the
       // returned tools on the message text — there are none to recommend.
       const recommended = handoff ? [] : pickRecommended(found, message);
@@ -199,14 +283,17 @@ export async function runChat(history: ChatTurn[]): Promise<ChatResult> {
     for (const call of toolCalls) {
       if (call.type !== "function") continue;
 
-      if (call.function.name === "hand_off_to_builder") {
+      if (call.function.name === "record_recommendation") {
         handoff = parseHandoff(call.function.arguments);
+        const isManual = handoff.builder === "manual";
         messages.push({
           role: "tool",
           tool_call_id: call.id,
           content: JSON.stringify({
             ok: true,
-            note: "Hand-off recorded. Write one warm closing sentence naming this builder and why, and mention the platform team on Slack as an alternative.",
+            note: isManual
+              ? "Recommendation recorded (manual-first path). Write one warm closing sentence telling the user NOT to build the full app yet, name the manual-first approach and why, reference their concrete scenario and the systems without confirmed APIs, and mention the platform team on Slack."
+              : "Recommendation recorded. Write one warm closing sentence naming this builder and why, referencing the user's concrete scenario and the confirmed systems, and mention the platform team on Slack as an alternative.",
           }),
         });
         continue;
@@ -248,10 +335,13 @@ export async function runChat(history: ChatTurn[]): Promise<ChatResult> {
 
   // Exhausted turns without a clean final answer — surface what we found.
   if (handoff) {
+    const isManual = handoff.builder === "manual";
     return buildResult(
-      `Based on what you've described, I'd build this with ${
-        BUILDER_LABELS[handoff.builder]
-      }${handoff.reason ? ` — ${handoff.reason}` : ""}. You can also request it from the platform team on Slack.`,
+      isManual
+        ? `I'd recommend starting without building yet${handoff.reason ? ` — ${handoff.reason}` : ""}. You can also request it from the platform team on Slack.`
+        : `Based on what you've described, I'd build this with ${
+            BUILDER_LABELS[handoff.builder]
+          }${handoff.reason ? ` — ${handoff.reason}` : ""}. You can also request it from the platform team on Slack.`,
       [],
       handoff,
     );

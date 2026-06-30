@@ -15,7 +15,13 @@ export type ChatTurn = {
 };
 
 /** The single best-fit builder the concierge hands a scoped need off to. */
-export type BuilderId = "replit" | "claude-code" | "claude-skill" | "zeps";
+export type BuilderId =
+  | "manual"
+  | "claude-skill"
+  | "replit"
+  | "claude-code"
+  | "zeps"
+  | "real-app";
 
 /** Build-gate funnel stage; only `handoff` renders the build/Slack hand-off UI. */
 export type FunnelStage = "chat" | "handoff";

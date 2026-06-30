@@ -18,30 +18,41 @@ export const IMPROVEMENT_REQUEST_SLACK_URL = STOREFRONT_SLACK_URL;
 export type BuilderOption = { id: BuilderId; label: string };
 
 const BUILDER_OPTIONS_MAP: Record<BuilderId, BuilderOption> = {
-  zeps: { id: "zeps", label: "Build with Zeps" },
+  manual: { id: "manual", label: "Start without building" },
+  "claude-skill": { id: "claude-skill", label: "Make a Claude skill" },
   replit: { id: "replit", label: "Build on Replit" },
   "claude-code": { id: "claude-code", label: "Build with Claude Code" },
-  "claude-skill": { id: "claude-skill", label: "Make a Claude skill" },
+  zeps: { id: "zeps", label: "Build with Zeps" },
+  "real-app": { id: "real-app", label: "Build a full platform" },
 };
 
+/**
+ * Display order for code/build builders (excludes manual — it gets its own UI treatment).
+ * Cheapest-path ordering: claude-skill → replit → claude-code → zeps → real-app.
+ */
 const BUILDER_ORDER: BuilderId[] = [
-  "zeps",
+  "claude-skill",
   "replit",
   "claude-code",
-  "claude-skill",
+  "zeps",
+  "real-app",
 ];
 
 /** The outbound link for a builder, seeded with the build brief where supported. */
 export function builderUrl(id: BuilderId, prompt: string): string {
   switch (id) {
+    case "manual":
+      return STOREFRONT_SLACK_URL;
+    case "claude-skill":
+      return "https://docs.claude.com/en/docs/agents-and-tools/agent-skills/overview";
     case "zeps":
       return buildZepsBuilderUrl({ prompt });
     case "replit":
       return "https://replit.com";
     case "claude-code":
       return "https://www.anthropic.com/claude-code";
-    case "claude-skill":
-      return "https://docs.claude.com/en/docs/agents-and-tools/agent-skills/overview";
+    case "real-app":
+      return STOREFRONT_SLACK_URL;
     default: {
       const _exhaustive: never = id;
       return _exhaustive;
@@ -52,15 +63,24 @@ export function builderUrl(id: BuilderId, prompt: string): string {
 /**
  * Ordered builders for the hand-off UI: the concierge's recommended builder
  * first (rendered as the primary action), then the rest in a stable order.
+ *
+ * When the recommendation is "manual", no code-builder buttons are shown —
+ * the caller should render the manual-first message and the Slack link only.
  */
 export function orderedBuilders(
   recommended: BuilderId | null | undefined,
 ): BuilderOption[] {
+  if (recommended === "manual") return [];
   const order =
     recommended && BUILDER_OPTIONS_MAP[recommended]
       ? [recommended, ...BUILDER_ORDER.filter((id) => id !== recommended)]
       : BUILDER_ORDER;
   return order.map((id) => BUILDER_OPTIONS_MAP[id]);
+}
+
+/** True when the recommendation is the manual/no-build path. */
+export function isManualPath(recommended: BuilderId | null | undefined): boolean {
+  return recommended === "manual";
 }
 
 const SUBMITTER_LABELS: Record<string, string> = {

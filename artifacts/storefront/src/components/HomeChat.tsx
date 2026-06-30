@@ -27,6 +27,7 @@ import { useAuthContext } from "@/lib/auth-context";
 import { useConversationsContext } from "@/lib/conversations-context";
 import {
   builderUrl,
+  isManualPath,
   orderedBuilders,
   STOREFRONT_SLACK_URL,
 } from "@/lib/toolMeta";
@@ -456,13 +457,14 @@ export function HomeChat() {
                 {message.stage === "handoff" &&
                   (() => {
                     const prompt = message.buildPrompt || message.userQuery || message.text;
+                    const manual = isManualPath(message.recommendedBuilder);
                     const builders = orderedBuilders(message.recommendedBuilder);
                     return (
                       <div className="chat-bubble__nomatch">
                         <p className="t-para-sm text-muted">
-                          Nothing existing fits, so here&apos;s how to build it.
-                          Your recommended builder is first — or request it from
-                          the team.
+                          {manual
+                            ? "Not ready to build yet — start with a lightweight approach first, then automate what's confirmed."
+                            : "Nothing existing fits, so here\u2019s how to build it. Your recommended path is first\u00a0\u2014 or request it from the team."}
                         </p>
                         <div className="chat-bubble__nomatch-actions">
                           {builders.map((builder, i) => (
@@ -479,11 +481,12 @@ export function HomeChat() {
                           ))}
                           <ButtonLink
                             href={STOREFRONT_SLACK_URL}
-                            variant="tertiary"
+                            variant={manual ? "primary" : "tertiary"}
                             size="sm"
                             external
                           >
-                            Request it on Slack
+                            {manual ? "Talk to the platform team on Slack" : "Request it on Slack"}
+                            {manual && <Icon name="arrow-right" size={16} />}
                           </ButtonLink>
                         </div>
                       </div>
