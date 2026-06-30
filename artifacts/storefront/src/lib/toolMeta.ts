@@ -170,6 +170,22 @@ export function formatAccessLevel(level: Tool["accessLevel"]): string {
   }
 }
 
+/** Human label for a tool's catalogue visibility. */
+export function formatVisibility(visibility: string): string {
+  switch (visibility) {
+    case "org":
+      return "Headout org";
+    case "public":
+      return "Public";
+    case "private":
+      return "Private";
+    default:
+      return visibility
+        ? visibility.charAt(0).toUpperCase() + visibility.slice(1)
+        : "Headout org";
+  }
+}
+
 export function compareLifecycle(a: Tool, b: Tool): number {
   return LIFECYCLE_RANK[a.status] - LIFECYCLE_RANK[b.status];
 }

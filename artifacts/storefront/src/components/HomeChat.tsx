@@ -10,6 +10,7 @@ import {
 import { Button, ButtonLink } from "@/components/Button";
 import { Icon } from "@/components/Icon";
 import { ToolCard } from "@/components/ToolCard";
+import { ToolDetailOverlay } from "@/components/ToolDetailOverlay";
 import { useRouter, useSearchParams } from "@/compat/next-navigation";
 import {
   addToolChat,
@@ -79,6 +80,9 @@ export function HomeChat() {
   const [addDraft, setAddDraft] = useState<ToolPreview | null>(null);
   const [addTurns, setAddTurns] = useState<AddChatTurn[]>([]);
   const [addConfirming, setAddConfirming] = useState(false);
+
+  // ── Tool detail overlay ───────────────────────────────────────────────────
+  const [detailToolId, setDetailToolId] = useState<string | null>(null);
 
   const started = messages.length > 0;
 
@@ -439,7 +443,12 @@ export function HomeChat() {
                 {message.tools && message.tools.length > 0 && (
                   <div className="chat-bubble__tools">
                     {message.tools.map((tool) => (
-                      <ToolCard key={tool.id} tool={tool} variant="catalog" />
+                      <ToolCard
+                        key={tool.id}
+                        tool={tool}
+                        variant="catalog"
+                        onSelect={(t) => setDetailToolId(t.id)}
+                      />
                     ))}
                   </div>
                 )}
@@ -587,6 +596,11 @@ export function HomeChat() {
           )}
         </div>
       </div>
+
+      <ToolDetailOverlay
+        toolId={detailToolId}
+        onClose={() => setDetailToolId(null)}
+      />
     </div>
   );
 }

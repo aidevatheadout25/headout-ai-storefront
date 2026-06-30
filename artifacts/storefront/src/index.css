@@ -5426,3 +5426,118 @@ html[data-theme="dark"] .landing__card {
   border-color: var(--divider-dark);
 }
 
+
+/* ======= Tool card as button (chat overlay trigger) ======= */
+.tool-card--button {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  border: 1px solid var(--divider-primary);
+  cursor: pointer;
+  appearance: none;
+}
+
+/* ======= Tool detail: where it lives ======= */
+.tool-detail__where {
+  color: var(--text-grey-2);
+  word-break: break-all;
+}
+
+/* ======= Tool detail overlay (chat-context drawer) ======= */
+.tool-overlay__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(0, 0, 0, 0.4);
+  animation: tool-overlay-fade 150ms var(--ease-functional-standard);
+}
+
+.tool-overlay__panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 301;
+  width: min(560px, 100vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-grey-1, var(--surface-white));
+  border-left: 1px solid var(--divider-primary);
+  box-shadow: var(--shadow-2);
+  animation: tool-overlay-slide 220ms var(--ease-functional-standard);
+}
+
+.tool-overlay__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-12);
+  padding: var(--space-16) var(--space-24);
+  border-bottom: 1px solid var(--divider-primary);
+  background: var(--surface-white);
+}
+
+.tool-overlay__title {
+  color: var(--text-grey-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.tool-overlay__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--divider-primary);
+  border-radius: var(--radius-8);
+  background: var(--surface-grey-1);
+  color: var(--text-grey-2);
+  cursor: pointer;
+  transition: background-color 150ms var(--ease-functional-standard);
+}
+
+.tool-overlay__close:hover {
+  background: var(--surface-grey-2);
+}
+
+.tool-overlay__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-24);
+}
+
+/* In the overlay the detail is single-column and not sticky. */
+.tool-detail--overlay .tool-detail__grid {
+  grid-template-columns: 1fr;
+}
+
+.tool-detail--overlay .sidebar-card {
+  position: static;
+  top: auto;
+}
+
+@keyframes tool-overlay-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes tool-overlay-slide {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+html[data-theme="dark"] .tool-overlay__panel,
+html[data-theme="dark"] .tool-overlay__bar {
+  background: var(--surface-grey-2);
+  border-color: var(--divider-dark);
+}

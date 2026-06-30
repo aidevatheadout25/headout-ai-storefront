@@ -161,6 +161,8 @@ export type Tool = {
   accessContact?: string;
   githubUrl?: string;
   linkUnreachable?: boolean;
+  /** Who can see this listing in the catalogue (e.g. "org", "private"). */
+  visibility: string;
   /** Lifecycle: planned → beta → live → deprecated → archived */
   status: ToolLifecycleStatus;
   approvalStatus: ApprovalStatus;
