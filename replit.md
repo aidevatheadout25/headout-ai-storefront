@@ -1,6 +1,6 @@
-# [Project name]
+# Headout AI Storefront
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+An internal registry and discovery layer for the tools, apps, skills, docs, plugins, and MCPs built at Headout — find what already exists, scope new ideas via a PM chat, and register your own back to the catalogue. Ported from an imported Next.js (Vercel/v0) project to a Vite + React artifact.
 
 ## Run & Operate
 
@@ -22,15 +22,23 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/storefront/` — the Vite + React frontend (the product). Routes in `src/App.tsx` (wouter), pages in `src/pages/`, ported components/lib/hooks/context under `src/`.
+- `artifacts/storefront/src/compat/` — `next-link` + `next-navigation` shims emulating Next.js APIs on wouter (see Architecture decisions).
+- `artifacts/storefront/src/index.css` — the app's plain-CSS styles (the original `globals.css`). Design tokens + Halyard fonts come from `artifacts/storefront/public/design-system/colors_and_type.css`, linked in `index.html`.
+- `artifacts/storefront/src/lib/mockData.ts` (+ sibling `mock*.ts`) — in-memory catalogue data; the app has no database.
+- `artifacts/api-server/src/routes/analyzeZep.ts` — the one ported API route (`POST /api/analyze-zep`), deterministic manifest → listing mapping.
+- `.migration-backup/` — the original imported Next.js source, kept as the parity reference.
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Ported from Next.js app-router to Vite + React via **compat shims**, not a component-by-component rewrite: `next/link` and `next/navigation` imports were `sed`-rewritten to `@/compat/*` shims built on wouter, so component bodies stay byte-identical to the original for visual + functional parity.
+- `notFound()` / `redirect()` throw a sentinel `NotFoundError` caught by a class error boundary in `App.tsx`; the boundary resets on route change. Next redirect pages became wouter `<Redirect>`.
+- No database — the catalogue is in-memory mock data held in React context (`src/context/AppContext.tsx`).
+- The single API route is a self-contained Express route (no OpenAPI/codegen) because the client uses a plain `fetch` and already falls back to the same deterministic mapping if the call fails.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Internal catalogue for Headout-built tools/apps/skills/docs/plugins/MCPs: a home PM-style chat to find or scope tools, a filterable/searchable registry (tools + building blocks), tool detail pages, a register-a-tool chat flow (incl. Zeps manifest ingest), my-activity, and admin approvals + metrics. Member/Admin role switch governs the catalogue.
 
 ## User preferences
 
@@ -38,7 +46,8 @@ _Populate as you build — explicit user instructions worth remembering across s
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- The design-system stylesheet is linked from `index.html` with a **relative** href (`./design-system/...`) so the `@font-face` relative `url()`s and the production base path resolve correctly — do not change it to a root-relative `/design-system/...`.
+- The client copy of `src/lib/analyzeZep.ts` had its `ai`-package import stripped (only `mapManifestDeterministic` is used). Re-adding an `import ... from "ai"` will break the Vite build unless the package is installed.
 
 ## Pointers
 

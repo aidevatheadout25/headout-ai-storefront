@@ -1,0 +1,1 @@
+- [Next.js → Vite compat shims](nextjs-to-vite-migration.md) — how next/link + next/navigation are emulated on wouter for the storefront migration.
