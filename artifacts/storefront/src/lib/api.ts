@@ -18,6 +18,24 @@ export type ChatResult = {
   message: string;
   tools: Tool[];
   noMatch: boolean;
+  conversationId: string;
+};
+
+export type ConversationSummary = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SavedMessage = {
+  id: string;
+  role: ChatRole;
+  text: string;
+  tools: Tool[] | null;
+  noMatch: boolean;
+  userQuery: string | null;
+  createdAt: string;
 };
 
 export class ApiError extends Error {
@@ -30,7 +48,7 @@ export class ApiError extends Error {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`);
+  const res = await fetch(`${API_BASE}${path}`, { credentials: "include" });
   if (!res.ok) {
     throw new ApiError(res.status, `Request failed (${res.status})`);
   }
@@ -46,6 +64,7 @@ async function mutateJson<T>(
   const res = await fetch(`${API_BASE}${path}`, {
     method,
     headers: { "content-type": "application/json", ...headers },
+    credentials: "include",
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -86,8 +105,29 @@ export async function fetchTool(id: string): Promise<Tool | null> {
   }
 }
 
-export async function sendChat(messages: ChatTurn[]): Promise<ChatResult> {
-  return postJson<ChatResult>("/chat", { messages });
+export async function sendChat(
+  messages: ChatTurn[],
+  conversationId?: string | null,
+): Promise<ChatResult> {
+  return postJson<ChatResult>("/chat", {
+    messages,
+    ...(conversationId ? { conversationId } : {}),
+  });
+}
+
+export async function fetchConversations(): Promise<ConversationSummary[]> {
+  const data = await getJson<{ conversations: ConversationSummary[] }>(
+    "/conversations",
+  );
+  return data.conversations;
+}
+
+export async function fetchConversation(
+  id: string,
+): Promise<{ conversation: ConversationSummary; messages: SavedMessage[] }> {
+  return getJson<{ conversation: ConversationSummary; messages: SavedMessage[] }>(
+    `/conversations/${encodeURIComponent(id)}`,
+  );
 }
 
 export async function addToolByUrl(url: string): Promise<Tool> {

@@ -3,6 +3,8 @@ import { usePathname, useSearchParams } from "@/compat/next-navigation";
 import { useEffect, useId, useMemo, useState, type MouseEvent } from "react";
 import { Icon } from "@/components/Icon";
 import { useRegistryNavigation } from "@/hooks/useRegistryNavigation";
+import { useAuthContext } from "@/lib/auth-context";
+import { useConversationsContext } from "@/lib/conversations-context";
 import {
   isCatalogueHrefActive,
   registryParamsFromSearchParams,
@@ -18,11 +20,23 @@ function navClass(active: boolean) {
   return `app-sidebar__link t-label-rg${active ? " app-sidebar__link--active" : ""}`;
 }
 
+function userDisplayName(user: {
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+}): string {
+  const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+  return name || user.email || "Signed in";
+}
+
 export function Sidebar() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const navigateRegistry = useRegistryNavigation();
   const cataloguePanelId = useId();
+  const { user, isAuthenticated, isLoading: authLoading, login, logout } =
+    useAuthContext();
+  const { conversations } = useConversationsContext();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [catalogueOpen, setCatalogueOpen] = useState(() =>
     pathname.startsWith("/registry"),
@@ -35,6 +49,9 @@ export function Sidebar() {
     () => registryParamsFromSearchParams(searchParams),
     [searchParams],
   );
+
+  const activeConversationId =
+    pathname === "/" ? searchParams.get("c") : null;
 
   useEffect(() => {
     if (pathname.startsWith("/registry")) {
@@ -69,7 +86,7 @@ export function Sidebar() {
     return isCatalogueHrefActive(pathname, registryParams, href);
   }
 
-  const homeActive = pathname === "/";
+  const homeActive = pathname === "/" && !activeConversationId;
 
   return (
     <>
@@ -192,7 +209,81 @@ export function Sidebar() {
               </li>
             </ul>
           </div>
+
+          {isAuthenticated && (
+            <div className="app-sidebar__section">
+              <div className="app-sidebar__chats-header">
+                <p className="app-sidebar__section-title t-label-sm">
+                  Your chats
+                </p>
+                <Link
+                  href="/"
+                  className="app-sidebar__new-chat t-label-sm"
+                  onClick={closeMobile}
+                >
+                  <span aria-hidden="true">+</span>
+                  New chat
+                </Link>
+              </div>
+              {conversations.length === 0 ? (
+                <p className="app-sidebar__chats-empty t-para-sm text-muted">
+                  No saved chats yet. Ask the concierge something to start one.
+                </p>
+              ) : (
+                <ul className="app-sidebar__list app-sidebar__chats-list">
+                  {conversations.map((conversation) => {
+                    const active = activeConversationId === conversation.id;
+                    return (
+                      <li key={conversation.id}>
+                        <Link
+                          href={`/?c=${encodeURIComponent(conversation.id)}`}
+                          className={navClass(active)}
+                          onClick={closeMobile}
+                          aria-current={active ? "page" : undefined}
+                          title={conversation.title}
+                        >
+                          <span className="app-sidebar__chat-title">
+                            {conversation.title}
+                          </span>
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          )}
         </nav>
+
+        <div className="app-sidebar__account">
+          {authLoading ? (
+            <p className="t-para-sm text-muted">Loading…</p>
+          ) : isAuthenticated && user ? (
+            <div className="app-sidebar__account-row">
+              <span
+                className="app-sidebar__account-name t-label-rg"
+                title={user.email ?? undefined}
+              >
+                {userDisplayName(user)}
+              </span>
+              <button
+                type="button"
+                className="app-sidebar__account-action t-label-sm"
+                onClick={logout}
+              >
+                Sign out
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="app-sidebar__account-action t-label-rg"
+              onClick={login}
+            >
+              Sign in
+            </button>
+          )}
+        </div>
       </aside>
     </>
   );

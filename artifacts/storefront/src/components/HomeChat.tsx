@@ -11,9 +11,12 @@ import { ToolCard } from "@/components/ToolCard";
 import { useRouter, useSearchParams } from "@/compat/next-navigation";
 import {
   addToolByUrl,
+  fetchConversation,
   sendChat,
   type ChatTurn,
 } from "@/lib/api";
+import { useAuthContext } from "@/lib/auth-context";
+import { useConversationsContext } from "@/lib/conversations-context";
 import { BUILDER_OPTIONS, STOREFRONT_SLACK_URL } from "@/lib/toolMeta";
 import { buildZepsBuilderUrl } from "@/lib/zeps";
 import type { Tool } from "@/lib/types";
@@ -41,12 +44,17 @@ function msgId(): string {
 export function HomeChat() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { isAuthenticated, isLoading: authLoading, login } = useAuthContext();
+  const { refresh: refreshConversations } = useConversationsContext();
   const scrollRef = useRef<HTMLDivElement>(null);
   const seededRef = useRef(false);
+  const loadedConvRef = useRef<string | null>(null);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [loadingConv, setLoadingConv] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [addOpen, setAddOpen] = useState(false);
@@ -80,7 +88,7 @@ export function HomeChat() {
           .map((m) => ({ role: m.role, content: m.text }));
         turns.push({ role: "user", content: text });
 
-        const result = await sendChat(turns);
+        const result = await sendChat(turns, conversationId);
         setMessages((prev) => [
           ...prev,
           {
@@ -92,13 +100,20 @@ export function HomeChat() {
             userQuery: text,
           },
         ]);
+
+        if (result.conversationId && result.conversationId !== conversationId) {
+          loadedConvRef.current = result.conversationId;
+          setConversationId(result.conversationId);
+          router.replace(`/?c=${encodeURIComponent(result.conversationId)}`);
+        }
+        void refreshConversations();
       } catch {
         setError("The catalogue assistant is unavailable right now — try again.");
       } finally {
         setSending(false);
       }
     },
-    [],
+    [conversationId, refreshConversations, router],
   );
 
   const submitText = useCallback(
@@ -119,14 +134,60 @@ export function HomeChat() {
     [runChat, sending],
   );
 
+  // Load (or reset) the conversation as the `?c=` param changes, but skip the
+  // one we just created locally so we don't clobber the in-progress thread.
   useEffect(() => {
-    if (seededRef.current) return;
+    if (!isAuthenticated) return;
+    const c = searchParams.get("c");
+    if (c === loadedConvRef.current) return;
+
+    if (!c) {
+      loadedConvRef.current = null;
+      setConversationId(null);
+      setMessages([]);
+      setError(null);
+      return;
+    }
+
+    loadedConvRef.current = c;
+    setLoadingConv(true);
+    setError(null);
+    fetchConversation(c)
+      .then(({ messages: saved }) => {
+        if (loadedConvRef.current !== c) return;
+        setConversationId(c);
+        setMessages(
+          saved.map((m) => ({
+            id: m.id,
+            role: m.role,
+            text: m.text,
+            tools: m.tools ?? undefined,
+            noMatch: m.noMatch,
+            userQuery: m.userQuery ?? undefined,
+          })),
+        );
+      })
+      .catch(() => {
+        if (loadedConvRef.current !== c) return;
+        setError("Couldn't open that conversation.");
+        setMessages([]);
+        setConversationId(null);
+      })
+      .finally(() => {
+        if (loadedConvRef.current === c) setLoadingConv(false);
+      });
+  }, [searchParams, isAuthenticated]);
+
+  // Optional deep-link: `/?q=...` seeds the first message into a fresh chat.
+  useEffect(() => {
+    if (seededRef.current || !isAuthenticated) return;
+    if (searchParams.get("c")) return;
     const q = searchParams.get("q");
     if (q && q.trim()) {
       seededRef.current = true;
       submitText(q);
     }
-  }, [searchParams, submitText]);
+  }, [searchParams, isAuthenticated, submitText]);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -158,10 +219,44 @@ export function HomeChat() {
     }
   }
 
+  if (authLoading) {
+    return (
+      <div className="home-chat">
+        <div className="home-chat__thread">
+          <div className="home-chat__empty">
+            <p className="home-chat__intro t-para-md">Loading…</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="home-chat">
+        <div className="home-chat__thread">
+          <div className="home-chat__empty">
+            <h1 className="home-chat__heading t-display-xs">
+              Sign in to find your tools
+            </h1>
+            <p className="home-chat__intro t-para-md">
+              Describe a task and I&apos;ll find the internal AI tool that already
+              does it. Sign in to start chatting — your conversations are saved to
+              your account so you can pick up where you left off on any device.
+            </p>
+            <div className="home-chat__starters">
+              <Button onClick={login}>Sign in to continue</Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="home-chat">
       <div className="home-chat__thread" ref={scrollRef}>
-        {!started && (
+        {!started && !loadingConv && (
           <div className="home-chat__empty">
             <h1 className="home-chat__heading t-display-xs">
               What are you trying to do?
@@ -183,6 +278,12 @@ export function HomeChat() {
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {loadingConv && (
+          <div className="home-chat__empty">
+            <p className="home-chat__intro t-para-md">Opening conversation…</p>
           </div>
         )}
 

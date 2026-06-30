@@ -13,6 +13,9 @@
       "path": "./lib/api-zod"
     },
     {
+      "path": "./lib/replit-auth-web"
+    },
+    {
       "path": "./lib/integrations-openai-ai-server"
     }
   ]

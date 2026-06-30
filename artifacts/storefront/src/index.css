@@ -259,6 +259,81 @@ img {
   }
 }
 
+.app-sidebar__chats-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
+
+.app-sidebar__new-chat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-8);
+  border-radius: var(--radius-8);
+  color: var(--text-primary);
+  background: var(--surface-primary-1);
+  font-weight: var(--fw-medium);
+  transition: background-color 150ms var(--ease-functional-standard);
+}
+
+.app-sidebar__new-chat:hover {
+  background: var(--surface-primary-2, var(--surface-primary-1));
+}
+
+.app-sidebar__chats-empty {
+  margin: var(--space-4) 0 0;
+  padding: 0 var(--space-8);
+}
+
+.app-sidebar__chats-list {
+  margin-top: var(--space-4);
+}
+
+.app-sidebar__chat-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-sidebar__account {
+  flex-shrink: 0;
+  padding: var(--space-12) var(--space-16);
+  border-top: 1px solid var(--divider-primary);
+}
+
+.app-sidebar__account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
+
+.app-sidebar__account-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-grey-1);
+}
+
+.app-sidebar__account-action {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  padding: var(--space-4) var(--space-8);
+  border-radius: var(--radius-8);
+  color: var(--text-grey-2);
+  cursor: pointer;
+  transition: background-color 150ms var(--ease-functional-standard);
+}
+
+.app-sidebar__account-action:hover {
+  background: var(--surface-grey-2);
+  color: var(--text-grey-1);
+}
+
 .app-sidebar__catalogue-list .app-sidebar__link {
   padding: var(--space-8) var(--space-12);
 }

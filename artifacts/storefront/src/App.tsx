@@ -1,6 +1,8 @@
 import { Component, type ReactNode } from "react";
 import { Switch, Route, Redirect, Router as WouterRouter, useSearch } from "wouter";
 import { Sidebar } from "@/components/Sidebar";
+import { AuthProvider } from "@/lib/auth-context";
+import { ConversationsProvider } from "@/lib/conversations-context";
 import { NotFoundError } from "@/compat/next-navigation";
 import HomePage from "@/pages/home";
 import RegistryPage from "@/pages/registry";
@@ -82,14 +84,18 @@ function RoutedMain() {
 function App() {
   return (
     <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-      <div className="app-shell">
-        <Sidebar />
-        <div className="app-content">
-          <main className="app-main">
-            <RoutedMain />
-          </main>
-        </div>
-      </div>
+      <AuthProvider>
+        <ConversationsProvider>
+          <div className="app-shell">
+            <Sidebar />
+            <div className="app-content">
+              <main className="app-main">
+                <RoutedMain />
+              </main>
+            </div>
+          </div>
+        </ConversationsProvider>
+      </AuthProvider>
     </WouterRouter>
   );
 }
