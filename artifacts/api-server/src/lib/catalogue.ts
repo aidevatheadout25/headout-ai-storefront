@@ -352,6 +352,27 @@ export async function getZepsTools(): Promise<ApiTool[]> {
   return listTools({ type: "zep" });
 }
 
+/**
+ * Distinct catalogue tags ordered by frequency (most common first). Read-only;
+ * used to bias the add-tool LLM toward reusing existing facets instead of
+ * minting near-synonyms. Aggregated in JS — the catalogue is small and this
+ * keeps the unnest/group-by off the hot search path.
+ */
+export async function fetchTagVocabulary(): Promise<string[]> {
+  const rows = await db.select({ tags: toolsTable.tags }).from(toolsTable);
+  const freq = new Map<string, number>();
+  for (const row of rows) {
+    for (const raw of row.tags ?? []) {
+      const tag = raw.trim().toLowerCase();
+      if (!tag) continue;
+      freq.set(tag, (freq.get(tag) ?? 0) + 1);
+    }
+  }
+  return [...freq.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([tag]) => tag);
+}
+
 export async function countTools(): Promise<number> {
   const [{ count }] = await db
     .select({ count: sql<number>`count(*)::int` })

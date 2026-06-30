@@ -5,6 +5,7 @@ import type OpenAI from "openai";
 import {
   claimTool,
   DuplicateToolError,
+  fetchTagVocabulary,
   findToolByUrl,
   getToolById,
   getToolRowById,
@@ -13,6 +14,14 @@ import {
   listTools,
   updateTool,
 } from "../lib/catalogue";
+import {
+  hasTooFewTags,
+  MAX_TAGS,
+  MIN_TAGS,
+  normalizeTags,
+  renderTagVocabulary,
+  TAG_POLICY_PROMPT,
+} from "../lib/tagPolicy";
 import { inferToolFromUrl, isZepsUrl, type InferredTool } from "../lib/inferTool";
 import { logger } from "../lib/logger";
 import { openai, OPENAI_MODEL } from "../lib/openaiClient";
@@ -191,6 +200,9 @@ function buildOpeningMessage(preview: InferredTool, lowConfidence: boolean): str
   if (lowConfidence) {
     return `I couldn't get much from that page. What does this tool do, and which team owns it?`;
   }
+  if (hasTooFewTags(preview.tags ?? [])) {
+    return `I found **${preview.title}** — looks like a ${preview.type} from the ${preview.team} team. I couldn't pin down enough specific tags, though — what systems, data, or function does it cover?`;
+  }
   return `I found **${preview.title}** — looks like a ${preview.type} from the ${preview.team} team. Does that sound right, or anything to correct?`;
 }
 
@@ -330,6 +342,8 @@ router.post(
         .json({ error: "preview is required for subsequent turns" });
     }
 
+    const vocabulary = await fetchTagVocabulary();
+
     const systemPrompt = `You are helping a Headout teammate add an internal tool to the AI catalogue. You have inferred some metadata from the URL and need to confirm or fill in any gaps.
 
 Current draft:
@@ -343,9 +357,12 @@ Current draft:
 Valid types: ${TOOL_TYPES_LIST}
 Valid teams: ${TEAMS_LIST}
 
+${TAG_POLICY_PROMPT}
+Existing catalogue tags (reuse these before inventing new ones): ${renderTagVocabulary(vocabulary)}
+
 Rules:
 - Be direct and brief. One sentence, one question per reply. No bullet points. No markdown headers.
-- Apply any corrections immediately to the draft before finalising.
+- Apply any corrections immediately to the draft before finalising. When the user edits tags, keep them compliant with the tagging policy above (never accept a banned generic tag or a non-kebab-case tag verbatim).
 - When the user confirms (e.g. "yes", "looks good", or supplies the last missing detail), call finalize_tool right away. Do not ask again after they've said yes.`;
 
     try {
@@ -374,12 +391,22 @@ Rules:
         } catch {
           // keep empty
         }
+        const finalTags = normalizeTags(finalArgs.tags ?? clientPreview.tags);
+        // Don't finalise below the policy minimum — keep the conversation open
+        // and ask for more specific facets instead of saving a weak entry.
+        if (hasTooFewTags(finalTags)) {
+          return res.status(200).json({
+            ready: false,
+            message: `Before I add this I need at least ${MIN_TAGS} specific tags (the systems, data, or function it covers) — what does this tool work with?`,
+            preview: { ...clientPreview, tags: finalTags },
+          });
+        }
         const finalPreview: ToolDraftPayload = {
           type: finalArgs.type ?? clientPreview.type,
           title: finalArgs.title ?? clientPreview.title,
           oneLiner: finalArgs.oneLiner ?? clientPreview.oneLiner,
           description: finalArgs.description ?? clientPreview.description,
-          tags: finalArgs.tags ?? clientPreview.tags,
+          tags: finalTags,
           team: finalArgs.team ?? clientPreview.team,
           url,
         };
@@ -438,6 +465,14 @@ router.post("/tools", async (req: Request, res: Response) => {
       .json({ error: "Only http and https URLs are allowed" });
   }
 
+  // Final policy backstop: stored tags must satisfy the 3–6 specific-facet rule.
+  const normalizedTags = normalizeTags(data.tags);
+  if (hasTooFewTags(normalizedTags)) {
+    return res.status(400).json({
+      error: `Tags must be ${MIN_TAGS}–${MAX_TAGS} specific facets (e.g. the systems, team, or function it covers).`,
+    });
+  }
+
   try {
     const existing = await findToolByUrl(data.url);
     if (existing) {
@@ -463,7 +498,7 @@ router.post("/tools", async (req: Request, res: Response) => {
       title: data.title,
       oneLiner: data.oneLiner,
       description: data.description,
-      tags: data.tags,
+      tags: normalizedTags,
       team: data.team,
       url: data.url,
       ownerName: "",

@@ -1,6 +1,14 @@
 import { openai, OPENAI_MODEL } from "./openaiClient";
 import type { InsertTool } from "@workspace/db";
 import { safeFetch } from "./urlGuard";
+import { fetchTagVocabulary } from "./catalogue";
+import {
+  MAX_TAGS,
+  MIN_TAGS,
+  renderTagVocabulary,
+  resolveInferredTags,
+  TAG_POLICY_PROMPT,
+} from "./tagPolicy";
 
 const MODEL = OPENAI_MODEL;
 
@@ -193,7 +201,10 @@ function renderSignals(signals: PageSignals): string {
  */
 export async function inferToolFromUrl(url: string): Promise<InferToolResult> {
   const zep = isZepsUrl(url);
-  const signals = await fetchPageSignals(url);
+  const [signals, vocabulary] = await Promise.all([
+    fetchPageSignals(url),
+    fetchTagVocabulary(),
+  ]);
   const usableSignal = hasUsableSignal(signals);
 
   const completion = await openai.chat.completions.create({
@@ -208,11 +219,12 @@ export async function inferToolFromUrl(url: string): Promise<InferToolResult> {
           "description, site name, and visible text). Do NOT infer what the tool does from " +
           "the URL, its slug, or its path — if the signals do not state what it does, do not " +
           "invent specifics. The one-liner is one factual sentence grounded in the signals. " +
-          "Pick 3-6 lowercase capability tags. If unsure of the team, choose Platform. " +
+          "If unsure of the team, choose Platform. " +
           "Set lowConfidence to true whenever the signals are too thin to classify confidently " +
           "(for example an almost-empty client-rendered page). When lowConfidence is true, give a " +
           "minimal best-effort guess from the title/site name and keep the description short and " +
-          "generic rather than fabricating capabilities.",
+          "generic rather than fabricating capabilities.\n\n" +
+          TAG_POLICY_PROMPT,
       },
       {
         role: "user",
@@ -222,7 +234,9 @@ export async function inferToolFromUrl(url: string): Promise<InferToolResult> {
           usableSignal
             ? ""
             : "NOTE: the page returned almost no readable content. Treat this as low confidence.\n"
-        }Page signals:\n${renderSignals(signals)}`,
+        }Existing catalogue tags (reuse these before inventing new ones): ${renderTagVocabulary(
+          vocabulary,
+        )}\nPage signals:\n${renderSignals(signals)}`,
       },
     ],
   });
@@ -238,12 +252,20 @@ export async function inferToolFromUrl(url: string): Promise<InferToolResult> {
     lowConfidence: boolean;
   };
 
+  // Guarantee a policy-compliant tag set: if the first proposal normalizes to
+  // fewer than MIN_TAGS (e.g. it was all banned/generic), reprompt once for
+  // specific facets. If it still falls short, surface it as low confidence so
+  // the reviewer/chat fills the gap rather than storing a weak entry.
+  const { tags, belowMin } = await resolveInferredTags(parsed.tags, () =>
+    regenerateTags(url, parsed, signals, vocabulary),
+  );
+
   const preview: InferredTool = {
     type: zep ? "zep" : parsed.type,
     title: parsed.title,
     oneLiner: parsed.oneLiner,
     description: parsed.description,
-    tags: parsed.tags ?? [],
+    tags,
     team: parsed.team || "Platform",
     url,
     ownerName: "",
@@ -257,5 +279,56 @@ export async function inferToolFromUrl(url: string): Promise<InferToolResult> {
     accessLevel: "open",
   };
 
-  return { preview, lowConfidence: !usableSignal || parsed.lowConfidence };
+  return {
+    preview,
+    lowConfidence: !usableSignal || parsed.lowConfidence || belowMin,
+  };
+}
+
+const TAGS_SCHEMA = {
+  name: "tool_tags",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: { tags: { type: "array", items: { type: "string" } } },
+    required: ["tags"],
+  },
+} as const;
+
+/**
+ * Focused recovery reprompt: ask only for a fresh tag set when the first
+ * inference yielded too few specific facets. Grounds the model in the same
+ * signals + existing vocabulary and restates the policy with extra emphasis on
+ * the banned list and the {@link MIN_TAGS}–{@link MAX_TAGS} count.
+ */
+async function regenerateTags(
+  url: string,
+  parsed: { title: string; oneLiner: string; description: string },
+  signals: PageSignals,
+  vocabulary: string[],
+): Promise<string[]> {
+  const completion = await openai.chat.completions.create({
+    model: MODEL,
+    response_format: { type: "json_schema", json_schema: TAGS_SCHEMA },
+    messages: [
+      {
+        role: "system",
+        content:
+          "You assign catalogue tags for an internal Headout AI tool. Return ONLY tags. " +
+          `You MUST return between ${MIN_TAGS} and ${MAX_TAGS} SPECIFIC facet tags — never the banned generic words. ` +
+          "Ground the tags in the supplied details and page signals; prefer existing vocabulary.\n\n" +
+          TAG_POLICY_PROMPT,
+      },
+      {
+        role: "user",
+        content: `URL: ${url}\nTitle: ${parsed.title}\nOne-liner: ${parsed.oneLiner}\nDescription: ${parsed.description}\nExisting catalogue tags (reuse these before inventing new ones): ${renderTagVocabulary(
+          vocabulary,
+        )}\nPage signals:\n${renderSignals(signals)}`,
+      },
+    ],
+  });
+  const raw = completion.choices[0]?.message?.content ?? "{}";
+  const out = JSON.parse(raw) as { tags?: unknown };
+  return Array.isArray(out.tags) ? (out.tags as string[]) : [];
 }
