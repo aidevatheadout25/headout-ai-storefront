@@ -62,6 +62,7 @@ export function HomeChat() {
   const [addBusy, setAddBusy] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   const [addedTool, setAddedTool] = useState<Tool | null>(null);
+  const [addedDuplicate, setAddedDuplicate] = useState(false);
 
   const started = messages.length > 0;
 
@@ -204,9 +205,11 @@ export function HomeChat() {
     setAddBusy(true);
     setAddError(null);
     setAddedTool(null);
+    setAddedDuplicate(false);
     try {
-      const tool = await addToolByUrl(url);
+      const { tool, duplicate } = await addToolByUrl(url);
       setAddedTool(tool);
+      setAddedDuplicate(duplicate);
       setAddUrl("");
     } catch (err) {
       setAddError(
@@ -437,7 +440,16 @@ export function HomeChat() {
               {addedTool && (
                 <div className="home-chat__add-success">
                   <p className="t-para-sm" role="status">
-                    Added <strong>{addedTool.name}</strong> to the catalogue.
+                    {addedDuplicate ? (
+                      <>
+                        <strong>{addedTool.name}</strong> is already in the
+                        catalogue.
+                      </>
+                    ) : (
+                      <>
+                        Added <strong>{addedTool.name}</strong> to the catalogue.
+                      </>
+                    )}
                   </p>
                   <Button
                     variant="secondary"

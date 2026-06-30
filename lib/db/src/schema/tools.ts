@@ -5,6 +5,8 @@ import {
   uuid,
   text,
   timestamp,
+  boolean,
+  uniqueIndex,
   vector,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
@@ -20,40 +22,56 @@ export const EMBEDDING_DIMENSIONS = 384;
  * (seed | manual | zeps-sync) and `visibility` is the SSO/visibility seam
  * (default 'org').
  */
-export const toolsTable = pgTable("tools", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  type: text("type").notNull(),
-  title: text("title").notNull(),
-  oneLiner: text("one_liner").notNull().default(""),
-  description: text("description").notNull().default(""),
-  tags: text("tags")
-    .array()
-    .notNull()
-    .default(sql`'{}'::text[]`),
-  ownerName: text("owner_name").notNull().default(""),
-  ownerSlackId: text("owner_slack_id").notNull().default(""),
-  team: text("team").notNull().default("Platform"),
-  url: text("url").notNull().default(""),
-  source: text("source").notNull().default("manual"),
-  visibility: text("visibility").notNull().default("org"),
-  status: text("status").notNull().default("live"),
-  accessLevel: text("access_level").notNull().default("open"),
-  embedding: vector("embedding", { dimensions: EMBEDDING_DIMENSIONS }),
-  // sha256 hex of the owner's secret manage key. Null while a tool is
-  // unclaimed; set on claim. Gates owner-scoped edits — never exposed to clients.
-  manageTokenHash: text("manage_token_hash"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
-}, (table) => [
-  // Approximate-nearest-neighbour index for semantic search. HNSW with the
-  // cosine operator class so `1 - cosineDistance(embedding, query)` (i.e.
-  // ORDER BY embedding <=> query) can use the index instead of a full scan.
-  // Keeps chat retrieval fast as the catalogue grows to hundreds of tools.
-  index("tools_embedding_hnsw_idx").using(
-    "hnsw",
-    table.embedding.op("vector_cosine_ops"),
-  ),
-]);
+export const toolsTable = pgTable(
+  "tools",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    type: text("type").notNull(),
+    title: text("title").notNull(),
+    oneLiner: text("one_liner").notNull().default(""),
+    description: text("description").notNull().default(""),
+    tags: text("tags")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    ownerName: text("owner_name").notNull().default(""),
+    ownerSlackId: text("owner_slack_id").notNull().default(""),
+    team: text("team").notNull().default("Platform"),
+    url: text("url").notNull().default(""),
+    // Canonical form of `url`, used to detect duplicate submissions. See
+    // normalizeUrl in the api-server.
+    normalizedUrl: text("normalized_url").notNull().default(""),
+    // True once an owner has confirmed the entry. Seeded/curated tools are
+    // verified; URL-submitted tools start unverified until claimed.
+    verified: boolean("verified").notNull().default(false),
+    source: text("source").notNull().default("manual"),
+    visibility: text("visibility").notNull().default("org"),
+    status: text("status").notNull().default("live"),
+    accessLevel: text("access_level").notNull().default("open"),
+    embedding: vector("embedding", { dimensions: EMBEDDING_DIMENSIONS }),
+    // sha256 hex of the owner's secret manage key. Null while a tool is
+    // unclaimed; set on claim. Gates owner-scoped edits — never exposed to clients.
+    manageTokenHash: text("manage_token_hash"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    // Approximate-nearest-neighbour index for semantic search. HNSW with the
+    // cosine operator class so `1 - cosineDistance(embedding, query)` (i.e.
+    // ORDER BY embedding <=> query) can use the index instead of a full scan.
+    // Keeps chat retrieval fast as the catalogue grows to hundreds of tools.
+    index("tools_embedding_hnsw_idx").using(
+      "hnsw",
+      table.embedding.op("vector_cosine_ops"),
+    ),
+    // Partial unique index: dedup is enforced at the DB level so concurrent
+    // submissions of the same URL can't both insert. Empty normalized_url
+    // values (unparseable/blank) are excluded so they never collide.
+    uniqueIndex("tools_normalized_url_unique")
+      .on(table.normalizedUrl)
+      .where(sql`${table.normalizedUrl} <> ''`),
+  ],
+);
 
 export const insertToolSchema = createInsertSchema(toolsTable).omit({
   id: true,

@@ -3,6 +3,8 @@ import { timingSafeEqual } from "node:crypto";
 import { z } from "zod/v4";
 import {
   claimTool,
+  DuplicateToolError,
+  findToolByUrl,
   getToolById,
   getToolRowById,
   hashManageToken,
@@ -12,7 +14,12 @@ import {
 } from "../lib/catalogue";
 import { inferToolFromUrl } from "../lib/inferTool";
 import { logger } from "../lib/logger";
-import { assertSafePublicUrl, UnsafeUrlError } from "../lib/urlGuard";
+import {
+  assertSafePublicUrl,
+  isSafeLinkScheme,
+  UnsafeUrlError,
+} from "../lib/urlGuard";
+import { rateLimit } from "../middlewares/rateLimit";
 import type { ToolRow } from "@workspace/db";
 
 const router: IRouter = Router();
@@ -72,6 +79,13 @@ function hasValidAdminToken(token: string | undefined): boolean {
   return safeEqual(token, expected);
 }
 
+/**
+ * Abuse guard for the public add-by-URL endpoint: at most 10 submissions per
+ * client every 10 minutes. Each submission triggers an outbound fetch + an LLM
+ * call, so this also protects cost and the catalogue from a flood of entries.
+ */
+const addToolRateLimit = rateLimit({ limit: 10, windowMs: 10 * 60 * 1000 });
+
 /** GET /api/tools?type=app — read-only browse of the catalogue. */
 router.get("/tools", async (req: Request, res: Response) => {
   const typeParam = req.query.type;
@@ -98,27 +112,58 @@ router.get("/tools/:id", async (req: Request, res: Response) => {
 });
 
 /** POST /api/tools { url } — add a tool by URL; metadata inferred by the LLM. */
-router.post("/tools", async (req: Request, res: Response) => {
-  const url = typeof req.body?.url === "string" ? req.body.url.trim() : "";
-  if (!url) return res.status(400).json({ error: "url is required" });
-  try {
-    await assertSafePublicUrl(url);
-  } catch (err) {
-    if (err instanceof UnsafeUrlError) {
-      return res.status(400).json({ error: err.message });
-    }
-    return res.status(400).json({ error: "url is not a valid URL" });
-  }
+router.post(
+  "/tools",
+  addToolRateLimit,
+  async (req: Request, res: Response) => {
+    const url = typeof req.body?.url === "string" ? req.body.url.trim() : "";
+    if (!url) return res.status(400).json({ error: "url is required" });
 
-  try {
-    const inferred = await inferToolFromUrl(url);
-    const tool = await insertTool(inferred);
-    return res.status(201).json({ tool });
-  } catch (err) {
-    logger.error({ err }, "Failed to add tool by URL");
-    return res.status(500).json({ error: "Failed to add tool" });
-  }
-});
+    // Cheap scheme check up front — no network. Rejects javascript:/file:/etc.
+    if (!isSafeLinkScheme(url)) {
+      return res
+        .status(400)
+        .json({ error: "Only http and https URLs are allowed" });
+    }
+
+    try {
+      // Dedup first — a pure string lookup, no network. If this URL (normalized)
+      // is already catalogued, return the existing entry instead of creating a
+      // duplicate, and skip the outbound fetch + LLM call entirely.
+      const existing = await findToolByUrl(url);
+      if (existing) {
+        return res.status(200).json({ tool: existing, duplicate: true });
+      }
+    } catch (err) {
+      logger.error({ err }, "Dedup lookup failed");
+      return res.status(500).json({ error: "Failed to add tool" });
+    }
+
+    // Only genuinely new URLs reach the network: validate against SSRF before
+    // fetching the page for the LLM.
+    try {
+      await assertSafePublicUrl(url);
+    } catch (err) {
+      if (err instanceof UnsafeUrlError) {
+        return res.status(400).json({ error: err.message });
+      }
+      return res.status(400).json({ error: "url is not a valid URL" });
+    }
+
+    try {
+      const inferred = await inferToolFromUrl(url);
+      const tool = await insertTool(inferred);
+      return res.status(201).json({ tool });
+    } catch (err) {
+      // A concurrent submission won the race and inserted this URL first.
+      if (err instanceof DuplicateToolError) {
+        return res.status(200).json({ tool: err.tool, duplicate: true });
+      }
+      logger.error({ err }, "Failed to add tool by URL");
+      return res.status(500).json({ error: "Failed to add tool" });
+    }
+  },
+);
 
 const claimSchema = z.object({
   ownerName: z.string().trim().min(1),

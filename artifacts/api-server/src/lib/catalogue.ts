@@ -7,6 +7,7 @@ import {
 import { and, asc, cosineDistance, desc, eq, getTableColumns, sql } from "drizzle-orm";
 import { createHash, randomBytes } from "node:crypto";
 import { embed } from "./embeddings";
+import { normalizeUrl } from "./normalizeUrl";
 
 /**
  * The JSON shape the frontend renders. It is intentionally a superset of the
@@ -75,7 +76,7 @@ export function rowToApiTool(row: ToolRow): ApiTool {
     usageStats: { views: 0, clicks: 0, helpful: 0 },
     lastUpdated: updated,
     lastUsed: updated,
-    ownerConfirmed: true,
+    ownerConfirmed: row.verified,
     source: row.source,
     visibility: row.visibility,
     claimed: Boolean(row.manageTokenHash),
@@ -156,6 +157,23 @@ export async function listTools(
     .where(where ? and(where) : undefined)
     .orderBy(desc(toolsTable.updatedAt));
   return rows.filter((row) => canView(row)).map(rowToApiTool);
+}
+
+/**
+ * Look up an existing tool by the canonical form of a URL. Used to dedup
+ * submissions so the same link can't create two catalogue entries.
+ */
+export async function findToolByUrl(url: string): Promise<ApiTool | null> {
+  const normalized = normalizeUrl(url);
+  if (!normalized) return null;
+  const rows = await db
+    .select()
+    .from(toolsTable)
+    .where(eq(toolsTable.normalizedUrl, normalized))
+    .limit(1);
+  const row = rows[0];
+  if (!row || !canView(row)) return null;
+  return rowToApiTool(row);
 }
 
 export async function getToolById(id: string): Promise<ApiTool | null> {
@@ -272,6 +290,29 @@ export async function claimTool(
   return { tool: rowToApiTool(row), manageToken };
 }
 
+/**
+ * Thrown when an insert loses the race against a concurrent submission of the
+ * same URL (DB unique violation). Carries the existing tool so the caller can
+ * return it as a duplicate instead of a 500.
+ */
+export class DuplicateToolError extends Error {
+  tool: ApiTool;
+  constructor(tool: ApiTool) {
+    super("Tool with this URL already exists");
+    this.name = "DuplicateToolError";
+    this.tool = tool;
+  }
+}
+
+/** Postgres unique-violation error code. */
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { code?: string }).code === "23505"
+  );
+}
+
 export async function insertTool(
   data: Omit<InsertTool, "embedding">,
 ): Promise<ApiTool> {
@@ -284,11 +325,22 @@ export async function insertTool(
       type: data.type,
     }),
   );
-  const [row] = await db
-    .insert(toolsTable)
-    .values({ ...data, embedding })
-    .returning();
-  return rowToApiTool(row);
+  const url = data.url ?? "";
+  try {
+    const [row] = await db
+      .insert(toolsTable)
+      .values({ ...data, normalizedUrl: normalizeUrl(url), embedding })
+      .returning();
+    return rowToApiTool(row);
+  } catch (err) {
+    // Lost the race: a concurrent request inserted the same normalized URL.
+    // Surface the existing row as a duplicate rather than failing.
+    if (isUniqueViolation(err)) {
+      const existing = await findToolByUrl(url);
+      if (existing) throw new DuplicateToolError(existing);
+    }
+    throw err;
+  }
 }
 
 /**

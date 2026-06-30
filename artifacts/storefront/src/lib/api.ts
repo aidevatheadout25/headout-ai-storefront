@@ -130,9 +130,17 @@ export async function fetchConversation(
   );
 }
 
-export async function addToolByUrl(url: string): Promise<Tool> {
-  const data = await postJson<{ tool: Tool }>("/tools", { url });
-  return data.tool;
+export type AddToolResult = {
+  tool: Tool;
+  /** True when the URL already existed and the catalogue returned that entry. */
+  duplicate: boolean;
+};
+
+export async function addToolByUrl(url: string): Promise<AddToolResult> {
+  const data = await postJson<{ tool: Tool; duplicate?: boolean }>("/tools", {
+    url,
+  });
+  return { tool: data.tool, duplicate: data.duplicate ?? false };
 }
 
 /** Credentials proving the caller may edit a tool. */

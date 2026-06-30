@@ -122,6 +122,9 @@ export async function inferToolFromUrl(url: string): Promise<InferredTool> {
     url,
     ownerName: "",
     ownerSlackId: "",
+    // URL-submitted entries are unverified until an owner claims them — this
+    // surfaces the "Pending owner confirmation" chip in the UI.
+    verified: false,
     source: "manual",
     visibility: "org",
     status: "live",
