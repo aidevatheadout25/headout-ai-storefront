@@ -102,6 +102,18 @@ export function toolEmbeddingText(input: {
 }
 
 /**
+ * Minimum cosine similarity for a catalogue row to count as a *good* match.
+ *
+ * Below this, a result is only loosely related to the ask and must be treated
+ * as "no match" rather than confidently recommended. Tuned against the seeded
+ * catalogue: every positive retrieval fixture scores >= ~0.42 for its intended
+ * tool, while off-catalogue / loosely-related asks top out around ~0.32, so a
+ * threshold in the gap separates real matches from weak ones with margin on
+ * both sides. See `eval/catalogueQuality.test.ts` for the regression fixtures.
+ */
+export const MIN_MATCH_SIMILARITY = 0.38;
+
+/**
  * Semantic search: embed the query, rank rows by cosine similarity in pgvector.
  * This is the single tool the chat agent can call.
  */

@@ -12,7 +12,7 @@
  */
 import { test, before, describe } from "node:test";
 import assert from "node:assert/strict";
-import { searchCatalogue } from "../lib/catalogue";
+import { searchCatalogue, MIN_MATCH_SIMILARITY } from "../lib/catalogue";
 import { seedCatalogueIfEmpty } from "../lib/seed";
 
 /**
@@ -54,6 +54,52 @@ describe("catalogue retrieval quality", () => {
         `expected "${fx.expect}" within top ${fx.within}, but it ranked #${
           rank + 1
         }: ${names.join(", ")}`,
+      );
+    });
+  }
+});
+
+/**
+ * Loosely-related / off-catalogue asks that have NO genuine tool. Their best
+ * match must score below the minimum-match threshold so the concierge treats
+ * them as "no match" and routes to build/request instead of confidently
+ * recommending a barely-relevant tool. Phrased as real asks, not nonsense.
+ */
+const WEAK_QUERIES: string[] = [
+  "What's the weather forecast for London this weekend?",
+  "book me a flight to Paris next Tuesday",
+  "what's a good recipe for chocolate cake",
+  "what's the stock price of Apple",
+  "plan my wedding guest list",
+];
+
+describe("weak-match similarity guardrail", () => {
+  test("every positive fixture clears the minimum-match threshold", async () => {
+    for (const fx of RETRIEVAL_FIXTURES) {
+      const results = await searchCatalogue(fx.query, 6);
+      const match = results.find((r) => r.name === fx.expect);
+      assert.ok(match, `expected "${fx.expect}" in results for "${fx.query}"`);
+      assert.ok(
+        (match.similarity ?? 0) >= MIN_MATCH_SIMILARITY,
+        `"${fx.expect}" scored ${match.similarity?.toFixed(3)} for "${
+          fx.query
+        }", below the ${MIN_MATCH_SIMILARITY} match threshold`,
+      );
+    }
+  });
+
+  for (const query of WEAK_QUERIES) {
+    test(`loosely-related "${query}" has no above-threshold match`, async () => {
+      const results = await searchCatalogue(query, 6);
+      const strong = results.filter(
+        (r) => (r.similarity ?? 0) >= MIN_MATCH_SIMILARITY,
+      );
+      assert.equal(
+        strong.length,
+        0,
+        `expected no tool to clear the ${MIN_MATCH_SIMILARITY} threshold, but got: ${strong
+          .map((t) => `${t.name} (${t.similarity?.toFixed(3)})`)
+          .join(", ")}`,
       );
     });
   }

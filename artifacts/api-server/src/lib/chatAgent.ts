@@ -1,6 +1,6 @@
 import type OpenAI from "openai";
 import { openai, OPENAI_MODEL } from "./openaiClient";
-import { searchCatalogue, type ApiTool } from "./catalogue";
+import { searchCatalogue, MIN_MATCH_SIMILARITY, type ApiTool } from "./catalogue";
 
 const MODEL = OPENAI_MODEL;
 const MAX_TURNS = 4;
@@ -89,19 +89,28 @@ export async function runChat(history: ChatTurn[]): Promise<ChatResult> {
         query = "";
       }
       const results = await searchCatalogue(query, 6);
-      for (const tool of results) found.set(tool.id, tool);
+      // Drop weak matches before the agent ever sees them: anything below the
+      // minimum-similarity threshold is only loosely related and must not be
+      // recommendable. This reliably flips loosely-related asks onto the
+      // build/request next-steps path instead of surfacing a bad fit.
+      const strong = results.filter(
+        (t) => (t.similarity ?? 0) >= MIN_MATCH_SIMILARITY,
+      );
+      for (const tool of strong) found.set(tool.id, tool);
       messages.push({
         role: "tool",
         tool_call_id: call.id,
         content: JSON.stringify(
-          results.map((t) => ({
-            id: t.id,
-            name: t.name,
-            type: t.types[0],
-            oneLiner: t.oneLiner,
-            tags: t.tags,
-            similarity: Number((t.similarity ?? 0).toFixed(3)),
-          })),
+          strong.length > 0
+            ? strong.map((t) => ({
+                id: t.id,
+                name: t.name,
+                type: t.types[0],
+                oneLiner: t.oneLiner,
+                tags: t.tags,
+                similarity: Number((t.similarity ?? 0).toFixed(3)),
+              }))
+            : { results: [], note: "No tool met the relevance threshold for this query." },
         ),
       });
     }
