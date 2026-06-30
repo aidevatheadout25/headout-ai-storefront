@@ -487,6 +487,92 @@ describe(
       }
     });
 
+    test("clear registration intent routes to register stage, not handoff or Slack-only", async () => {
+      const res = await runChat([
+        { role: "user", content: "I built a tool, how do I register it?" },
+      ]);
+      assert.equal(
+        res.stage,
+        "register",
+        `clear registration intent must route to register stage, got: ${res.stage} — message: ${res.message}`,
+      );
+      assert.notEqual(
+        res.stage,
+        "handoff",
+        `registration intent must not trigger build hand-off — message: ${res.message}`,
+      );
+      // Must not tell the user to go to Slack as the primary answer.
+      const lower = res.message.toLowerCase();
+      const isSlackOnly =
+        lower.includes("slack") &&
+        !lower.includes("here") &&
+        !lower.includes("catalogue") &&
+        !lower.includes("register") &&
+        !lower.includes("paste") &&
+        !lower.includes("link");
+      assert.ok(
+        !isSlackOnly,
+        `registration must not be answered with a Slack-only reply — message: ${res.message}`,
+      );
+    });
+
+    test("'add my tool to the catalogue' routes to register stage", async () => {
+      const res = await runChat([
+        { role: "user", content: "add my tool to the catalogue" },
+      ]);
+      assert.equal(
+        res.stage,
+        "register",
+        `'add my tool' must route to register stage, got: ${res.stage} — message: ${res.message}`,
+      );
+      assert.notEqual(res.stage, "handoff");
+    });
+
+    test("'I just finished building something, what do I do next?' routes to register stage", async () => {
+      const res = await runChat([
+        {
+          role: "user",
+          content: "I just finished building something, what do I do next?",
+        },
+      ]);
+      assert.equal(
+        res.stage,
+        "register",
+        `'I just finished building' must route to register stage, got: ${res.stage} — message: ${res.message}`,
+      );
+      assert.notEqual(res.stage, "handoff");
+    });
+
+    test("a bare-pasted URL is never handed off to a builder and never gives a Slack-only reply", async () => {
+      const res = await runChat([
+        {
+          role: "user",
+          content: "https://tools.headout.internal/my-new-tool",
+        },
+      ]);
+      // A bare URL is ambiguous — accept register OR a clarifying question, but never handoff
+      // and never a Slack-only reply.
+      assert.notEqual(
+        res.stage,
+        "handoff",
+        `a bare URL must not trigger build hand-off — message: ${res.message}`,
+      );
+      const lower = res.message.toLowerCase();
+      const isSlackOnly =
+        lower.includes("slack") &&
+        !lower.includes("here") &&
+        !lower.includes("catalogue") &&
+        !lower.includes("register") &&
+        !lower.includes("paste") &&
+        !lower.includes("link") &&
+        !lower.includes("what") &&
+        !lower.includes("help");
+      assert.ok(
+        !isSlackOnly,
+        `a bare URL must not produce a Slack-only reply — message: ${res.message}`,
+      );
+    });
+
     test("confirmed-feasible UI need produces a builder recommendation referencing the scenario", async () => {
       // When feasibility is confirmed and a UI is genuinely needed, the recommendation
       // must reference the concrete scenario and the confirmed system — not a generic pitch.

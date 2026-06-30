@@ -49,6 +49,7 @@ type ChatMessage = {
   stage?: FunnelStage;
   recommendedBuilder?: BuilderId | null;
   buildPrompt?: string | null;
+  registration?: { url: string | null } | null;
   userQuery?: string;
   addReady?: boolean;
   addDraft?: ToolPreview;
@@ -107,47 +108,6 @@ export function HomeChat() {
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
   }, [input]);
-
-  const runChat = useCallback(
-    async (text: string, history: ChatMessage[]) => {
-      setSending(true);
-      setError(null);
-      try {
-        const turns: ChatTurn[] = history
-          .filter((m) => m.role === "user" || m.role === "assistant")
-          .map((m) => ({ role: m.role, content: m.text }));
-        turns.push({ role: "user", content: text });
-
-        const result = await sendChat(turns, conversationId);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: msgId(),
-            role: "assistant",
-            text: result.message,
-            tools: result.tools,
-            noMatch: result.noMatch,
-            stage: result.stage,
-            recommendedBuilder: result.recommendedBuilder,
-            buildPrompt: result.buildPrompt,
-            userQuery: text,
-          },
-        ]);
-
-        if (result.conversationId && result.conversationId !== conversationId) {
-          loadedConvRef.current = result.conversationId;
-          setConversationId(result.conversationId);
-          router.replace(`/?c=${encodeURIComponent(result.conversationId)}`);
-        }
-        void refreshConversations();
-      } catch {
-        setError("The catalogue assistant is unavailable right now — try again.");
-      } finally {
-        setSending(false);
-      }
-    },
-    [conversationId, refreshConversations, router],
-  );
 
   // ── Add-tool turn runner ──────────────────────────────────────────────────
   const runAddChat = useCallback(
@@ -243,6 +203,71 @@ export function HomeChat() {
     [addUrl, addDraft, addTurns],
   );
 
+  // Stable ref so runChat can trigger the add-tool flow without a circular dep.
+  const runAddChatRef = useRef(runAddChat);
+  useEffect(() => {
+    runAddChatRef.current = runAddChat;
+  }, [runAddChat]);
+
+  const runChat = useCallback(
+    async (text: string, history: ChatMessage[]) => {
+      setSending(true);
+      setError(null);
+      try {
+        const turns: ChatTurn[] = history
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({ role: m.role, content: m.text }));
+        turns.push({ role: "user", content: text });
+
+        const result = await sendChat(turns, conversationId);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: msgId(),
+            role: "assistant",
+            text: result.message,
+            tools: result.tools,
+            noMatch: result.noMatch,
+            stage: result.stage,
+            recommendedBuilder: result.recommendedBuilder,
+            buildPrompt: result.buildPrompt,
+            registration: result.registration,
+            userQuery: text,
+          },
+        ]);
+
+        if (result.conversationId && result.conversationId !== conversationId) {
+          loadedConvRef.current = result.conversationId;
+          setConversationId(result.conversationId);
+          router.replace(`/?c=${encodeURIComponent(result.conversationId)}`);
+        }
+        void refreshConversations();
+
+        // When the concierge routes to registration, switch the composer into
+        // add-tool mode. If a URL was already captured, auto-submit it.
+        if (result.stage === "register") {
+          setAddMode(true);
+          setAddUrl("");
+          setAddDraft(null);
+          setAddTurns([]);
+          if (result.registration?.url) {
+            const url = result.registration.url;
+            setMessages((prev) => [
+              ...prev,
+              { id: msgId(), role: "user", text: url },
+            ]);
+            void runAddChatRef.current(url);
+          }
+        }
+      } catch {
+        setError("The catalogue assistant is unavailable right now — try again.");
+      } finally {
+        setSending(false);
+      }
+    },
+    [conversationId, refreshConversations, router],
+  );
+
   const handleAddConfirm = useCallback(
     async (draft: ToolPreview) => {
       if (addConfirming) return;
@@ -306,6 +331,10 @@ export function HomeChat() {
       loadedConvRef.current = null;
       setConversationId(null);
       setMessages([]);
+      setAddMode(false);
+      setAddUrl("");
+      setAddDraft(null);
+      setAddTurns([]);
       setError(null);
       return;
     }
@@ -317,19 +346,32 @@ export function HomeChat() {
       .then(({ messages: saved }) => {
         if (loadedConvRef.current !== c) return;
         setConversationId(c);
-        setMessages(
-          saved.map((m) => ({
-            id: m.id,
-            role: m.role,
-            text: m.text,
-            tools: m.tools ?? undefined,
-            noMatch: m.noMatch,
-            stage: m.stage,
-            recommendedBuilder: m.recommendedBuilder,
-            buildPrompt: m.buildPrompt,
-            userQuery: m.userQuery ?? undefined,
-          })),
-        );
+        const mapped: ChatMessage[] = saved.map((m) => ({
+          id: m.id,
+          role: m.role,
+          text: m.text,
+          tools: m.tools ?? undefined,
+          noMatch: m.noMatch,
+          stage: m.stage,
+          recommendedBuilder: m.recommendedBuilder,
+          buildPrompt: m.buildPrompt,
+          registration: m.registration,
+          userQuery: m.userQuery ?? undefined,
+        }));
+        setMessages(mapped);
+
+        // If the last assistant message in the reloaded conversation was a
+        // register stage (i.e. the user hadn't finished registering yet),
+        // re-enter add mode so they can continue.
+        const lastAssistant = [...mapped].reverse().find((m) => m.role === "assistant");
+        if (lastAssistant?.stage === "register") {
+          setAddMode(true);
+          setAddUrl("");
+          setAddDraft(null);
+          setAddTurns([]);
+        } else {
+          setAddMode(false);
+        }
       })
       .catch(() => {
         if (loadedConvRef.current !== c) return;
@@ -559,45 +601,6 @@ export function HomeChat() {
             </Button>
           </div>
         </form>
-
-        <div className="home-chat__add">
-          {addMode ? (
-            <button
-              type="button"
-              className="home-chat__add-trigger t-label-rg"
-              onClick={() => {
-                setAddMode(false);
-                setAddUrl("");
-                setAddDraft(null);
-                setAddTurns([]);
-              }}
-            >
-              Cancel
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="home-chat__add-trigger t-label-rg"
-              onClick={() => {
-                setAddMode(true);
-                setAddUrl("");
-                setAddDraft(null);
-                setAddTurns([]);
-                setMessages((prev) => [
-                  ...prev,
-                  {
-                    id: msgId(),
-                    role: "assistant",
-                    text: "Paste the link for the tool you'd like to add.",
-                  },
-                ]);
-              }}
-            >
-              <span aria-hidden="true">+</span>
-              Add a tool
-            </button>
-          )}
-        </div>
       </div>
 
       <ToolDetailOverlay

@@ -49,8 +49,10 @@ const BUILDER_LABELS: Record<BuilderId, string> = {
  *   the scoping questions — the build/Slack hand-off UI must NOT render.
  * - `handoff`: the funnel has cleared all four gates, so the hand-off UI may
  *   render with `recommendedBuilder` as the primary action.
+ * - `register`: the user has signalled they already built something and want it
+ *   listed in the catalogue; the UI switches to the add-tool paste-link flow.
  */
-export type FunnelStage = "chat" | "handoff";
+export type FunnelStage = "chat" | "handoff" | "register";
 
 export type ChatResult = {
   message: string;
@@ -63,16 +65,32 @@ export type ChatResult = {
   recommendedBuilder: BuilderId | null;
   /** A concise build brief synthesised from the scoping answers, for pre-fill. */
   buildPrompt: string | null;
+  /** Set only at the register stage: the URL captured from the user, or null if not yet provided. */
+  registration: { url: string | null } | null;
 };
 
 const SYSTEM_PROMPT = `You are the concierge for the Headout AI Storefront — an internal meta-catalogue of the AI tools, apps, skills, docs, plugins, MCPs and Zeps that Headout teams have built.
 
 Your job is to help a teammate FIND an existing internal tool before anyone builds anything new. You are a router, not a runner: never execute, operate, or pretend to operate any tool — only point people to the right one. Building is the END of a four-gate funnel, never a first move.
 
-Follow this funnel STRICTLY, in order, one question at a time. Never skip a gate. Never bundle two questions into one message.
+━━ REGISTRATION — CHECK THIS FIRST, BEFORE ANY SEARCH ━━
+BEFORE doing anything else — before calling search_catalogue, before asking any question — decide if this message is registration intent.
+
+Registration intent is ANY of these signals:
+• "I built [something]" / "I made [something]" / "I finished building [something]"
+• "how do I register [this/my tool]?" / "register my tool" / "add my tool"
+• "I just finished building something, what do I do next?"
+• "add [URL/tool] to the catalogue" / "list my tool"
+• A raw URL that looks like something the user built or wants to add
+
+If ANY of these match → call start_registration IMMEDIATELY. Do NOT call search_catalogue. Do NOT search. Do NOT ask a clarifying question first. Pass the url argument if a URL was provided.
+
+After the tool call, write one warm sentence: registration happens right here in this chat, they can paste their link and it will be added. If a URL was already provided, confirm you've captured it.
+
+Slack is ONLY for access or permission questions — NEVER the answer to "how do I register."
 
 ━━ GATE 1 — REUSE CHECK ━━
-For EVERY request — including an explicit "build me X" — call search_catalogue before anything else. Rewrite vague asks into a concise capability description first. You may search again with different phrasing if results are weak.
+For every request that is NOT registration intent — including an explicit "build me X" — call search_catalogue before anything else. Rewrite vague asks into a concise capability description first. You may search again with different phrasing if results are weak.
 
 If matches come back: present them (at most 3, genuine matches only; name each by its EXACT name from the results with one line on why it fits — the UI renders a card for every tool you name). Then ask plainly: does one of these cover your need, or is what you want meaningfully different?
 
@@ -107,7 +125,8 @@ NEVER name a builder the feasibility answers contradict (e.g. do not recommend a
 After calling record_recommendation, write ONE warm closing sentence. It must name the recommended path AND reference the user's concrete scenario AND the feasible systems. If the recommendation is "manual", explicitly say not to build the full app yet and why. Also mention the platform team on Slack as an alternative.
 
 Hard rules:
-- Never recommend building before searching.
+- Never recommend building before searching (EXCEPT registration intent — see REGISTRATION above).
+- Never call search_catalogue when the user says "add my tool", "add my tool to the catalogue", "register my tool", "I built X", "I finished building", or any phrasing that means they want to list something they made. Those ALWAYS go to start_registration.
 - Never call record_recommendation before all four gates are resolved.
 - Never name or invent a tool that was not in the search results.
 - If a request is genuinely ambiguous BEFORE you can even search, ask exactly one short clarifying question.
@@ -118,7 +137,7 @@ const SEARCH_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
   function: {
     name: "search_catalogue",
     description:
-      "Search the internal Headout catalogue for tools matching a capability or problem. Returns the most relevant tools with id, name, type, one-liner and tags.",
+      "Search the internal Headout catalogue for tools matching a capability or problem. Returns the most relevant tools with id, name, type, one-liner and tags. Do NOT call this when the user has registration intent (e.g. 'add my tool', 'I built X', 'register my tool') — use start_registration instead.",
     parameters: {
       type: "object",
       properties: {
@@ -166,6 +185,32 @@ const HANDOFF_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
+const REGISTER_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "start_registration",
+    description:
+      "MUST be called (before search_catalogue) whenever the user signals they have already built or finished a tool and want it listed in the catalogue. Trigger phrases include — but are not limited to — 'I built X', 'how do I register this', 'register my tool', 'add my tool', 'add my tool to the catalogue', 'I just finished building something', 'what do I do now that I built this', or when the user pastes a URL to something they made. Do NOT call search_catalogue first. Do NOT ask a clarifying question first. Call this immediately, then tell the user registration happens right here.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: {
+          type: "string",
+          description:
+            "The URL the user provided for their tool, if any. Omit (or pass empty string) if no URL was given yet.",
+        },
+        name: {
+          type: "string",
+          description:
+            "The name of the tool the user mentioned, if any. Optional.",
+        },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+  },
+};
+
 function pickRecommended(found: Map<string, ApiTool>, message: string): ApiTool[] {
   const lower = message.toLowerCase();
   const named = [...found.values()].filter((t) =>
@@ -194,18 +239,34 @@ function parseHandoff(rawArgs: string): Handoff {
   };
 }
 
+function parseRegistration(rawArgs: string): { url: string | null } {
+  let parsed: { url?: unknown } = {};
+  try {
+    parsed = JSON.parse(rawArgs || "{}");
+  } catch {
+    parsed = {};
+  }
+  const url =
+    typeof parsed.url === "string" && parsed.url.trim()
+      ? parsed.url.trim()
+      : null;
+  return { url };
+}
+
 function buildResult(
   message: string,
   tools: ApiTool[],
   handoff: Handoff | null,
+  registration: { url: string | null } | null = null,
 ): ChatResult {
   return {
     message,
     tools,
     noMatch: tools.length === 0,
-    stage: handoff ? "handoff" : "chat",
+    stage: registration ? "register" : handoff ? "handoff" : "chat",
     recommendedBuilder: handoff?.builder ?? null,
     buildPrompt: handoff?.prompt ?? null,
+    registration,
   };
 }
 
@@ -217,12 +278,13 @@ export async function runChat(history: ChatTurn[]): Promise<ChatResult> {
 
   const found = new Map<string, ApiTool>();
   let handoff: Handoff | null = null;
+  let registration: { url: string | null } | null = null;
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const completion = await openai.chat.completions.create({
       model: MODEL,
       messages,
-      tools: [SEARCH_TOOL, HANDOFF_TOOL],
+      tools: [REGISTER_TOOL, SEARCH_TOOL, HANDOFF_TOOL],
       tool_choice: "auto",
     });
 
@@ -239,7 +301,7 @@ export async function runChat(history: ChatTurn[]): Promise<ChatResult> {
       // matches + enough user turns = scoping is done). If so, force one final
       // call with tool_choice required so the recommendation is always recorded
       // as a proper handoff and the UI renders the card.
-      if (handoff === null && found.size === 0) {
+      if (handoff === null && registration === null && found.size === 0) {
         const userTurns = messages.filter((m) => m.role === "user").length;
         if (userTurns >= 3) {
           try {
@@ -262,6 +324,7 @@ export async function runChat(history: ChatTurn[]): Promise<ChatResult> {
             const forcedChoice = forced.choices[0]?.message;
             if (forcedChoice?.tool_calls) {
               for (const call of forcedChoice.tool_calls) {
+                if (call.type !== "function") continue;
                 if (call.function.name === "record_recommendation") {
                   handoff = parseHandoff(call.function.arguments);
                   break;
@@ -276,12 +339,27 @@ export async function runChat(history: ChatTurn[]): Promise<ChatResult> {
 
       // At hand-off the closing line need not re-name a tool, so don't gate the
       // returned tools on the message text — there are none to recommend.
-      const recommended = handoff ? [] : pickRecommended(found, message);
-      return buildResult(message, recommended, handoff);
+      const recommended = handoff || registration ? [] : pickRecommended(found, message);
+      return buildResult(message, recommended, handoff, registration);
     }
 
     for (const call of toolCalls) {
       if (call.type !== "function") continue;
+
+      if (call.function.name === "start_registration") {
+        registration = parseRegistration(call.function.arguments);
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: JSON.stringify({
+            ok: true,
+            note: registration.url
+              ? "Registration started with the provided URL. Write one warm sentence telling the user you've captured the link and will kick off registration right here in this conversation — no need to go anywhere else."
+              : "Registration flow started. Write one warm sentence telling the user that registration happens right here in this conversation — they can paste their tool's link and it will be added to the catalogue.",
+          }),
+        });
+        continue;
+      }
 
       if (call.function.name === "record_recommendation") {
         handoff = parseHandoff(call.function.arguments);
@@ -334,6 +412,14 @@ export async function runChat(history: ChatTurn[]): Promise<ChatResult> {
   }
 
   // Exhausted turns without a clean final answer — surface what we found.
+  if (registration) {
+    return buildResult(
+      "Sure — paste your tool's link here and I'll add it to the catalogue.",
+      [],
+      null,
+      registration,
+    );
+  }
   if (handoff) {
     const isManual = handoff.builder === "manual";
     return buildResult(

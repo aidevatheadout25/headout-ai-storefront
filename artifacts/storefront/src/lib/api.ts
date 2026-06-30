@@ -23,8 +23,9 @@ export type BuilderId =
   | "zeps"
   | "real-app";
 
-/** Build-gate funnel stage; only `handoff` renders the build/Slack hand-off UI. */
-export type FunnelStage = "chat" | "handoff";
+/** Build-gate funnel stage; only `handoff` renders the build/Slack hand-off UI.
+ *  `register` switches the composer into the add-tool paste-link flow. */
+export type FunnelStage = "chat" | "handoff" | "register";
 
 export type ChatResult = {
   message: string;
@@ -33,6 +34,8 @@ export type ChatResult = {
   stage: FunnelStage;
   recommendedBuilder: BuilderId | null;
   buildPrompt: string | null;
+  /** Set only when stage === "register": the captured URL, or null if not yet provided. */
+  registration: { url: string | null } | null;
   conversationId: string;
 };
 
@@ -52,6 +55,8 @@ export type SavedMessage = {
   stage: FunnelStage;
   recommendedBuilder: BuilderId | null;
   buildPrompt: string | null;
+  /** Set only when stage === "register": the captured URL, or null if not yet provided. */
+  registration: { url: string | null } | null;
   userQuery: string | null;
   createdAt: string;
 };

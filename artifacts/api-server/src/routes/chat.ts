@@ -79,6 +79,7 @@ router.post("/chat", async (req: Request, res: Response) => {
       stage: result.stage,
       recommendedBuilder: result.recommendedBuilder,
       buildPrompt: result.buildPrompt,
+      registration: result.registration,
     });
 
     return res.json({ ...result, conversationId });

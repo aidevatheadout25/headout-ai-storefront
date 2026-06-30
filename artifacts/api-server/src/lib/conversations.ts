@@ -25,6 +25,8 @@ export type SavedMessage = {
   stage: FunnelStage;
   recommendedBuilder: BuilderId | null;
   buildPrompt: string | null;
+  /** Set only when stage === "register": the captured URL, or null if not yet provided. */
+  registration: { url: string | null } | null;
   userQuery: string | null;
   createdAt: string;
 };
@@ -39,15 +41,23 @@ function toSummary(row: ConversationRow): ConversationSummary {
 }
 
 function toMessage(row: MessageRow): SavedMessage {
+  const stage: FunnelStage =
+    row.stage === "handoff"
+      ? "handoff"
+      : row.stage === "register"
+        ? "register"
+        : "chat";
   return {
     id: row.id,
     role: row.role === "assistant" ? "assistant" : "user",
     text: row.text,
     tools: (row.tools as ApiTool[] | null) ?? null,
     noMatch: row.noMatch,
-    stage: row.stage === "handoff" ? "handoff" : "chat",
+    stage,
     recommendedBuilder: (row.recommendedBuilder as BuilderId | null) ?? null,
-    buildPrompt: row.buildPrompt,
+    buildPrompt: stage === "register" ? null : row.buildPrompt,
+    registration:
+      stage === "register" ? { url: row.buildPrompt ?? null } : null,
     userQuery: row.userQuery,
     createdAt: row.createdAt.toISOString(),
   };
@@ -136,6 +146,10 @@ export async function userOwnsConversation(
  * Persist a completed turn: the user message and the assistant reply (with its
  * recommended-tool snapshot / no-match state), and bump the conversation's
  * updatedAt so it floats to the top of the history list.
+ *
+ * When stage === "register", the captured URL is stored in build_prompt so it
+ * survives a reload without a schema migration. It is reconstructed as
+ * registration.url in toMessage on read.
  */
 export async function appendTurn(
   conversationId: string,
@@ -147,8 +161,15 @@ export async function appendTurn(
     stage: FunnelStage;
     recommendedBuilder: BuilderId | null;
     buildPrompt: string | null;
+    registration: { url: string | null } | null;
   },
 ): Promise<void> {
+  // For register stage, persist the captured URL via build_prompt.
+  const persistedBuildPrompt =
+    turn.stage === "register"
+      ? (turn.registration?.url ?? null)
+      : turn.buildPrompt;
+
   await db.insert(messagesTable).values([
     {
       conversationId,
@@ -163,7 +184,7 @@ export async function appendTurn(
       noMatch: turn.noMatch,
       stage: turn.stage,
       recommendedBuilder: turn.recommendedBuilder,
-      buildPrompt: turn.buildPrompt,
+      buildPrompt: persistedBuildPrompt,
       userQuery: turn.userText,
     },
   ]);
