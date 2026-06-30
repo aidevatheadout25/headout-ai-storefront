@@ -1,9 +1,11 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type FormEvent,
+  type KeyboardEvent,
 } from "react";
 import { Button, ButtonLink } from "@/components/Button";
 import { Icon } from "@/components/Icon";
@@ -52,6 +54,7 @@ export function HomeChat() {
   const { isAuthenticated } = useAuthContext();
   const { refresh: refreshConversations } = useConversationsContext();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const seededRef = useRef(false);
   const loadedConvRef = useRef<string | null>(null);
 
@@ -83,6 +86,14 @@ export function HomeChat() {
   useEffect(() => {
     scrollToEnd();
   }, [messages, sending, scrollToEnd]);
+
+  // Auto-grow the composer with its content, up to a max height (then scroll).
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [input]);
 
   const runChat = useCallback(
     async (text: string, history: ChatMessage[]) => {
@@ -326,9 +337,20 @@ export function HomeChat() {
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const trimmed = input.trim();
-    if (!trimmed || sending) return;
+    if (!trimmed || sending || addConfirming) return;
     setInput("");
     submitText(trimmed);
+  }
+
+  function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    // Enter sends; Shift+Enter inserts a newline.
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      const trimmed = input.trim();
+      if (!trimmed || sending || addConfirming) return;
+      setInput("");
+      submitText(trimmed);
+    }
   }
 
   const inputPlaceholder = addMode && !addUrl
@@ -499,14 +521,16 @@ export function HomeChat() {
         <form className="home-chat__composer" onSubmit={handleSubmit}>
           <div className="home-chat__input-wrap">
             <Icon name="spark" size={20} className="home-chat__input-icon" />
-            <input
-              type="text"
+            <textarea
+              ref={textareaRef}
               className="home-chat__input t-para-md"
               placeholder={inputPlaceholder}
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
               disabled={sending || addConfirming}
               aria-label="Message"
+              rows={1}
             />
             <Button type="submit" size="sm" disabled={!input.trim() || sending || addConfirming}>
               Send
