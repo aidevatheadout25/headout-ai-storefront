@@ -4448,6 +4448,29 @@ html[data-theme="dark"] .demo-mode-picker__option--active {
   margin: 0 auto;
 }
 
+.home-chat__header {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: var(--space-8) 0;
+}
+
+.home-chat__new-chat-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-8);
+  color: var(--text-grey-2);
+  transition: background-color 150ms var(--ease-functional-standard), color 150ms var(--ease-functional-standard);
+}
+
+.home-chat__new-chat-btn:hover {
+  background: var(--surface-grey-2);
+  color: var(--text-grey-1);
+}
+
 .home-chat__thread {
   flex: 1;
   overflow-y: auto;

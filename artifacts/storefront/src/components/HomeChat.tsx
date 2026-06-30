@@ -303,6 +303,26 @@ export function HomeChat() {
 
   return (
     <div className="home-chat">
+      {isAuthenticated && (
+        <div className="home-chat__header">
+          <a href="/" className="home-chat__new-chat-btn" title="New chat" aria-label="New chat">
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+            </svg>
+          </a>
+        </div>
+      )}
       <div className="home-chat__thread" ref={scrollRef}>
         {!started && !loadingConv && (
           <div className="home-chat__empty">
