@@ -149,9 +149,20 @@ export function isCatalogVisible(tool: Tool): boolean {
   return tool.approvalStatus === "approved";
 }
 
+/** Only http(s) links are safe to render as actionable outbound links. */
+export function isSafeToolLink(link: string): boolean {
+  if (!link) return false;
+  try {
+    const { protocol } = new URL(link);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function canOpenToolLink(tool: Tool): boolean {
   return (
-    Boolean(tool.link) &&
+    isSafeToolLink(tool.link) &&
     tool.status !== "archived" &&
     !tool.linkUnreachable &&
     tool.accessLevel === "open"

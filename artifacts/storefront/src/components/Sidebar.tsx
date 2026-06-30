@@ -1,31 +1,18 @@
-
 import Link from "@/compat/next-link";
 import { usePathname, useSearchParams } from "@/compat/next-navigation";
 import { useEffect, useId, useMemo, useState, type MouseEvent } from "react";
 import { Icon } from "@/components/Icon";
-import { RoleSwitcher } from "@/components/RoleSwitcher";
-import { useApp } from "@/context/AppContext";
 import { useRegistryNavigation } from "@/hooks/useRegistryNavigation";
 import {
   isCatalogueHrefActive,
   registryParamsFromSearchParams,
 } from "@/lib/registryNav";
 import { CATALOGUE_CATEGORIES } from "@/lib/types";
-import { buildZepsBuilderUrl } from "@/lib/zeps";
 
-type NavItem = {
-  href: string;
-  label: string;
-  badge?: number;
-  admin?: boolean;
-  external?: boolean;
-};
-
-type NavSection = {
-  title: string;
-  items: NavItem[];
-  catalogue?: boolean;
-};
+/** Browse categories only — building blocks are not part of the v1 catalogue. */
+const BROWSE_CATEGORIES = CATALOGUE_CATEGORIES.filter(
+  (category) => category.tab !== "blocks",
+);
 
 function navClass(active: boolean) {
   return `app-sidebar__link t-label-rg${active ? " app-sidebar__link--active" : ""}`;
@@ -43,9 +30,6 @@ export function Sidebar() {
   const [pendingCatalogueHref, setPendingCatalogueHref] = useState<string | null>(
     null,
   );
-  const { canApprove, pendingTools, flaggedTools } = useApp();
-
-  const approvalBadgeCount = pendingTools.length + flaggedTools.length;
 
   const registryParams = useMemo(
     () => registryParamsFromSearchParams(searchParams),
@@ -62,44 +46,9 @@ export function Sidebar() {
     setPendingCatalogueHref(null);
   }, [searchParams]);
 
-  const catalogueSectionActive = CATALOGUE_CATEGORIES.some((category) =>
+  const catalogueSectionActive = BROWSE_CATEGORIES.some((category) =>
     isCatalogueHrefActive(pathname, registryParams, category.href),
   );
-
-  const sections: NavSection[] = [
-    {
-      title: "Discover",
-      items: [{ href: "/", label: "Home" }],
-      catalogue: true,
-    },
-    {
-      title: "You",
-      items: [
-        { href: "/my-submissions", label: "My activity" },
-        { href: "/submit", label: "Register a tool" },
-        {
-          href: buildZepsBuilderUrl(),
-          label: "Build with Zeps",
-          external: true,
-        },
-      ],
-    },
-  ];
-
-  if (canApprove) {
-    sections.push({
-      title: "Admin",
-      items: [
-        {
-          href: "/admin/approvals",
-          label: "Approvals",
-          badge: approvalBadgeCount,
-          admin: true,
-        },
-        { href: "/admin/metrics", label: "Metrics", admin: true },
-      ],
-    });
-  }
 
   function closeMobile() {
     setMobileOpen(false);
@@ -120,100 +69,7 @@ export function Sidebar() {
     return isCatalogueHrefActive(pathname, registryParams, href);
   }
 
-  function isItemActive(href: string) {
-    return pathname === href || (href !== "/" && pathname.startsWith(href));
-  }
-
-  function renderNav() {
-    return sections.map((section) => (
-      <div key={section.title} className="app-sidebar__section">
-        <p className="app-sidebar__section-title t-label-sm">{section.title}</p>
-        <ul className="app-sidebar__list">
-          {section.items.map((item) => {
-            const className = `${navClass(isItemActive(item.href))}${item.admin ? " app-sidebar__link--admin" : ""}`;
-            return (
-              <li key={item.href}>
-                {item.external ? (
-                  <a
-                    href={item.href}
-                    className={className}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={closeMobile}
-                  >
-                    {item.label}
-                    {item.badge !== undefined && item.badge > 0 && (
-                      <span className="app-sidebar__badge">{item.badge}</span>
-                    )}
-                  </a>
-                ) : (
-                  <Link
-                    href={item.href}
-                    className={className}
-                    onClick={closeMobile}
-                  >
-                    {item.label}
-                    {item.badge !== undefined && item.badge > 0 && (
-                      <span className="app-sidebar__badge">{item.badge}</span>
-                    )}
-                  </Link>
-                )}
-              </li>
-            );
-          })}
-          {section.catalogue && (
-            <li className="app-sidebar__catalogue">
-              <button
-                type="button"
-                className={`app-sidebar__link app-sidebar__catalogue-trigger t-label-rg${
-                  catalogueSectionActive ? " app-sidebar__link--active" : ""
-                }${catalogueOpen ? " app-sidebar__catalogue-trigger--open" : ""}`}
-                onClick={() => setCatalogueOpen((open) => !open)}
-                aria-expanded={catalogueOpen}
-                aria-controls={cataloguePanelId}
-              >
-                <span>Browse catalogue</span>
-                <Icon
-                  name="chevron-down"
-                  size={16}
-                  className="app-sidebar__catalogue-chevron"
-                />
-              </button>
-              <div
-                id={cataloguePanelId}
-                className={`app-sidebar__catalogue-panel${
-                  catalogueOpen ? " app-sidebar__catalogue-panel--open" : ""
-                }`}
-                aria-hidden={!catalogueOpen}
-              >
-                <div className="app-sidebar__catalogue-panel-inner">
-                  <ul className="app-sidebar__catalogue-list">
-                    {CATALOGUE_CATEGORIES.map((category) => {
-                      const active = isCategoryActive(category.href);
-                      return (
-                        <li key={category.href}>
-                          <Link
-                            href={category.href}
-                            className={navClass(active)}
-                            onClick={(event) =>
-                              navigateCatalogue(category.href, event)
-                            }
-                            aria-current={active ? "page" : undefined}
-                          >
-                            {category.label}
-                          </Link>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              </div>
-            </li>
-          )}
-        </ul>
-      </div>
-    ));
-  }
+  const homeActive = pathname === "/";
 
   return (
     <>
@@ -274,11 +130,69 @@ export function Sidebar() {
           </button>
         </div>
 
-        <nav className="app-sidebar__nav">{renderNav()}</nav>
-
-        <div className="app-sidebar__footer">
-          <RoleSwitcher layout="sidebar" />
-        </div>
+        <nav className="app-sidebar__nav">
+          <div className="app-sidebar__section">
+            <p className="app-sidebar__section-title t-label-sm">Discover</p>
+            <ul className="app-sidebar__list">
+              <li>
+                <Link
+                  href="/"
+                  className={navClass(homeActive)}
+                  onClick={closeMobile}
+                >
+                  Home
+                </Link>
+              </li>
+              <li className="app-sidebar__catalogue">
+                <button
+                  type="button"
+                  className={`app-sidebar__link app-sidebar__catalogue-trigger t-label-rg${
+                    catalogueSectionActive ? " app-sidebar__link--active" : ""
+                  }${catalogueOpen ? " app-sidebar__catalogue-trigger--open" : ""}`}
+                  onClick={() => setCatalogueOpen((open) => !open)}
+                  aria-expanded={catalogueOpen}
+                  aria-controls={cataloguePanelId}
+                >
+                  <span>Browse catalogue</span>
+                  <Icon
+                    name="chevron-down"
+                    size={16}
+                    className="app-sidebar__catalogue-chevron"
+                  />
+                </button>
+                <div
+                  id={cataloguePanelId}
+                  className={`app-sidebar__catalogue-panel${
+                    catalogueOpen ? " app-sidebar__catalogue-panel--open" : ""
+                  }`}
+                  aria-hidden={!catalogueOpen}
+                >
+                  <div className="app-sidebar__catalogue-panel-inner">
+                    <ul className="app-sidebar__catalogue-list">
+                      {BROWSE_CATEGORIES.map((category) => {
+                        const active = isCategoryActive(category.href);
+                        return (
+                          <li key={category.href}>
+                            <Link
+                              href={category.href}
+                              className={navClass(active)}
+                              onClick={(event) =>
+                                navigateCatalogue(category.href, event)
+                              }
+                              aria-current={active ? "page" : undefined}
+                            >
+                              {category.label}
+                            </Link>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </nav>
       </aside>
     </>
   );

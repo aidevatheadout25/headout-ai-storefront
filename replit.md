@@ -1,44 +1,49 @@
 # Headout AI Storefront
 
-An internal registry and discovery layer for the tools, apps, skills, docs, plugins, and MCPs built at Headout — find what already exists, scope new ideas via a PM chat, and register your own back to the catalogue. Ported from an imported Next.js (Vercel/v0) project to a Vite + React artifact.
+A **chat-first meta-catalogue** of the internal AI tools, apps, skills, docs, plugins, MCPs and Zeps built at Headout. The home page IS a single chat front door: describe a task and the concierge finds the existing internal tool that already does it (it routes, it never runs tools). If nothing fits, it points you at how to build (Zeps builder) or request one (Slack). A quiet "+ Add a tool" lets anyone paste a URL and the LLM infers the catalogue metadata.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `pnpm --filter @workspace/api-server run dev` — run the API server (binds `PORT`)
+- `pnpm --filter @workspace/storefront run dev` — run the Vite frontend (binds `PORT`)
 - `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
+- `pnpm run build` — typecheck + build all packages (needs `PORT` + `BASE_PATH`, injected by the platform)
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `pnpm --filter @workspace/api-server exec tsx src/lib/seed.ts` — (re)seed ~25 tools with embeddings (idempotent)
+- Required env: `DATABASE_URL` (Postgres). Chat + tool inference use the **Replit OpenAI AI integration** (`@workspace/integrations-openai-ai-server`, key-free proxy). Embeddings need no key (local model).
 
 ## Stack
 
 - pnpm workspaces, Node.js 24, TypeScript 5.9
+- Frontend: Vite + React, wouter routing
 - API: Express 5
-- DB: PostgreSQL + Drizzle ORM
+- DB: PostgreSQL + **pgvector** + Drizzle ORM
+- Embeddings: local `@huggingface/transformers` (`Xenova/all-MiniLM-L6-v2`, 384-dim) — no API key
+- Chat / metadata inference: OpenAI via the Replit AI integration proxy
 - Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Build: esbuild (api-server), Vite (storefront)
 
 ## Where things live
 
-- `artifacts/storefront/` — the Vite + React frontend (the product). Routes in `src/App.tsx` (wouter), pages in `src/pages/`, ported components/lib/hooks/context under `src/`.
-- `artifacts/storefront/src/compat/` — `next-link` + `next-navigation` shims emulating Next.js APIs on wouter (see Architecture decisions).
-- `artifacts/storefront/src/index.css` — the app's plain-CSS styles (the original `globals.css`). Design tokens + Halyard fonts come from `artifacts/storefront/public/design-system/colors_and_type.css`, linked in `index.html`.
-- `artifacts/storefront/src/lib/mockData.ts` (+ sibling `mock*.ts`) — in-memory catalogue data; the app has no database.
-- `artifacts/api-server/src/routes/analyzeZep.ts` — the one ported API route (`POST /api/analyze-zep`), deterministic manifest → listing mapping.
-- `.migration-backup/` — the original imported Next.js source, kept as the parity reference.
+- `artifacts/storefront/` — the Vite + React frontend (the product). Routes in `src/App.tsx` (wouter): `/` (home chat), `/registry` (browse), `/tools/:id` (detail); obsolete routes redirect to `/`.
+- `artifacts/storefront/src/lib/api.ts` — the only data layer: `fetchTools`/`fetchTool`/`sendChat`/`addToolByUrl`, base `/api` (root-relative; the platform proxy routes it to the API server — no Vite proxy needed). Casts `ApiTool` → `Tool`.
+- `artifacts/storefront/src/components/HomeChat.tsx` — the chat front door; `Sidebar.tsx` — read-only nav (Home + Browse catalogue only).
+- `artifacts/storefront/src/index.css` — plain-CSS styles. Design tokens + Halyard fonts come from `artifacts/storefront/public/design-system/colors_and_type.css`, linked in `index.html`.
+- `lib/db/src/schema/tools.ts` — the `tools` Drizzle table (incl. pgvector `embedding` column), exported via `@workspace/db`.
+- `artifacts/api-server/src/routes/` — `tools.ts` (GET list/get, POST add-by-URL), `chat.ts` (POST chat). `lib/catalogue.ts` (cosine top-K search), `lib/chatAgent.ts` (concierge agent loop), `lib/inferTool.ts` (URL → metadata), `lib/embeddings.ts` (local model), `lib/seed.ts` + `lib/seedData.ts`.
+- `.migration-backup/` — the original imported Next.js source, kept as a historical reference (no longer the parity target).
 
 ## Architecture decisions
 
-- Ported from Next.js app-router to Vite + React via **compat shims**, not a component-by-component rewrite: `next/link` and `next/navigation` imports were `sed`-rewritten to `@/compat/*` shims built on wouter, so component bodies stay byte-identical to the original for visual + functional parity.
-- `notFound()` / `redirect()` throw a sentinel `NotFoundError` caught by a class error boundary in `App.tsx`; the boundary resets on route change. Next redirect pages became wouter `<Redirect>`.
-- No database — the catalogue is in-memory mock data held in React context (`src/context/AppContext.tsx`).
-- The single API route is a self-contained Express route (no OpenAPI/codegen) because the client uses a plain `fetch` and already falls back to the same deterministic mapping if the call fails.
+- **Chat-first, not search-first**: the home page is the chat; there is no search box and no three-door (find/build/request) model. The concierge agent does semantic search over the catalogue and routes to tools — it is explicitly a router, never a runner.
+- **Postgres + pgvector is the source of truth** for the catalogue (not in-memory mock data, not React context). The old `AppContext` and all `mock*.ts` files were removed.
+- **Embeddings run locally** (`@huggingface/transformers`) because neither the OpenAI nor Gemini Replit integrations expose an embeddings endpoint; weights are downloaded once and cached on disk.
+- **Read-only browse**: no submit/build/admin/approval/role-switch UI. Obsolete routes (`/submit`, `/build`, `/funnel`, `/requests`, `/admin/*`, etc.) redirect to `/`.
+- The client talks to the API with a plain `fetch` to root-relative `/api/...`; the platform proxy forwards to the api-server.
 
 ## Product
 
-Internal catalogue for Headout-built tools/apps/skills/docs/plugins/MCPs: a home PM-style chat to find or scope tools, a filterable/searchable registry (tools + building blocks), tool detail pages, a register-a-tool chat flow (incl. Zeps manifest ingest), my-activity, and admin approvals + metrics. Member/Admin role switch governs the catalogue.
+A single chat front door to find existing internal AI tools (apps, skills, docs, MCPs, plugins, scripts, slack-bots, zeps). On a match it shows inline tool cards that link to read-only detail pages; on no match it offers a Zeps build link and/or a Slack request link. A filterable/searchable read-only registry at `/registry` browses the full catalogue. "+ Add a tool" ingests a pasted URL and infers its metadata via the LLM.
 
 ## User preferences
 
@@ -47,7 +52,9 @@ _Populate as you build — explicit user instructions worth remembering across s
 ## Gotchas
 
 - The design-system stylesheet is linked from `index.html` with a **relative** href (`./design-system/...`) so the `@font-face` relative `url()`s and the production base path resolve correctly — do not change it to a root-relative `/design-system/...`.
-- The client copy of `src/lib/analyzeZep.ts` had its `ai`-package import stripped (only `mapManifestDeterministic` is used). Re-adding an `import ... from "ai"` will break the Vite build unless the package is installed.
+- Both Vite configs require `PORT` (and the storefront also `BASE_PATH`) at build/dev time — the platform injects these. Running `pnpm run build` bare will fail with "PORT/BASE_PATH environment variable is required"; pass them when building manually.
+- `mockup-sandbox` is a scaffold artifact unrelated to this product; its build needs `PORT` and is expected to fail in a bare `pnpm run build` — ignore it.
+- The first `/api/chat` (or seed) call after a cold start downloads the local embedding model weights from the HF hub (one-time, cached on disk), so it is noticeably slower than subsequent calls.
 
 ## Pointers
 
