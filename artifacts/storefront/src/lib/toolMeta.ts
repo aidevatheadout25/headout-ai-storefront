@@ -1,4 +1,6 @@
+import type { BuilderId } from "@/lib/api";
 import type { Tool, ToolLifecycleStatus, ToolType } from "@/lib/types";
+import { buildZepsBuilderUrl } from "@/lib/zeps";
 
 export const STOREFRONT_SLACK_CHANNEL = "#project-ai-internal-storefront";
 export const STOREFRONT_SLACK_URL =
@@ -8,24 +10,58 @@ export const STOREFRONT_SLACK_URL =
 export const IMPROVEMENT_REQUEST_SLACK_URL = STOREFRONT_SLACK_URL;
 
 /**
- * Builder options offered when the catalogue has no match. The concierge is not
- * forced to Zeps — Zeps is one internal option among several public builders.
- * (Zeps is rendered separately because its link is seeded with the user's ask.)
+ * The builders the concierge can hand a scoped need off to. The hand-off only
+ * surfaces after the search-first build-gate funnel completes; the concierge
+ * picks ONE best-fit builder (never defaulting to Zeps), which is rendered as
+ * the primary action while the rest stay secondary.
  */
-export type BuilderOption = { id: string; label: string; url: string };
-export const BUILDER_OPTIONS: BuilderOption[] = [
-  { id: "replit", label: "Build on Replit", url: "https://replit.com" },
-  {
-    id: "claude-code",
-    label: "Build with Claude Code",
-    url: "https://www.anthropic.com/claude-code",
-  },
-  {
-    id: "claude-skill",
-    label: "Make a Claude skill",
-    url: "https://docs.claude.com/en/docs/agents-and-tools/agent-skills/overview",
-  },
+export type BuilderOption = { id: BuilderId; label: string };
+
+const BUILDER_OPTIONS_MAP: Record<BuilderId, BuilderOption> = {
+  zeps: { id: "zeps", label: "Build with Zeps" },
+  replit: { id: "replit", label: "Build on Replit" },
+  "claude-code": { id: "claude-code", label: "Build with Claude Code" },
+  "claude-skill": { id: "claude-skill", label: "Make a Claude skill" },
+};
+
+const BUILDER_ORDER: BuilderId[] = [
+  "zeps",
+  "replit",
+  "claude-code",
+  "claude-skill",
 ];
+
+/** The outbound link for a builder, seeded with the build brief where supported. */
+export function builderUrl(id: BuilderId, prompt: string): string {
+  switch (id) {
+    case "zeps":
+      return buildZepsBuilderUrl({ prompt });
+    case "replit":
+      return "https://replit.com";
+    case "claude-code":
+      return "https://www.anthropic.com/claude-code";
+    case "claude-skill":
+      return "https://docs.claude.com/en/docs/agents-and-tools/agent-skills/overview";
+    default: {
+      const _exhaustive: never = id;
+      return _exhaustive;
+    }
+  }
+}
+
+/**
+ * Ordered builders for the hand-off UI: the concierge's recommended builder
+ * first (rendered as the primary action), then the rest in a stable order.
+ */
+export function orderedBuilders(
+  recommended: BuilderId | null | undefined,
+): BuilderOption[] {
+  const order =
+    recommended && BUILDER_OPTIONS_MAP[recommended]
+      ? [recommended, ...BUILDER_ORDER.filter((id) => id !== recommended)]
+      : BUILDER_ORDER;
+  return order.map((id) => BUILDER_OPTIONS_MAP[id]);
+}
 
 const SUBMITTER_LABELS: Record<string, string> = {
   "alex-kim": "Alex Kim (@alex.kim)",

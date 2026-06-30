@@ -4,3 +4,4 @@
 - [zod/v4 needs a direct dep](zod-v4-direct-dep.md) — importing "zod/v4" in a package fails unless that package lists zod itself; transitive via a workspace sibling isn't enough under pnpm.
 - [Adding a web lib to the build](web-lib-project-references.md) — a referenced lib/* web package needs composite:true + a local env.d.ts (not vite/client) to pass tsc --build.
 - [Add-tool dedup ordering](add-tool-dedup-ordering.md) — POST /api/tools dedups by normalized_url BEFORE the SSRF guard, so non-resolving internal URLs still dedup.
+- [Concierge build-gate funnel](chat-funnel-stage.md) — chat hand-off UI gates on ChatResult.stage==="handoff" (set by hand_off_to_builder tool), never on noMatch.

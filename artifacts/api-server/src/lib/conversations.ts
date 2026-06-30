@@ -7,6 +7,7 @@ import {
 } from "@workspace/db";
 import { and, asc, desc, eq } from "drizzle-orm";
 import type { ApiTool } from "./catalogue";
+import type { BuilderId, FunnelStage } from "./chatAgent";
 
 export type ConversationSummary = {
   id: string;
@@ -21,6 +22,9 @@ export type SavedMessage = {
   text: string;
   tools: ApiTool[] | null;
   noMatch: boolean;
+  stage: FunnelStage;
+  recommendedBuilder: BuilderId | null;
+  buildPrompt: string | null;
   userQuery: string | null;
   createdAt: string;
 };
@@ -41,6 +45,9 @@ function toMessage(row: MessageRow): SavedMessage {
     text: row.text,
     tools: (row.tools as ApiTool[] | null) ?? null,
     noMatch: row.noMatch,
+    stage: row.stage === "handoff" ? "handoff" : "chat",
+    recommendedBuilder: (row.recommendedBuilder as BuilderId | null) ?? null,
+    buildPrompt: row.buildPrompt,
     userQuery: row.userQuery,
     createdAt: row.createdAt.toISOString(),
   };
@@ -137,6 +144,9 @@ export async function appendTurn(
     assistantText: string;
     tools: ApiTool[];
     noMatch: boolean;
+    stage: FunnelStage;
+    recommendedBuilder: BuilderId | null;
+    buildPrompt: string | null;
   },
 ): Promise<void> {
   await db.insert(messagesTable).values([
@@ -151,6 +161,9 @@ export async function appendTurn(
       text: turn.assistantText,
       tools: turn.tools,
       noMatch: turn.noMatch,
+      stage: turn.stage,
+      recommendedBuilder: turn.recommendedBuilder,
+      buildPrompt: turn.buildPrompt,
       userQuery: turn.userText,
     },
   ]);

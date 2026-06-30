@@ -31,7 +31,10 @@ export const conversationsTable = pgTable(
  * One turn in a conversation. `tools` stores a snapshot of the recommended tool
  * cards (the exact JSON the chat endpoint returned) so a reopened conversation
  * re-renders identically even if the catalogue later changes. `noMatch` and
- * `userQuery` capture the no-match "build / request it" state.
+ * `userQuery` capture the no-match state. `stage` is the build-gate funnel
+ * stage this reply reached — only `handoff` should render the build/Slack
+ * hand-off UI; `recommendedBuilder` is the single best-fit builder chosen at
+ * hand-off so a reopened conversation re-renders the same primary action.
  */
 export const messagesTable = pgTable(
   "messages",
@@ -44,6 +47,9 @@ export const messagesTable = pgTable(
     text: text("text").notNull().default(""),
     tools: jsonb("tools"),
     noMatch: boolean("no_match").notNull().default(false),
+    stage: text("stage").notNull().default("chat"),
+    recommendedBuilder: text("recommended_builder"),
+    buildPrompt: text("build_prompt"),
     userQuery: text("user_query"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },

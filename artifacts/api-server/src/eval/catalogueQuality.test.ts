@@ -170,3 +170,122 @@ describe(
     });
   },
 );
+
+/**
+ * Build-gate funnel: building is only ever recommended AFTER search +
+ * confirmation + scoping. These pin the staged behaviour so the concierge can
+ * never regress to offering a one-click "build" before it has searched and
+ * scoped the need.
+ */
+describe(
+  "concierge build-gate funnel",
+  { skip: AI_READY ? false : "OpenAI AI integration env not set" },
+  () => {
+    const ALLOWED_BUILDERS = ["replit", "claude-code", "claude-skill", "zeps"];
+
+    let runChat: typeof import("../lib/chatAgent").runChat;
+
+    before(async () => {
+      ({ runChat } = await import("../lib/chatAgent"));
+    });
+
+    test("an explicit 'build me X' searches first and offers the existing match, not a build", async () => {
+      const res = await runChat([
+        {
+          role: "user",
+          content:
+            "Build me something that summarises sentiment and themes across our guest reviews",
+        },
+      ]);
+      // Even though the user said "build", the existing tool must surface first
+      // and there must be no build hand-off on this turn.
+      assert.notEqual(
+        res.stage,
+        "handoff",
+        `a 'build me X' with an existing match must not jump to the build hand-off — message: ${res.message}`,
+      );
+      assert.equal(
+        res.recommendedBuilder,
+        null,
+        "no builder should be recommended before scoping",
+      );
+      assert.ok(
+        res.tools.some((t) => t.name === "Review Radar"),
+        `expected the existing "Review Radar" to be offered first, got: [${res.tools
+          .map((t) => t.name)
+          .join(", ")}] — message: ${res.message}`,
+      );
+    });
+
+    test("an off-catalogue ask does not hand off to a builder on the first turn", async () => {
+      const res = await runChat([
+        {
+          role: "user",
+          content:
+            "I want to build an internal tool to plan and run my team's quarterly offsite events",
+        },
+      ]);
+      // Nothing exists, but the very first turn must scope (or confirm no match),
+      // never render the build hand-off — there is no one-click build path.
+      assert.notEqual(
+        res.stage,
+        "handoff",
+        `the first turn of an off-catalogue ask must not hand off before scoping — message: ${res.message}`,
+      );
+      assert.equal(res.recommendedBuilder, null);
+    });
+
+    test("the build hand-off only appears after the scoping exchange", async () => {
+      // A conversation where nothing matched and all three scoping questions
+      // have already been answered. The next reply should reach the hand-off.
+      const res = await runChat([
+        {
+          role: "user",
+          content:
+            "I want to build an internal tool to plan and run my team's quarterly offsite events",
+        },
+        {
+          role: "assistant",
+          content:
+            "Nothing in the catalogue does that yet. What's one concrete scenario it must handle?",
+        },
+        {
+          role: "user",
+          content:
+            "Booking a venue and collecting RSVPs from about 30 people for an offsite.",
+        },
+        {
+          role: "assistant",
+          content: "Got it. What data or systems would it need to touch?",
+        },
+        {
+          role: "user",
+          content: "Our Google Calendar and a Slack channel where people RSVP.",
+        },
+        {
+          role: "assistant",
+          content: "And who will use it, and how often?",
+        },
+        {
+          role: "user",
+          content: "My team's ops lead, a few times a quarter.",
+        },
+      ]);
+      assert.equal(
+        res.stage,
+        "handoff",
+        `after the three scoping answers the concierge should hand off — message: ${res.message}`,
+      );
+      assert.ok(
+        res.recommendedBuilder &&
+          ALLOWED_BUILDERS.includes(res.recommendedBuilder),
+        `hand-off must name one of the allowed builders, got: ${res.recommendedBuilder}`,
+      );
+      assert.equal(
+        res.tools.length,
+        0,
+        "the hand-off turn should not recommend catalogue tools",
+      );
+    });
+  },
+);

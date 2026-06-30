@@ -17,13 +17,18 @@ import {
   fetchConversation,
   sendChat,
   type AddChatTurn,
+  type BuilderId,
   type ChatTurn,
+  type FunnelStage,
   type ToolPreview,
 } from "@/lib/api";
 import { useAuthContext } from "@/lib/auth-context";
 import { useConversationsContext } from "@/lib/conversations-context";
-import { BUILDER_OPTIONS, STOREFRONT_SLACK_URL } from "@/lib/toolMeta";
-import { buildZepsBuilderUrl } from "@/lib/zeps";
+import {
+  builderUrl,
+  orderedBuilders,
+  STOREFRONT_SLACK_URL,
+} from "@/lib/toolMeta";
 import type { Tool } from "@/lib/types";
 
 const STARTER_PROMPTS = [
@@ -39,6 +44,9 @@ type ChatMessage = {
   text: string;
   tools?: Tool[];
   noMatch?: boolean;
+  stage?: FunnelStage;
+  recommendedBuilder?: BuilderId | null;
+  buildPrompt?: string | null;
   userQuery?: string;
   addReady?: boolean;
   addDraft?: ToolPreview;
@@ -114,6 +122,9 @@ export function HomeChat() {
             text: result.message,
             tools: result.tools,
             noMatch: result.noMatch,
+            stage: result.stage,
+            recommendedBuilder: result.recommendedBuilder,
+            buildPrompt: result.buildPrompt,
             userQuery: text,
           },
         ]);
@@ -308,6 +319,9 @@ export function HomeChat() {
             text: m.text,
             tools: m.tools ?? undefined,
             noMatch: m.noMatch,
+            stage: m.stage,
+            recommendedBuilder: m.recommendedBuilder,
+            buildPrompt: m.buildPrompt,
             userQuery: m.userQuery ?? undefined,
           })),
         );
@@ -430,46 +444,42 @@ export function HomeChat() {
                   </div>
                 )}
 
-                {message.noMatch && (
-                  <div className="chat-bubble__nomatch">
-                    <p className="t-para-sm text-muted">
-                      Nothing in the catalogue matches yet. You could build it —
-                      with Zeps, Replit, or Claude — or request it from the team.
-                    </p>
-                    <div className="chat-bubble__nomatch-actions">
-                      <ButtonLink
-                        href={buildZepsBuilderUrl({
-                          prompt: message.userQuery ?? message.text,
-                        })}
-                        variant="primary"
-                        size="sm"
-                        external
-                      >
-                        Build with Zeps
-                        <Icon name="arrow-right" size={16} />
-                      </ButtonLink>
-                      {BUILDER_OPTIONS.map((builder) => (
-                        <ButtonLink
-                          key={builder.id}
-                          href={builder.url}
-                          variant="secondary"
-                          size="sm"
-                          external
-                        >
-                          {builder.label}
-                        </ButtonLink>
-                      ))}
-                      <ButtonLink
-                        href={STOREFRONT_SLACK_URL}
-                        variant="tertiary"
-                        size="sm"
-                        external
-                      >
-                        Request it on Slack
-                      </ButtonLink>
-                    </div>
-                  </div>
-                )}
+                {message.stage === "handoff" &&
+                  (() => {
+                    const prompt = message.buildPrompt || message.userQuery || message.text;
+                    const builders = orderedBuilders(message.recommendedBuilder);
+                    return (
+                      <div className="chat-bubble__nomatch">
+                        <p className="t-para-sm text-muted">
+                          Nothing existing fits, so here&apos;s how to build it.
+                          Your recommended builder is first — or request it from
+                          the team.
+                        </p>
+                        <div className="chat-bubble__nomatch-actions">
+                          {builders.map((builder, i) => (
+                            <ButtonLink
+                              key={builder.id}
+                              href={builderUrl(builder.id, prompt)}
+                              variant={i === 0 ? "primary" : "secondary"}
+                              size="sm"
+                              external
+                            >
+                              {builder.label}
+                              {i === 0 && <Icon name="arrow-right" size={16} />}
+                            </ButtonLink>
+                          ))}
+                          <ButtonLink
+                            href={STOREFRONT_SLACK_URL}
+                            variant="tertiary"
+                            size="sm"
+                            external
+                          >
+                            Request it on Slack
+                          </ButtonLink>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                 {message.addReady && message.addDraft && (
                   <div className="chat-bubble__nomatch-actions">

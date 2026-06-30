@@ -14,10 +14,19 @@ export type ChatTurn = {
   content: string;
 };
 
+/** The single best-fit builder the concierge hands a scoped need off to. */
+export type BuilderId = "replit" | "claude-code" | "claude-skill" | "zeps";
+
+/** Build-gate funnel stage; only `handoff` renders the build/Slack hand-off UI. */
+export type FunnelStage = "chat" | "handoff";
+
 export type ChatResult = {
   message: string;
   tools: Tool[];
   noMatch: boolean;
+  stage: FunnelStage;
+  recommendedBuilder: BuilderId | null;
+  buildPrompt: string | null;
   conversationId: string;
 };
 
@@ -34,6 +43,9 @@ export type SavedMessage = {
   text: string;
   tools: Tool[] | null;
   noMatch: boolean;
+  stage: FunnelStage;
+  recommendedBuilder: BuilderId | null;
+  buildPrompt: string | null;
   userQuery: string | null;
   createdAt: string;
 };

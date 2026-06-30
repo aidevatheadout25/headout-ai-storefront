@@ -76,6 +76,9 @@ router.post("/chat", async (req: Request, res: Response) => {
       assistantText: result.message,
       tools: result.tools,
       noMatch: result.noMatch,
+      stage: result.stage,
+      recommendedBuilder: result.recommendedBuilder,
+      buildPrompt: result.buildPrompt,
     });
 
     return res.json({ ...result, conversationId });
