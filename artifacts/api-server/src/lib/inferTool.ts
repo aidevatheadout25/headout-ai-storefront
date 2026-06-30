@@ -1,8 +1,8 @@
-import { openai } from "@workspace/integrations-openai-ai-server";
+import { openai, OPENAI_MODEL } from "./openaiClient";
 import type { InsertTool } from "@workspace/db";
 import { safeFetch } from "./urlGuard";
 
-const MODEL = "gpt-5.4";
+const MODEL = OPENAI_MODEL;
 
 const TOOL_TYPES = [
   "app",

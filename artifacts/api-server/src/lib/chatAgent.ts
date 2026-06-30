@@ -1,8 +1,8 @@
-import { openai } from "@workspace/integrations-openai-ai-server";
 import type OpenAI from "openai";
+import { openai, OPENAI_MODEL } from "./openaiClient";
 import { searchCatalogue, type ApiTool } from "./catalogue";
 
-const MODEL = "gpt-5.4";
+const MODEL = OPENAI_MODEL;
 const MAX_TURNS = 4;
 
 export type ChatTurn = { role: "user" | "assistant"; content: string };
