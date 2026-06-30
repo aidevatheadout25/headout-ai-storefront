@@ -3,7 +3,9 @@ name: Add-tool dedup must precede the SSRF guard
 description: Why POST /api/tools checks duplicates before the SSRF/fetch step
 ---
 
-In the add-tool-by-URL route, the duplicate check (`findToolByUrl`, a pure
+The add-tool-by-URL flow is split: `POST /api/tools/inspect` reads the page +
+LLM-infers a preview (no save), and `POST /api/tools` persists the reviewed
+(possibly edited) values. In BOTH, the duplicate check (`findToolByUrl`, a pure
 normalized-string lookup against `tools.normalized_url`) runs BEFORE the
 SSRF `assertSafePublicUrl` + page fetch.
 

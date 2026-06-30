@@ -10,16 +10,37 @@ import { Icon } from "@/components/Icon";
 import { ToolCard } from "@/components/ToolCard";
 import { useRouter, useSearchParams } from "@/compat/next-navigation";
 import {
-  addToolByUrl,
+  createTool,
   fetchConversation,
+  inspectToolUrl,
   sendChat,
   type ChatTurn,
+  type ToolPreview,
 } from "@/lib/api";
 import { useAuthContext } from "@/lib/auth-context";
 import { useConversationsContext } from "@/lib/conversations-context";
 import { BUILDER_OPTIONS, STOREFRONT_SLACK_URL } from "@/lib/toolMeta";
 import { buildZepsBuilderUrl } from "@/lib/zeps";
-import type { Tool } from "@/lib/types";
+import type { Team, Tool, ToolType } from "@/lib/types";
+
+const TOOL_TYPE_OPTIONS: ToolType[] = [
+  "app",
+  "skill",
+  "docs",
+  "mcp",
+  "plugin",
+  "script",
+  "slack-bot",
+  "zep",
+];
+
+const TEAM_OPTIONS: Team[] = [
+  "Platform",
+  "Applied AI",
+  "Supply Ops",
+  "Growth",
+  "Content",
+];
 
 type ChatMessage = {
   id: string;
@@ -63,6 +84,9 @@ export function HomeChat() {
   const [addError, setAddError] = useState<string | null>(null);
   const [addedTool, setAddedTool] = useState<Tool | null>(null);
   const [addedDuplicate, setAddedDuplicate] = useState(false);
+  const [addPreview, setAddPreview] = useState<ToolPreview | null>(null);
+  const [addLowConfidence, setAddLowConfidence] = useState(false);
+  const [addTagsInput, setAddTagsInput] = useState("");
 
   const started = messages.length > 0;
 
@@ -198,7 +222,18 @@ export function HomeChat() {
     submitText(trimmed);
   }
 
-  async function handleAddTool(e: FormEvent) {
+  function resetAdd() {
+    setAddUrl("");
+    setAddError(null);
+    setAddedTool(null);
+    setAddedDuplicate(false);
+    setAddPreview(null);
+    setAddLowConfidence(false);
+    setAddTagsInput("");
+  }
+
+  // Step 1: read the page and return inferred metadata for review (no save).
+  async function handleInspect(e: FormEvent) {
     e.preventDefault();
     const url = addUrl.trim();
     if (!url || addBusy) return;
@@ -207,15 +242,59 @@ export function HomeChat() {
     setAddedTool(null);
     setAddedDuplicate(false);
     try {
-      const { tool, duplicate } = await addToolByUrl(url);
-      setAddedTool(tool);
-      setAddedDuplicate(duplicate);
-      setAddUrl("");
+      const result = await inspectToolUrl(url);
+      if (result.duplicate) {
+        setAddedTool(result.tool);
+        setAddedDuplicate(true);
+      } else {
+        setAddPreview(result.preview);
+        setAddTagsInput(result.preview.tags.join(", "));
+        setAddLowConfidence(result.lowConfidence);
+      }
     } catch (err) {
       setAddError(
         err instanceof Error
           ? err.message
           : "Couldn't read that link — check the URL and try again.",
+      );
+    } finally {
+      setAddBusy(false);
+    }
+  }
+
+  function updatePreview(patch: Partial<ToolPreview>) {
+    setAddPreview((prev) => (prev ? { ...prev, ...patch } : prev));
+  }
+
+  // Step 2: persist the reviewed (possibly edited) metadata.
+  async function handleCreate(e: FormEvent) {
+    e.preventDefault();
+    if (!addPreview || addBusy) return;
+    const title = addPreview.title.trim();
+    if (!title) {
+      setAddError("Give the tool a title before adding it.");
+      return;
+    }
+    const tags = addTagsInput
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    setAddBusy(true);
+    setAddError(null);
+    try {
+      const { tool, duplicate } = await createTool({
+        ...addPreview,
+        title,
+        tags,
+      });
+      setAddedTool(tool);
+      setAddedDuplicate(duplicate);
+      setAddPreview(null);
+    } catch (err) {
+      setAddError(
+        err instanceof Error
+          ? err.message
+          : "Couldn't add that tool — try again.",
       );
     } finally {
       setAddBusy(false);
@@ -366,10 +445,177 @@ export function HomeChat() {
               <span aria-hidden="true">+</span>
               Add a tool
             </button>
-          ) : (
-            <form className="home-chat__add-form" onSubmit={handleAddTool}>
+          ) : addedTool ? (
+            <div className="home-chat__add-form">
+              <div className="home-chat__add-success">
+                <p className="t-para-sm" role="status">
+                  {addedDuplicate ? (
+                    <>
+                      <strong>{addedTool.name}</strong> is already in the
+                      catalogue.
+                    </>
+                  ) : (
+                    <>
+                      Added <strong>{addedTool.name}</strong> to the catalogue.
+                    </>
+                  )}
+                </p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => router.push(`/tools/${addedTool.id}`)}
+                >
+                  View it
+                </Button>
+              </div>
+              <div className="home-chat__add-actions">
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => resetAdd()}
+                >
+                  Add another
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setAddOpen(false);
+                    resetAdd();
+                  }}
+                >
+                  Close
+                </Button>
+              </div>
+            </div>
+          ) : addPreview ? (
+            <form className="home-chat__add-form" onSubmit={handleCreate}>
               <p className="home-chat__add-label t-label-sm text-muted">
-                Paste a link — I&apos;ll read the page and fill in the details.
+                Review what I found, edit anything, then add it.
+              </p>
+              {addLowConfidence && (
+                <p className="home-chat__add-notice t-para-sm" role="status">
+                  I couldn&apos;t read much from this page, so these details are a
+                  rough guess — please check and correct them before adding.
+                </p>
+              )}
+              <div className="home-chat__add-grid">
+                <label className="form-field">
+                  <span className="form-field__label t-label-rg">Type</span>
+                  <select
+                    className="form-field__input form-field__select t-para-rg"
+                    value={addPreview.type}
+                    onChange={(e) => updatePreview({ type: e.target.value })}
+                    disabled={addBusy}
+                  >
+                    {TOOL_TYPE_OPTIONS.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="form-field">
+                  <span className="form-field__label t-label-rg">Team</span>
+                  <select
+                    className="form-field__input form-field__select t-para-rg"
+                    value={addPreview.team}
+                    onChange={(e) => updatePreview({ team: e.target.value })}
+                    disabled={addBusy}
+                  >
+                    {TEAM_OPTIONS.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <label className="form-field">
+                <span className="form-field__label t-label-rg">Title</span>
+                <input
+                  className="form-field__input t-para-rg"
+                  value={addPreview.title}
+                  onChange={(e) => updatePreview({ title: e.target.value })}
+                  disabled={addBusy}
+                />
+              </label>
+              <label className="form-field">
+                <span className="form-field__label t-label-rg">One-liner</span>
+                <input
+                  className="form-field__input t-para-rg"
+                  value={addPreview.oneLiner}
+                  onChange={(e) => updatePreview({ oneLiner: e.target.value })}
+                  disabled={addBusy}
+                />
+              </label>
+              <label className="form-field">
+                <span className="form-field__label t-label-rg">Description</span>
+                <textarea
+                  className="form-field__input form-field__textarea t-para-rg"
+                  rows={3}
+                  value={addPreview.description}
+                  onChange={(e) =>
+                    updatePreview({ description: e.target.value })
+                  }
+                  disabled={addBusy}
+                />
+              </label>
+              <label className="form-field">
+                <span className="form-field__label t-label-rg">Tags</span>
+                <input
+                  className="form-field__input t-para-rg"
+                  placeholder="comma, separated, tags"
+                  value={addTagsInput}
+                  onChange={(e) => setAddTagsInput(e.target.value)}
+                  disabled={addBusy}
+                />
+              </label>
+              {addError && (
+                <p className="home-chat__add-error t-para-sm" role="alert">
+                  {addError}
+                </p>
+              )}
+              <div className="home-chat__add-actions">
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={!addPreview.title.trim() || addBusy}
+                >
+                  {addBusy ? "Adding…" : "Add to catalogue"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={addBusy}
+                  onClick={() => {
+                    setAddPreview(null);
+                    setAddError(null);
+                  }}
+                >
+                  Back
+                </Button>
+                <Button
+                  type="button"
+                  variant="tertiary"
+                  size="sm"
+                  disabled={addBusy}
+                  onClick={() => {
+                    setAddOpen(false);
+                    resetAdd();
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <form className="home-chat__add-form" onSubmit={handleInspect}>
+              <p className="home-chat__add-label t-label-sm text-muted">
+                Paste a link — I&apos;ll read the page so you can review the
+                details before adding.
               </p>
               <div className="home-chat__add-row">
                 <input
@@ -382,7 +628,7 @@ export function HomeChat() {
                   aria-label="Tool URL"
                 />
                 <Button type="submit" size="sm" disabled={!addUrl.trim() || addBusy}>
-                  {addBusy ? "Reading…" : "Add"}
+                  {addBusy ? "Reading…" : "Read"}
                 </Button>
                 <Button
                   type="button"
@@ -390,8 +636,7 @@ export function HomeChat() {
                   size="sm"
                   onClick={() => {
                     setAddOpen(false);
-                    setAddUrl("");
-                    setAddError(null);
+                    resetAdd();
                   }}
                   disabled={addBusy}
                 >
@@ -402,29 +647,6 @@ export function HomeChat() {
                 <p className="home-chat__add-error t-para-sm" role="alert">
                   {addError}
                 </p>
-              )}
-              {addedTool && (
-                <div className="home-chat__add-success">
-                  <p className="t-para-sm" role="status">
-                    {addedDuplicate ? (
-                      <>
-                        <strong>{addedTool.name}</strong> is already in the
-                        catalogue.
-                      </>
-                    ) : (
-                      <>
-                        Added <strong>{addedTool.name}</strong> to the catalogue.
-                      </>
-                    )}
-                  </p>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => router.push(`/tools/${addedTool.id}`)}
-                  >
-                    View it
-                  </Button>
-                </div>
               )}
             </form>
           )}

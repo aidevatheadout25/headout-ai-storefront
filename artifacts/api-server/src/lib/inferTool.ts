@@ -32,31 +32,103 @@ export function isZepsUrl(rawUrl: string): boolean {
   }
 }
 
+/** Structured signals scraped from a page, used to ground the inference. */
+export type PageSignals = {
+  title: string;
+  metaDescription: string;
+  ogTitle: string;
+  ogDescription: string;
+  ogSiteName: string;
+  bodyText: string;
+};
+
+const EMPTY_SIGNALS: PageSignals = {
+  title: "",
+  metaDescription: "",
+  ogTitle: "",
+  ogDescription: "",
+  ogSiteName: "",
+  bodyText: "",
+};
+
+/** Decode the handful of HTML entities that show up in titles/meta content. */
+function decodeEntities(value: string): string {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0*39;|&#x0*27;|&apos;/gi, "'")
+    .replace(/&nbsp;/g, " ")
+    .trim();
+}
+
+/** Pull every <meta> tag into a name/property → content map. */
+function extractMetaTags(html: string): Record<string, string> {
+  const metas: Record<string, string> = {};
+  const tags = html.match(/<meta\b[^>]*>/gi) ?? [];
+  for (const tag of tags) {
+    const key = tag
+      .match(/\b(?:name|property)\s*=\s*["']([^"']+)["']/i)?.[1]
+      ?.toLowerCase();
+    const content = tag.match(/\bcontent\s*=\s*["']([^"']*)["']/i)?.[1];
+    if (key && content) metas[key] = decodeEntities(content);
+  }
+  return metas;
+}
+
 /**
- * Best-effort fetch of a page's visible text to give the model context.
+ * Best-effort fetch of a page's structured signals (title, meta description,
+ * OpenGraph tags) plus visible body text. Client-rendered SPAs return an empty
+ * body shell, but their server-rendered <head> usually still carries a real
+ * title/description — so we lean on those rather than the raw URL slug.
  * Uses {@link safeFetch} so user-supplied URLs cannot be used for SSRF.
  */
-async function fetchPageText(url: string): Promise<string> {
+export async function fetchPageSignals(url: string): Promise<PageSignals> {
   try {
     const res = await safeFetch(url, {
       timeoutMs: 8000,
       headers: { "User-Agent": "HeadoutStorefrontBot/1.0" },
     });
-    if (!res.ok) return "";
+    if (!res.ok) return EMPTY_SIGNALS;
     const html = await res.text();
-    return html
+
+    const titleRaw = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "";
+    const metas = extractMetaTags(html);
+
+    const bodyText = html
+      .replace(/<head[\s\S]*?<\/head>/gi, " ")
       .replace(/<script[\s\S]*?<\/script>/gi, " ")
       .replace(/<style[\s\S]*?<\/style>/gi, " ")
       .replace(/<[^>]+>/g, " ")
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 4000);
+
+    return {
+      title: decodeEntities(titleRaw.replace(/\s+/g, " ")),
+      metaDescription: metas["description"] ?? "",
+      ogTitle: metas["og:title"] ?? "",
+      ogDescription: metas["og:description"] ?? "",
+      ogSiteName: metas["og:site_name"] ?? "",
+      bodyText,
+    };
   } catch {
-    return "";
+    return EMPTY_SIGNALS;
   }
 }
 
 export type InferredTool = Omit<InsertTool, "embedding">;
+
+export type InferToolResult = {
+  preview: InferredTool;
+  /**
+   * True when the page yielded too little real signal to classify confidently
+   * (e.g. an empty client-rendered shell). The UI surfaces this so the user
+   * reviews/corrects the guess instead of trusting a fabricated classification.
+   */
+  lowConfidence: boolean;
+};
 
 const JSON_SCHEMA = {
   name: "tool_metadata",
@@ -71,18 +143,58 @@ const JSON_SCHEMA = {
       description: { type: "string" },
       tags: { type: "array", items: { type: "string" } },
       team: { type: "string", enum: TEAMS },
+      lowConfidence: { type: "boolean" },
     },
-    required: ["type", "title", "oneLiner", "description", "tags", "team"],
+    required: [
+      "type",
+      "title",
+      "oneLiner",
+      "description",
+      "tags",
+      "team",
+      "lowConfidence",
+    ],
   },
 } as const;
 
+/** Heuristic: did the page give us anything real to classify from? */
+function hasUsableSignal(signals: PageSignals): boolean {
+  const headSignal = [
+    signals.title,
+    signals.metaDescription,
+    signals.ogTitle,
+    signals.ogDescription,
+    signals.ogSiteName,
+  ]
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return headSignal.length >= 15 || signals.bodyText.length >= 200;
+}
+
+function renderSignals(signals: PageSignals): string {
+  const lines = [
+    signals.title && `Title: ${signals.title}`,
+    signals.ogTitle && `OG title: ${signals.ogTitle}`,
+    signals.ogSiteName && `Site name: ${signals.ogSiteName}`,
+    signals.metaDescription && `Meta description: ${signals.metaDescription}`,
+    signals.ogDescription && `OG description: ${signals.ogDescription}`,
+    signals.bodyText && `Visible text: ${signals.bodyText}`,
+  ].filter(Boolean);
+  return lines.length > 0 ? lines.join("\n") : "(no readable page signals)";
+}
+
 /**
- * Infer catalogue metadata for a pasted URL. Fetches the page text when
- * reachable and asks the LLM to classify it; Zeps URLs are forced to `zep`.
+ * Infer catalogue metadata for a pasted URL. Fetches the page's structured
+ * signals when reachable and asks the LLM to classify *from those signals* —
+ * not from the URL slug. Zeps URLs are forced to `zep`. Returns the inferred
+ * metadata plus a low-confidence flag so the caller can prompt for review
+ * rather than silently committing a guess.
  */
-export async function inferToolFromUrl(url: string): Promise<InferredTool> {
+export async function inferToolFromUrl(url: string): Promise<InferToolResult> {
   const zep = isZepsUrl(url);
-  const pageText = await fetchPageText(url);
+  const signals = await fetchPageSignals(url);
+  const usableSignal = hasUsableSignal(signals);
 
   const completion = await openai.chat.completions.create({
     model: MODEL,
@@ -91,13 +203,26 @@ export async function inferToolFromUrl(url: string): Promise<InferredTool> {
       {
         role: "system",
         content:
-          "You catalogue internal AI tools for Headout (a travel/experiences company). Given a URL and any scraped page text, infer concise, accurate registry metadata. The one-liner is a single sentence. Pick 3-6 lowercase capability tags. If unsure of the team, choose Platform.",
+          "You catalogue internal AI tools for Headout (a travel/experiences company). " +
+          "Classify the tool ONLY from the supplied page signals (title, meta/OpenGraph " +
+          "description, site name, and visible text). Do NOT infer what the tool does from " +
+          "the URL, its slug, or its path — if the signals do not state what it does, do not " +
+          "invent specifics. The one-liner is one factual sentence grounded in the signals. " +
+          "Pick 3-6 lowercase capability tags. If unsure of the team, choose Platform. " +
+          "Set lowConfidence to true whenever the signals are too thin to classify confidently " +
+          "(for example an almost-empty client-rendered page). When lowConfidence is true, give a " +
+          "minimal best-effort guess from the title/site name and keep the description short and " +
+          "generic rather than fabricating capabilities.",
       },
       {
         role: "user",
         content: `URL: ${url}\n${
-          zep ? "This is a Zeps-hosted agent (type must be \"zep\").\n" : ""
-        }Page text (may be empty):\n${pageText || "(none)"}`,
+          zep ? 'This is a Zeps-hosted agent (type must be "zep").\n' : ""
+        }${
+          usableSignal
+            ? ""
+            : "NOTE: the page returned almost no readable content. Treat this as low confidence.\n"
+        }Page signals:\n${renderSignals(signals)}`,
       },
     ],
   });
@@ -110,9 +235,10 @@ export async function inferToolFromUrl(url: string): Promise<InferredTool> {
     description: string;
     tags: string[];
     team: string;
+    lowConfidence: boolean;
   };
 
-  return {
+  const preview: InferredTool = {
     type: zep ? "zep" : parsed.type,
     title: parsed.title,
     oneLiner: parsed.oneLiner,
@@ -130,4 +256,6 @@ export async function inferToolFromUrl(url: string): Promise<InferredTool> {
     status: "live",
     accessLevel: "open",
   };
+
+  return { preview, lowConfidence: !usableSignal || parsed.lowConfidence };
 }

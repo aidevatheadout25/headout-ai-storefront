@@ -4728,6 +4728,44 @@ html[data-theme="dark"] .pm-recommendation__stakes {
   outline: none;
 }
 
+.home-chat__add-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+.home-chat__add-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-12);
+}
+
+@media (max-width: 540px) {
+  .home-chat__add-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.home-chat__add-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+
+.home-chat__add-notice {
+  padding: var(--space-8) var(--space-12);
+  border-radius: var(--radius-8);
+  border: 1px solid var(--color-joymustard-300);
+  background: var(--color-joymustard-100);
+  color: var(--color-joymustard-800);
+}
+
+html[data-theme="dark"] .home-chat__add-notice {
+  border-color: var(--color-joymustard-800);
+  background: var(--color-joymustard-900);
+  color: var(--color-joymustard-300);
+}
+
 html[data-theme="dark"] .home-chat__chip,
 html[data-theme="dark"] .home-chat__input-wrap,
 html[data-theme="dark"] .home-chat__message--assistant .home-chat__bubble {

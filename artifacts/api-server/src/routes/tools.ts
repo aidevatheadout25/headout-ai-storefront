@@ -12,7 +12,7 @@ import {
   listTools,
   updateTool,
 } from "../lib/catalogue";
-import { inferToolFromUrl } from "../lib/inferTool";
+import { inferToolFromUrl, isZepsUrl } from "../lib/inferTool";
 import { logger } from "../lib/logger";
 import {
   assertSafePublicUrl,
@@ -111,9 +111,17 @@ router.get("/tools/:id", async (req: Request, res: Response) => {
   }
 });
 
-/** POST /api/tools { url } — add a tool by URL; metadata inferred by the LLM. */
+/**
+ * POST /api/tools/inspect { url } — infer catalogue metadata for a pasted URL
+ * and return it as a *preview* WITHOUT saving. The expensive outbound fetch +
+ * LLM call live here, so this is the rate-limited step. The client reviews and
+ * (optionally) edits the preview, then confirms via POST /api/tools.
+ *
+ * If the URL is already catalogued, returns `{ duplicate: true, tool }` so the
+ * UI can short-circuit to the existing entry.
+ */
 router.post(
-  "/tools",
+  "/tools/inspect",
   addToolRateLimit,
   async (req: Request, res: Response) => {
     const url = typeof req.body?.url === "string" ? req.body.url.trim() : "";
@@ -128,15 +136,14 @@ router.post(
 
     try {
       // Dedup first — a pure string lookup, no network. If this URL (normalized)
-      // is already catalogued, return the existing entry instead of creating a
-      // duplicate, and skip the outbound fetch + LLM call entirely.
+      // is already catalogued, return the existing entry and skip the fetch+LLM.
       const existing = await findToolByUrl(url);
       if (existing) {
-        return res.status(200).json({ tool: existing, duplicate: true });
+        return res.status(200).json({ duplicate: true, tool: existing });
       }
     } catch (err) {
       logger.error({ err }, "Dedup lookup failed");
-      return res.status(500).json({ error: "Failed to add tool" });
+      return res.status(500).json({ error: "Failed to inspect tool" });
     }
 
     // Only genuinely new URLs reach the network: validate against SSRF before
@@ -151,19 +158,104 @@ router.post(
     }
 
     try {
-      const inferred = await inferToolFromUrl(url);
-      const tool = await insertTool(inferred);
-      return res.status(201).json({ tool });
+      const { preview, lowConfidence } = await inferToolFromUrl(url);
+      return res.status(200).json({
+        duplicate: false,
+        lowConfidence,
+        preview: {
+          type: preview.type,
+          title: preview.title,
+          oneLiner: preview.oneLiner,
+          description: preview.description,
+          tags: preview.tags ?? [],
+          team: preview.team,
+          url: preview.url,
+        },
+      });
     } catch (err) {
-      // A concurrent submission won the race and inserted this URL first.
-      if (err instanceof DuplicateToolError) {
-        return res.status(200).json({ tool: err.tool, duplicate: true });
-      }
-      logger.error({ err }, "Failed to add tool by URL");
-      return res.status(500).json({ error: "Failed to add tool" });
+      logger.error({ err }, "Failed to inspect tool by URL");
+      return res.status(500).json({ error: "Failed to inspect tool" });
     }
   },
 );
+
+const createSchema = z.object({
+  url: z.string().trim().min(1),
+  type: z.enum(TOOL_TYPES),
+  title: z.string().trim().min(1),
+  oneLiner: z.string().trim(),
+  description: z.string().trim(),
+  tags: z.array(z.string().trim().min(1)),
+  team: z.enum(TEAMS),
+});
+
+/**
+ * POST /api/tools — persist a reviewed tool. The metadata here is the
+ * (possibly edited) values the user confirmed from the inspect preview, so we
+ * save exactly what they reviewed rather than re-inferring. Still dedups and
+ * SSRF-validates the URL. Zeps URLs are pinned to the `zep` type.
+ */
+router.post("/tools", async (req: Request, res: Response) => {
+  const parsed = createSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res
+      .status(400)
+      .json({ error: "Title, type, team and a valid URL are required" });
+  }
+  const data = parsed.data;
+
+  if (!isSafeLinkScheme(data.url)) {
+    return res
+      .status(400)
+      .json({ error: "Only http and https URLs are allowed" });
+  }
+
+  try {
+    const existing = await findToolByUrl(data.url);
+    if (existing) {
+      return res.status(200).json({ tool: existing, duplicate: true });
+    }
+  } catch (err) {
+    logger.error({ err }, "Dedup lookup failed");
+    return res.status(500).json({ error: "Failed to add tool" });
+  }
+
+  try {
+    await assertSafePublicUrl(data.url);
+  } catch (err) {
+    if (err instanceof UnsafeUrlError) {
+      return res.status(400).json({ error: err.message });
+    }
+    return res.status(400).json({ error: "url is not a valid URL" });
+  }
+
+  try {
+    const tool = await insertTool({
+      type: isZepsUrl(data.url) ? "zep" : data.type,
+      title: data.title,
+      oneLiner: data.oneLiner,
+      description: data.description,
+      tags: data.tags,
+      team: data.team,
+      url: data.url,
+      ownerName: "",
+      ownerSlackId: "",
+      verified: false,
+      source: "manual",
+      visibility: "org",
+      status: "live",
+      accessLevel: "open",
+    });
+    return res.status(201).json({ tool });
+  } catch (err) {
+    // A concurrent submission won the race and inserted this URL first.
+    if (err instanceof DuplicateToolError) {
+      return res.status(200).json({ tool: err.tool, duplicate: true });
+    }
+    logger.error({ err }, "Failed to add tool");
+    return res.status(500).json({ error: "Failed to add tool" });
+  }
+});
 
 const claimSchema = z.object({
   ownerName: z.string().trim().min(1),

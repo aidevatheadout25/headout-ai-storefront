@@ -130,16 +130,54 @@ export async function fetchConversation(
   );
 }
 
+/** Editable metadata the LLM inferred for a pasted URL, shown for review. */
+export type ToolPreview = {
+  type: string;
+  title: string;
+  oneLiner: string;
+  description: string;
+  tags: string[];
+  team: string;
+  url: string;
+};
+
+export type InspectToolResult =
+  | { duplicate: true; tool: Tool }
+  | { duplicate: false; preview: ToolPreview; lowConfidence: boolean };
+
+/**
+ * Read a pasted URL and return inferred metadata for review WITHOUT saving.
+ * If the URL is already catalogued, returns the existing tool as a duplicate.
+ */
+export async function inspectToolUrl(url: string): Promise<InspectToolResult> {
+  const data = await postJson<{
+    duplicate?: boolean;
+    tool?: Tool;
+    preview?: ToolPreview;
+    lowConfidence?: boolean;
+  }>("/tools/inspect", { url });
+  if (data.duplicate && data.tool) {
+    return { duplicate: true, tool: data.tool };
+  }
+  return {
+    duplicate: false,
+    preview: data.preview as ToolPreview,
+    lowConfidence: data.lowConfidence ?? false,
+  };
+}
+
 export type AddToolResult = {
   tool: Tool;
   /** True when the URL already existed and the catalogue returned that entry. */
   duplicate: boolean;
 };
 
-export async function addToolByUrl(url: string): Promise<AddToolResult> {
-  const data = await postJson<{ tool: Tool; duplicate?: boolean }>("/tools", {
-    url,
-  });
+/** Persist a reviewed (possibly edited) tool to the catalogue. */
+export async function createTool(payload: ToolPreview): Promise<AddToolResult> {
+  const data = await postJson<{ tool: Tool; duplicate?: boolean }>(
+    "/tools",
+    payload,
+  );
   return { tool: data.tool, duplicate: data.duplicate ?? false };
 }
 
