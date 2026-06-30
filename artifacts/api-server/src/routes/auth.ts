@@ -209,18 +209,9 @@ router.get("/callback", async (req: Request, res: Response) => {
 });
 
 router.get("/logout", async (req: Request, res: Response) => {
-  const config = await getOidcConfig();
-  const origin = getOrigin(req);
-
   const sid = getSessionId(req);
   await clearSession(res, sid);
-
-  const endSessionUrl = oidc.buildEndSessionUrl(config, {
-    client_id: process.env.REPL_ID!,
-    post_logout_redirect_uri: origin,
-  });
-
-  res.redirect(endSessionUrl.href);
+  res.redirect("/");
 });
 
 router.post(

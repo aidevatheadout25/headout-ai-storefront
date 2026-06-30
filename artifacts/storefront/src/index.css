@@ -115,6 +115,29 @@ img {
   color: var(--text-grey-1);
 }
 
+.app-sidebar__top-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-shrink: 0;
+}
+
+.app-sidebar__new-chat-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-8);
+  color: var(--text-grey-2);
+  transition: background-color 150ms var(--ease-functional-standard), color 150ms var(--ease-functional-standard);
+}
+
+.app-sidebar__new-chat-btn:hover {
+  background: var(--surface-grey-2);
+  color: var(--text-grey-1);
+}
+
 .app-sidebar__close {
   display: none;
   align-items: center;
