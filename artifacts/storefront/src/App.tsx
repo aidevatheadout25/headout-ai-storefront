@@ -4,9 +4,11 @@ import { Sidebar } from "@/components/Sidebar";
 import { AuthProvider } from "@/lib/auth-context";
 import { ConversationsProvider } from "@/lib/conversations-context";
 import { NotFoundError } from "@/compat/next-navigation";
+import { useAuthContext } from "@/lib/auth-context";
 import HomePage from "@/pages/home";
 import RegistryPage from "@/pages/registry";
 import ToolDetailPage from "@/pages/tool-detail";
+import LandingPage from "@/pages/landing";
 import NotFound from "@/pages/not-found";
 
 class NotFoundBoundary extends Component<
@@ -81,20 +83,40 @@ function RoutedMain() {
   );
 }
 
+function AppGate() {
+  const { isAuthenticated, isLoading } = useAuthContext();
+
+  if (isLoading) {
+    return (
+      <div className="app-loading">
+        <p className="t-para-md text-muted">Loading…</p>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <LandingPage />;
+  }
+
+  return (
+    <ConversationsProvider>
+      <div className="app-shell">
+        <Sidebar />
+        <div className="app-content">
+          <main className="app-main">
+            <RoutedMain />
+          </main>
+        </div>
+      </div>
+    </ConversationsProvider>
+  );
+}
+
 function App() {
   return (
     <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
       <AuthProvider>
-        <ConversationsProvider>
-          <div className="app-shell">
-            <Sidebar />
-            <div className="app-content">
-              <main className="app-main">
-                <RoutedMain />
-              </main>
-            </div>
-          </div>
-        </ConversationsProvider>
+        <AppGate />
       </AuthProvider>
     </WouterRouter>
   );

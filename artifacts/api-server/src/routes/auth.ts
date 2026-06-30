@@ -19,6 +19,9 @@ import {
   type SessionData,
 } from "../lib/auth";
 
+const ALLOWED_EMAIL_DOMAIN =
+  process.env.ALLOWED_EMAIL_DOMAIN ?? "@headout.com";
+
 const OIDC_COOKIE_TTL = 10 * 60 * 1000;
 
 const router: IRouter = Router();
@@ -161,6 +164,24 @@ router.get("/callback", async (req: Request, res: Response) => {
   const claims = tokens.claims();
   if (!claims) {
     res.redirect("/api/login");
+    return;
+  }
+
+  const email =
+    typeof claims.email === "string" ? claims.email.toLowerCase().trim() : "";
+  const emailVerified = claims.email_verified;
+  const domainSuffix = ALLOWED_EMAIL_DOMAIN.startsWith("@")
+    ? ALLOWED_EMAIL_DOMAIN
+    : `@${ALLOWED_EMAIL_DOMAIN}`;
+
+  if (
+    !email ||
+    emailVerified === false ||
+    !email.endsWith(domainSuffix)
+  ) {
+    const existingSid = getSessionId(req);
+    await clearSession(res, existingSid);
+    res.redirect("/?auth_error=domain");
     return;
   }
 

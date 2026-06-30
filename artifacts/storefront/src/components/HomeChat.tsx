@@ -44,7 +44,7 @@ function msgId(): string {
 export function HomeChat() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isAuthenticated, isLoading: authLoading, login } = useAuthContext();
+  const { isAuthenticated } = useAuthContext();
   const { refresh: refreshConversations } = useConversationsContext();
   const scrollRef = useRef<HTMLDivElement>(null);
   const seededRef = useRef(false);
@@ -220,40 +220,6 @@ export function HomeChat() {
     } finally {
       setAddBusy(false);
     }
-  }
-
-  if (authLoading) {
-    return (
-      <div className="home-chat">
-        <div className="home-chat__thread">
-          <div className="home-chat__empty">
-            <p className="home-chat__intro t-para-md">Loading…</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!isAuthenticated) {
-    return (
-      <div className="home-chat">
-        <div className="home-chat__thread">
-          <div className="home-chat__empty">
-            <h1 className="home-chat__heading t-display-xs">
-              Sign in to find your tools
-            </h1>
-            <p className="home-chat__intro t-para-md">
-              Describe a task and I&apos;ll find the internal AI tool that already
-              does it. Sign in to start chatting — your conversations are saved to
-              your account so you can pick up where you left off on any device.
-            </p>
-            <div className="home-chat__starters">
-              <Button onClick={login}>Sign in to continue</Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
   }
 
   return (

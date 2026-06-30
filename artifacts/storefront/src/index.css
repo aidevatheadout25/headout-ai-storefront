@@ -5285,3 +5285,84 @@ html[data-theme="dark"] .register-receipt__row--flash {
   background: var(--color-forest-green-900);
 }
 
+/* ======= App loading state ======= */
+.app-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--surface-grey-1);
+}
+
+/* ======= Landing / sign-in page ======= */
+.landing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: var(--space-24) var(--space-16);
+  background: var(--surface-grey-1);
+}
+
+.landing__card {
+  width: 100%;
+  max-width: 480px;
+  padding: var(--space-40) var(--space-40);
+  background: var(--surface-white);
+  border-radius: var(--radius-16);
+  border: 1px solid var(--divider-primary);
+  box-shadow: var(--shadow-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-32);
+}
+
+@media (max-width: 540px) {
+  .landing__card {
+    padding: var(--space-28) var(--space-24);
+  }
+}
+
+.landing__brand {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.landing__product-name {
+  color: var(--text-grey-2);
+}
+
+.landing__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-20);
+}
+
+.landing__heading {
+  color: var(--text-grey-1);
+  margin: 0;
+}
+
+.landing__desc {
+  color: var(--text-grey-3);
+  margin: 0;
+}
+
+.landing__error {
+  padding: var(--space-12) var(--space-16);
+  border-radius: var(--radius-8);
+  background: var(--surface-warning, #fff8e6);
+  border: 1px solid var(--border-warning, #f5c842);
+  color: var(--text-warning, #7a5200);
+}
+
+.landing__error p {
+  margin: 0;
+}
+
+html[data-theme="dark"] .landing__card {
+  background: var(--surface-grey-2);
+  border-color: var(--divider-dark);
+}
+
