@@ -130,7 +130,7 @@ export async function fetchConversation(
   );
 }
 
-/** Editable metadata the LLM inferred for a pasted URL, shown for review. */
+/** Editable metadata the LLM inferred for a pasted URL. */
 export type ToolPreview = {
   type: string;
   title: string;
@@ -164,6 +164,31 @@ export async function inspectToolUrl(url: string): Promise<InspectToolResult> {
     preview: data.preview as ToolPreview,
     lowConfidence: data.lowConfidence ?? false,
   };
+}
+
+export type AddChatTurn = { role: "user" | "assistant"; content: string };
+
+export type AddChatResult =
+  | { duplicate: true; tool: Tool }
+  | {
+      duplicate?: false;
+      ready: boolean;
+      message: string;
+      preview: ToolPreview;
+      lowConfidence?: boolean;
+    };
+
+/**
+ * Conversational add-tool flow.
+ * First call: pass only { url } — returns the opening assistant message + inferred draft.
+ * Subsequent calls: pass { url, messages, preview } — returns next question or ready:true.
+ */
+export async function addToolChat(params: {
+  url: string;
+  messages?: AddChatTurn[];
+  preview?: ToolPreview;
+}): Promise<AddChatResult> {
+  return postJson<AddChatResult>("/tools/add-chat", params);
 }
 
 export type AddToolResult = {

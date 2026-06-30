@@ -10,10 +10,11 @@ import { Icon } from "@/components/Icon";
 import { ToolCard } from "@/components/ToolCard";
 import { useRouter, useSearchParams } from "@/compat/next-navigation";
 import {
+  addToolChat,
   createTool,
   fetchConversation,
-  inspectToolUrl,
   sendChat,
+  type AddChatTurn,
   type ChatTurn,
   type ToolPreview,
 } from "@/lib/api";
@@ -21,26 +22,14 @@ import { useAuthContext } from "@/lib/auth-context";
 import { useConversationsContext } from "@/lib/conversations-context";
 import { BUILDER_OPTIONS, STOREFRONT_SLACK_URL } from "@/lib/toolMeta";
 import { buildZepsBuilderUrl } from "@/lib/zeps";
-import type { Team, Tool, ToolType } from "@/lib/types";
+import type { Tool } from "@/lib/types";
 
-const TOOL_TYPE_OPTIONS: ToolType[] = [
-  "app",
-  "skill",
-  "docs",
-  "mcp",
-  "plugin",
-  "script",
-  "slack-bot",
-  "zep",
-];
-
-const TEAM_OPTIONS: Team[] = [
-  "Platform",
-  "Applied AI",
-  "Supply Ops",
-  "Growth",
-  "Content",
-];
+const STARTER_PROMPTS = [
+  "I need to summarise customer reviews",
+  "Is there a tool for expense receipts?",
+  "What can help me write SQL faster?",
+  "Anything for translating help-centre articles?",
+] as const;
 
 type ChatMessage = {
   id: string;
@@ -51,12 +40,10 @@ type ChatMessage = {
   userQuery?: string;
 };
 
-const STARTER_PROMPTS = [
-  "I need to summarise customer reviews",
-  "Is there a tool for expense receipts?",
-  "What can help me write SQL faster?",
-  "Anything for translating help-centre articles?",
-] as const;
+type AddChatMessage = {
+  role: "user" | "assistant";
+  text: string;
+};
 
 function msgId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -68,6 +55,7 @@ export function HomeChat() {
   const { isAuthenticated } = useAuthContext();
   const { refresh: refreshConversations } = useConversationsContext();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const addChatScrollRef = useRef<HTMLDivElement>(null);
   const seededRef = useRef(false);
   const loadedConvRef = useRef<string | null>(null);
 
@@ -78,15 +66,20 @@ export function HomeChat() {
   const [loadingConv, setLoadingConv] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // ── Add-tool chat state ───────────────────────────────────────────────────
   const [addOpen, setAddOpen] = useState(false);
   const [addUrl, setAddUrl] = useState("");
   const [addBusy, setAddBusy] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   const [addedTool, setAddedTool] = useState<Tool | null>(null);
   const [addedDuplicate, setAddedDuplicate] = useState(false);
-  const [addPreview, setAddPreview] = useState<ToolPreview | null>(null);
-  const [addLowConfidence, setAddLowConfidence] = useState(false);
-  const [addTagsInput, setAddTagsInput] = useState("");
+
+  // Chat-based add-tool state
+  const [addMessages, setAddMessages] = useState<AddChatMessage[]>([]);
+  const [addDraft, setAddDraft] = useState<ToolPreview | null>(null);
+  const [addReady, setAddReady] = useState(false);
+  const [addChatInput, setAddChatInput] = useState("");
+  const [addConfirming, setAddConfirming] = useState(false);
 
   const started = messages.length > 0;
 
@@ -102,6 +95,16 @@ export function HomeChat() {
   useEffect(() => {
     scrollToEnd();
   }, [messages, sending, scrollToEnd]);
+
+  // Scroll add-chat thread to bottom when new messages arrive
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      addChatScrollRef.current?.scrollTo({
+        top: addChatScrollRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    });
+  }, [addMessages, addBusy]);
 
   const runChat = useCallback(
     async (text: string, history: ChatMessage[]) => {
@@ -227,29 +230,30 @@ export function HomeChat() {
     setAddError(null);
     setAddedTool(null);
     setAddedDuplicate(false);
-    setAddPreview(null);
-    setAddLowConfidence(false);
-    setAddTagsInput("");
+    setAddMessages([]);
+    setAddDraft(null);
+    setAddReady(false);
+    setAddChatInput("");
+    setAddConfirming(false);
   }
 
-  // Step 1: read the page and return inferred metadata for review (no save).
-  async function handleInspect(e: FormEvent) {
+  // Step 1: paste URL → kick off add-chat conversation
+  async function handleAddStart(e: FormEvent) {
     e.preventDefault();
     const url = addUrl.trim();
     if (!url || addBusy) return;
     setAddBusy(true);
     setAddError(null);
-    setAddedTool(null);
-    setAddedDuplicate(false);
     try {
-      const result = await inspectToolUrl(url);
-      if (result.duplicate) {
+      const result = await addToolChat({ url });
+      if ("duplicate" in result && result.duplicate) {
         setAddedTool(result.tool);
         setAddedDuplicate(true);
-      } else {
-        setAddPreview(result.preview);
-        setAddTagsInput(result.preview.tags.join(", "));
-        setAddLowConfidence(result.lowConfidence);
+      } else if (!("duplicate" in result) || !result.duplicate) {
+        const r = result as Extract<typeof result, { ready: boolean }>;
+        setAddMessages([{ role: "assistant", text: r.message }]);
+        setAddDraft(r.preview);
+        setAddReady(r.ready);
       }
     } catch (err) {
       setAddError(
@@ -262,42 +266,63 @@ export function HomeChat() {
     }
   }
 
-  function updatePreview(patch: Partial<ToolPreview>) {
-    setAddPreview((prev) => (prev ? { ...prev, ...patch } : prev));
-  }
-
-  // Step 2: persist the reviewed (possibly edited) metadata.
-  async function handleCreate(e: FormEvent) {
+  // Subsequent turns: user replies to add-chat questions
+  async function handleAddChatSend(e: FormEvent) {
     e.preventDefault();
-    if (!addPreview || addBusy) return;
-    const title = addPreview.title.trim();
-    if (!title) {
-      setAddError("Give the tool a title before adding it.");
-      return;
-    }
-    const tags = addTagsInput
-      .split(",")
-      .map((t) => t.trim())
-      .filter(Boolean);
+    const text = addChatInput.trim();
+    if (!text || addBusy || !addDraft) return;
+
+    const userMsg: AddChatMessage = { role: "user", text };
+    const nextMessages = [...addMessages, userMsg];
+    setAddMessages(nextMessages);
+    setAddChatInput("");
     setAddBusy(true);
     setAddError(null);
+
     try {
-      const { tool, duplicate } = await createTool({
-        ...addPreview,
-        title,
-        tags,
+      const turns: AddChatTurn[] = nextMessages.map((m) => ({
+        role: m.role,
+        content: m.text,
+      }));
+      const result = await addToolChat({
+        url: addUrl,
+        messages: turns,
+        preview: addDraft,
       });
-      setAddedTool(tool);
-      setAddedDuplicate(duplicate);
-      setAddPreview(null);
+
+      if ("duplicate" in result && result.duplicate) {
+        setAddedTool(result.tool);
+        setAddedDuplicate(true);
+      } else {
+        const r = result as Extract<typeof result, { ready: boolean }>;
+        setAddMessages((prev) => [...prev, { role: "assistant", text: r.message }]);
+        setAddDraft(r.preview);
+        setAddReady(r.ready);
+      }
     } catch (err) {
       setAddError(
-        err instanceof Error
-          ? err.message
-          : "Couldn't add that tool — try again.",
+        err instanceof Error ? err.message : "Something went wrong — try again.",
       );
     } finally {
       setAddBusy(false);
+    }
+  }
+
+  // Confirm: save the finalised tool draft
+  async function handleAddConfirm() {
+    if (!addDraft || addConfirming) return;
+    setAddConfirming(true);
+    setAddError(null);
+    try {
+      const { tool, duplicate } = await createTool(addDraft);
+      setAddedTool(tool);
+      setAddedDuplicate(duplicate);
+    } catch (err) {
+      setAddError(
+        err instanceof Error ? err.message : "Couldn't add that tool — try again.",
+      );
+    } finally {
+      setAddConfirming(false);
     }
   }
 
@@ -439,7 +464,7 @@ export function HomeChat() {
             <input
               type="text"
               className="home-chat__input t-para-md"
-              placeholder="Describe a task, e.g. “summarise customer reviews”…"
+              placeholder={'Describe a task, e.g. \u201csummarise customer reviews\u201d\u2026'}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               disabled={sending}
@@ -458,15 +483,15 @@ export function HomeChat() {
               className="home-chat__add-trigger t-label-rg"
               onClick={() => {
                 setAddOpen(true);
-                setAddedTool(null);
-                setAddError(null);
+                resetAdd();
               }}
             >
               <span aria-hidden="true">+</span>
               Add a tool
             </button>
           ) : addedTool ? (
-            <div className="home-chat__add-form">
+            /* ── Success state ── */
+            <div className="home-chat__add-panel">
               <div className="home-chat__add-success">
                 <p className="t-para-sm" role="status">
                   {addedDuplicate ? (
@@ -489,11 +514,7 @@ export function HomeChat() {
                 </Button>
               </div>
               <div className="home-chat__add-actions">
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => resetAdd()}
-                >
+                <Button type="button" size="sm" onClick={() => resetAdd()}>
                   Add another
                 </Button>
                 <Button
@@ -509,133 +530,102 @@ export function HomeChat() {
                 </Button>
               </div>
             </div>
-          ) : addPreview ? (
-            <form className="home-chat__add-form" onSubmit={handleCreate}>
-              <p className="home-chat__add-label t-label-sm text-muted">
-                Review what I found, edit anything, then add it.
-              </p>
-              {addLowConfidence && (
-                <p className="home-chat__add-notice t-para-sm" role="status">
-                  I couldn&apos;t read much from this page, so these details are a
-                  rough guess — please check and correct them before adding.
-                </p>
-              )}
-              <div className="home-chat__add-grid">
-                <label className="form-field">
-                  <span className="form-field__label t-label-rg">Type</span>
-                  <select
-                    className="form-field__input form-field__select t-para-rg"
-                    value={addPreview.type}
-                    onChange={(e) => updatePreview({ type: e.target.value })}
-                    disabled={addBusy}
-                  >
-                    {TOOL_TYPE_OPTIONS.map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="form-field">
-                  <span className="form-field__label t-label-rg">Team</span>
-                  <select
-                    className="form-field__input form-field__select t-para-rg"
-                    value={addPreview.team}
-                    onChange={(e) => updatePreview({ team: e.target.value })}
-                    disabled={addBusy}
-                  >
-                    {TEAM_OPTIONS.map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <label className="form-field">
-                <span className="form-field__label t-label-rg">Title</span>
-                <input
-                  className="form-field__input t-para-rg"
-                  value={addPreview.title}
-                  onChange={(e) => updatePreview({ title: e.target.value })}
-                  disabled={addBusy}
-                />
-              </label>
-              <label className="form-field">
-                <span className="form-field__label t-label-rg">One-liner</span>
-                <input
-                  className="form-field__input t-para-rg"
-                  value={addPreview.oneLiner}
-                  onChange={(e) => updatePreview({ oneLiner: e.target.value })}
-                  disabled={addBusy}
-                />
-              </label>
-              <label className="form-field">
-                <span className="form-field__label t-label-rg">Description</span>
-                <textarea
-                  className="form-field__input form-field__textarea t-para-rg"
-                  rows={3}
-                  value={addPreview.description}
-                  onChange={(e) =>
-                    updatePreview({ description: e.target.value })
-                  }
-                  disabled={addBusy}
-                />
-              </label>
-              <label className="form-field">
-                <span className="form-field__label t-label-rg">Tags</span>
-                <input
-                  className="form-field__input t-para-rg"
-                  placeholder="comma, separated, tags"
-                  value={addTagsInput}
-                  onChange={(e) => setAddTagsInput(e.target.value)}
-                  disabled={addBusy}
-                />
-              </label>
-              {addError && (
-                <p className="home-chat__add-error t-para-sm" role="alert">
-                  {addError}
-                </p>
-              )}
-              <div className="home-chat__add-actions">
-                <Button
-                  type="submit"
-                  size="sm"
-                  disabled={!addPreview.title.trim() || addBusy}
-                >
-                  {addBusy ? "Adding…" : "Add to catalogue"}
-                </Button>
-                <Button
+          ) : addMessages.length > 0 ? (
+            /* ── Chat conversation ── */
+            <div className="home-chat__add-panel">
+              <div className="home-chat__add-chat-header">
+                <span className="t-label-sm text-muted">Adding a tool</span>
+                <button
                   type="button"
-                  variant="secondary"
-                  size="sm"
-                  disabled={addBusy}
-                  onClick={() => {
-                    setAddPreview(null);
-                    setAddError(null);
-                  }}
-                >
-                  Back
-                </Button>
-                <Button
-                  type="button"
-                  variant="tertiary"
-                  size="sm"
-                  disabled={addBusy}
+                  className="home-chat__add-cancel t-label-sm"
                   onClick={() => {
                     setAddOpen(false);
                     resetAdd();
                   }}
                 >
                   Cancel
-                </Button>
+                </button>
               </div>
-            </form>
+
+              <div className="home-chat__add-thread" ref={addChatScrollRef}>
+                {addMessages.map((msg, i) => (
+                  <div
+                    key={i}
+                    className={`home-chat__add-bubble home-chat__add-bubble--${msg.role}`}
+                  >
+                    <p className="t-para-sm">{msg.text}</p>
+                  </div>
+                ))}
+
+                {addBusy && (
+                  <div className="home-chat__add-bubble home-chat__add-bubble--assistant home-chat__add-bubble--typing">
+                    <p className="t-para-sm">Thinking…</p>
+                  </div>
+                )}
+              </div>
+
+              {addError && (
+                <p className="home-chat__add-error t-para-sm" role="alert">
+                  {addError}
+                </p>
+              )}
+
+              {addReady ? (
+                <div className="home-chat__add-actions">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => void handleAddConfirm()}
+                    disabled={addConfirming}
+                  >
+                    {addConfirming ? "Adding…" : "Add to catalogue ✓"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="tertiary"
+                    size="sm"
+                    onClick={() => {
+                      setAddOpen(false);
+                      resetAdd();
+                    }}
+                    disabled={addConfirming}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              ) : (
+                <form
+                  className="home-chat__add-reply"
+                  onSubmit={(e) => void handleAddChatSend(e)}
+                >
+                  <input
+                    type="text"
+                    className="home-chat__add-input t-para-rg"
+                    placeholder="Reply…"
+                    value={addChatInput}
+                    onChange={(e) => setAddChatInput(e.target.value)}
+                    disabled={addBusy}
+                    autoFocus
+                    aria-label="Reply to add-tool assistant"
+                  />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={!addChatInput.trim() || addBusy}
+                  >
+                    Send
+                  </Button>
+                </form>
+              )}
+            </div>
           ) : (
-            <form className="home-chat__add-form" onSubmit={handleInspect}>
+            /* ── URL entry ── */
+            <form
+              className="home-chat__add-panel"
+              onSubmit={(e) => void handleAddStart(e)}
+            >
               <p className="home-chat__add-label t-label-sm text-muted">
-                Paste a link — I&apos;ll read the page so you can review the
-                details before adding.
+                Paste a link — I&apos;ll ask a few quick questions before adding it.
               </p>
               <div className="home-chat__add-row">
                 <input
@@ -647,8 +637,12 @@ export function HomeChat() {
                   disabled={addBusy}
                   aria-label="Tool URL"
                 />
-                <Button type="submit" size="sm" disabled={!addUrl.trim() || addBusy}>
-                  {addBusy ? "Reading…" : "Read"}
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={!addUrl.trim() || addBusy}
+                >
+                  {addBusy ? "Reading…" : "Go"}
                 </Button>
                 <Button
                   type="button"
