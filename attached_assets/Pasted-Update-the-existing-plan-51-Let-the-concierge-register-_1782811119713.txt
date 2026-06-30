@@ -1,0 +1,43 @@
+Update the existing plan #51 "Let the concierge register a tool in chat" with the changes below.
+Do not implement yet — revise the plan/spec only. Everything in #51 stays except where noted.
+
+Decision driving this update
+
+Chat is the single interface. Since the concierge will handle registration conversationally
+(any phrasing — "I built a tool, how do I register it," "add my tool," "what do I do now that I
+built this," or just pasting a link), the separate "+ Add a tool" button is now redundant and
+should be removed. Registration must be fully reachable by talking to the chat — no dedicated button.
+
+Changes to make to #51
+
+
+Add to scope: remove the "+ Add a tool" affordance. Delete the button/entry point in the home
+chat UI. KEEP the underlying paste-a-link composer mode, addToolChat, and POST /tools/add-chat
+exactly as they are — they are now triggered by the concierge's register stage instead of the
+button. Removing the button must NOT remove the paste-link flow itself.
+Update "Out of scope" and "Done looks like." The old line "the + Add a tool button works
+exactly as before — unchanged" is now wrong; replace it with: registration is reachable only
+through the chat conversation; there is no separate add-tool button.
+Broaden the funnel test (step 5). One phrasing isn't enough now that chat is the only path —
+intent recall is load-bearing with no button fallback. The eval must assert stage === "register"
+(and never handoff or a Slack-only reply) across several real phrasings, at minimum:
+
+"I built a tool, how do I register it?"
+"add my tool to the catalogue"
+"I just finished building something, what do I do next?"
+a message that is only a pasted URL to a tool the user built.
+
+
+
+
+
+Leave unchanged
+
+
+The start_registration tool, the register FunnelStage, the registration result field, the
+shared-type propagation (api-server + storefront api.ts), conversation persistence/round-trip,
+and the HomeChat rendering that drives the existing paste-link flow.
+Catalogue search, builder hand-off, tool cards, seed data, stack, auth, approval queue.
+
+
+Output the revised #51 plan with these edits folded in.
