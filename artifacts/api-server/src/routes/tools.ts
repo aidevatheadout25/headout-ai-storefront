@@ -188,20 +188,10 @@ const TEAMS_LIST = TEAMS.join(", ");
 
 /** Compose the first assistant message summarising what was inferred. */
 function buildOpeningMessage(preview: InferredTool, lowConfidence: boolean): string {
-  const tagStr = preview.tags?.length ? preview.tags.join(", ") : "(none)";
-  const summary = [
-    `I found **${preview.title}** — looks like a **${preview.type}** from the **${preview.team}** team.`,
-    ``,
-    `Here's what I inferred:`,
-    `• One-liner: ${preview.oneLiner}`,
-    `• Tags: ${tagStr}`,
-  ].join("\n");
-
-  const question = lowConfidence
-    ? `\n\nThe page didn't give me much to go on so I'm not very confident in these details. Could you tell me **what this tool actually does** and **which team owns it**?`
-    : `\n\nDoes this look right? Say **yes** to add it, or correct anything — for example: "the team is Growth" or "it's actually a skill".`;
-
-  return summary + question;
+  if (lowConfidence) {
+    return `I couldn't get much from that page. What does this tool do, and which team owns it?`;
+  }
+  return `I found **${preview.title}** — looks like a ${preview.type} from the ${preview.team} team. Does that sound right, or anything to correct?`;
 }
 
 const FINALIZE_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
@@ -340,7 +330,7 @@ router.post(
         .json({ error: "preview is required for subsequent turns" });
     }
 
-    const systemPrompt = `You are helping a Headout teammate add an internal tool to the AI catalogue. You have already inferred some metadata from the URL. Your job is to refine it through short, friendly conversation.
+    const systemPrompt = `You are helping a Headout teammate add an internal tool to the AI catalogue. You have inferred some metadata from the URL and need to confirm or fill in any gaps.
 
 Current draft:
 - Title: ${clientPreview.title}
@@ -354,10 +344,9 @@ Valid types: ${TOOL_TYPES_LIST}
 Valid teams: ${TEAMS_LIST}
 
 Rules:
-- Ask at most ONE short, focused question per turn if anything important is still unclear.
-- Apply any corrections the user gives immediately to the draft before finalising.
-- When the user has confirmed the details (e.g. says "yes", "looks good", or provides the last missing detail), call finalize_tool with the complete, updated draft. Do NOT ask for confirmation again after the user already said yes.
-- Be concise and warm. No markdown headers.`;
+- Be direct and brief. One sentence, one question per reply. No bullet points. No markdown headers.
+- Apply any corrections immediately to the draft before finalising.
+- When the user confirms (e.g. "yes", "looks good", or supplies the last missing detail), call finalize_tool right away. Do not ask again after they've said yes.`;
 
     try {
       const llmMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
