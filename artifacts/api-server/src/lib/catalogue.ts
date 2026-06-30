@@ -5,6 +5,7 @@ import {
   type InsertTool,
 } from "@workspace/db";
 import { and, cosineDistance, desc, eq, getTableColumns, sql } from "drizzle-orm";
+import { createHash, randomBytes } from "node:crypto";
 import { embed } from "./embeddings";
 
 /**
@@ -36,6 +37,8 @@ export type ApiTool = {
   ownerConfirmed: boolean;
   source: string;
   visibility: string;
+  /** True once an owner has claimed the listing (has a manage key). */
+  claimed: boolean;
   similarity?: number;
 };
 
@@ -75,6 +78,7 @@ export function rowToApiTool(row: ToolRow): ApiTool {
     ownerConfirmed: true,
     source: row.source,
     visibility: row.visibility,
+    claimed: Boolean(row.manageTokenHash),
   };
 }
 
@@ -149,6 +153,109 @@ export async function getToolById(id: string): Promise<ApiTool | null> {
   const row = rows[0];
   if (!row || !canView(row)) return null;
   return rowToApiTool(row);
+}
+
+/**
+ * Raw row including `manageTokenHash` — for owner-auth checks only. Never map
+ * this straight to the client; go through {@link rowToApiTool}.
+ */
+export async function getToolRowById(id: string): Promise<ToolRow | null> {
+  const rows = await db
+    .select()
+    .from(toolsTable)
+    .where(eq(toolsTable.id, id))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export function hashManageToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+/** Editable fields an owner/admin may patch on a tool. */
+export type ToolPatch = Partial<{
+  type: string;
+  title: string;
+  oneLiner: string;
+  description: string;
+  tags: string[];
+  ownerName: string;
+  ownerSlackId: string;
+  team: string;
+  url: string;
+  status: string;
+  accessLevel: string;
+}>;
+
+/** Fields whose change must trigger a fresh embedding so search stays accurate. */
+const EMBEDDING_FIELDS = [
+  "title",
+  "oneLiner",
+  "description",
+  "tags",
+  "type",
+] as const;
+
+/**
+ * Apply an owner/admin edit. Re-embeds whenever an embedding-relevant field
+ * changes so semantic search reflects the new metadata. Returns null if the
+ * tool no longer exists.
+ */
+export async function updateTool(
+  id: string,
+  patch: ToolPatch,
+): Promise<ApiTool | null> {
+  const existing = await getToolRowById(id);
+  if (!existing) return null;
+
+  const merged = { ...existing, ...patch };
+  const values: Record<string, unknown> = { ...patch, updatedAt: new Date() };
+
+  const embeddingChanged = EMBEDDING_FIELDS.some(
+    (field) => patch[field] !== undefined,
+  );
+  if (embeddingChanged) {
+    values.embedding = await embed(
+      toolEmbeddingText({
+        title: merged.title,
+        oneLiner: merged.oneLiner,
+        description: merged.description,
+        tags: merged.tags,
+        type: merged.type,
+      }),
+    );
+  }
+
+  const [row] = await db
+    .update(toolsTable)
+    .set(values)
+    .where(eq(toolsTable.id, id))
+    .returning();
+  return row ? rowToApiTool(row) : null;
+}
+
+/**
+ * Set the owner and (re)issue a manage key. Returns the updated tool plus the
+ * plaintext manage token — shown to the claimer exactly once; only its hash is
+ * stored.
+ */
+export async function claimTool(
+  id: string,
+  owner: { ownerName: string; ownerSlackId: string },
+): Promise<{ tool: ApiTool; manageToken: string } | null> {
+  const manageToken = randomBytes(24).toString("hex");
+  const [row] = await db
+    .update(toolsTable)
+    .set({
+      ownerName: owner.ownerName,
+      ownerSlackId: owner.ownerSlackId,
+      manageTokenHash: hashManageToken(manageToken),
+      updatedAt: new Date(),
+    })
+    .where(eq(toolsTable.id, id))
+    .returning();
+  if (!row) return null;
+  return { tool: rowToApiTool(row), manageToken };
 }
 
 export async function insertTool(

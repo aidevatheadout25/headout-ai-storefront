@@ -31,7 +31,8 @@ A **chat-first meta-catalogue** of the internal AI tools, apps, skills, docs, pl
 - `artifacts/storefront/src/components/HomeChat.tsx` — the chat front door; `Sidebar.tsx` — read-only nav (Home + Browse catalogue only).
 - `artifacts/storefront/src/index.css` — plain-CSS styles. Design tokens + Halyard fonts come from `artifacts/storefront/public/design-system/colors_and_type.css`, linked in `index.html`.
 - `lib/db/src/schema/tools.ts` — the `tools` Drizzle table (incl. pgvector `embedding` column), exported via `@workspace/db`.
-- `artifacts/api-server/src/routes/` — `tools.ts` (GET list/get, POST add-by-URL), `chat.ts` (POST chat). `lib/catalogue.ts` (cosine top-K search), `lib/chatAgent.ts` (concierge agent loop), `lib/inferTool.ts` (URL → metadata), `lib/embeddings.ts` (local model), `lib/seed.ts` + `lib/seedData.ts`.
+- `artifacts/api-server/src/routes/` — `tools.ts` (GET list/get, POST add-by-URL, **POST `:id/claim`**, **PATCH `:id`** owner/admin edit), `chat.ts` (POST chat). `lib/catalogue.ts` (cosine top-K search, plus `claimTool`/`updateTool`/`getToolRowById`/`hashManageToken`), `lib/chatAgent.ts` (concierge agent loop), `lib/inferTool.ts` (URL → metadata), `lib/embeddings.ts` (local model), `lib/seed.ts` + `lib/seedData.ts`.
+- `artifacts/storefront/src/components/ToolManagePanel.tsx` — the owner claim/edit panel surfaced from `ToolDetailView`; `src/lib/manageTokens.ts` — per-tool manage-key storage (localStorage).
 - `.migration-backup/` — the original imported Next.js source, kept as a historical reference (no longer the parity target).
 
 ## Architecture decisions
@@ -39,7 +40,8 @@ A **chat-first meta-catalogue** of the internal AI tools, apps, skills, docs, pl
 - **Chat-first, not search-first**: the home page is the chat; there is no search box and no three-door (find/build/request) model. The concierge agent does semantic search over the catalogue and routes to tools — it is explicitly a router, never a runner.
 - **Postgres + pgvector is the source of truth** for the catalogue (not in-memory mock data, not React context). The old `AppContext` and all `mock*.ts` files were removed.
 - **Embeddings run locally** (`@huggingface/transformers`) because neither the OpenAI nor Gemini Replit integrations expose an embeddings endpoint; weights are downloaded once and cached on disk.
-- **Read-only browse**: no submit/build/admin/approval/role-switch UI. Obsolete routes (`/submit`, `/build`, `/funnel`, `/requests`, `/admin/*`, etc.) redirect to `/`.
+- **Read-only browse, with owner upkeep**: no submit/build/approval/role-switch UI, and obsolete routes (`/submit`, `/build`, `/funnel`, `/requests`, `/admin/*`, etc.) redirect to `/`. The one write seam from the UI is **owner self-service**: a tool can be claimed and its key fields + lifecycle status edited from its detail page.
+- **Owner-scoped edits without login**: claiming an unclaimed tool issues a one-time **manage key** (random token; only its sha256 hash is stored in `tools.manage_token_hash`). Edits (`PATCH /api/tools/:id`) require that manage key (`x-manage-token`) or an optional shared **admin key** (`x-admin-token` matching the `STOREFRONT_ADMIN_TOKEN` secret — when unset, the admin override is simply disabled). Edits re-embed the tool when search-relevant fields change so semantic search stays accurate.
 - The client talks to the API with a plain `fetch` to root-relative `/api/...`; the platform proxy forwards to the api-server.
 
 ## Product

@@ -7,6 +7,7 @@ import { FreshnessLine } from "@/components/FreshnessLine";
 import { Button, ButtonLink } from "@/components/Button";
 import { Icon } from "@/components/Icon";
 import { EmptyState } from "@/components/EmptyState";
+import { ToolManagePanel } from "@/components/ToolManagePanel";
 import { fetchTool } from "@/lib/api";
 import { canOpenToolLink, isSafeToolLink } from "@/lib/toolMeta";
 import { ErrorState } from "@/components/ErrorState";
@@ -22,12 +23,14 @@ export function ToolDetailView() {
   const [missing, setMissing] = useState(false);
   const [errored, setErrored] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [managing, setManaging] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setMissing(false);
     setErrored(false);
+    setManaging(false);
     fetchTool(id)
       .then((result) => {
         if (cancelled) return;
@@ -98,7 +101,25 @@ export function ToolDetailView() {
         <h1 className="tool-detail__title t-display-xs">{tool.name}</h1>
         <p className="tool-detail__oneliner t-para-lg">{tool.oneLiner}</p>
         <FreshnessLine tool={tool} />
+        {!managing && (
+          <button
+            type="button"
+            className="tool-detail__manage t-para-sm text-link"
+            onClick={() => setManaging(true)}
+          >
+            <Icon name="shield-tick" size={16} />
+            {tool.claimed ? "Manage this listing" : "Claim & manage this listing"}
+          </button>
+        )}
       </header>
+
+      {managing && tool && (
+        <ToolManagePanel
+          tool={tool}
+          onUpdated={(updated) => setTool(updated)}
+          onClose={() => setManaging(false)}
+        />
+      )}
 
       <div className="tool-detail__grid">
         <div className="tool-detail__main">

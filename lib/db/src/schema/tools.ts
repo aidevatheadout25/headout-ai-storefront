@@ -38,6 +38,9 @@ export const toolsTable = pgTable("tools", {
   status: text("status").notNull().default("live"),
   accessLevel: text("access_level").notNull().default("open"),
   embedding: vector("embedding", { dimensions: EMBEDDING_DIMENSIONS }),
+  // sha256 hex of the owner's secret manage key. Null while a tool is
+  // unclaimed; set on claim. Gates owner-scoped edits — never exposed to clients.
+  manageTokenHash: text("manage_token_hash"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -46,6 +49,7 @@ export const insertToolSchema = createInsertSchema(toolsTable).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+  manageTokenHash: true,
 });
 
 export type InsertTool = z.infer<typeof insertToolSchema>;

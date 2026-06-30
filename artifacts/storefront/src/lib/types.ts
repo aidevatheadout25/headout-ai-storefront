@@ -171,6 +171,8 @@ export type Tool = {
   rejectReason?: string;
   /** False when submitter names a different owner — awaiting owner ack */
   ownerConfirmed: boolean;
+  /** True once an owner has claimed the listing (holds a manage key). */
+  claimed?: boolean;
   chosenStack?: ChosenStack;
   chosenApproach?: ChosenApproach;
 };

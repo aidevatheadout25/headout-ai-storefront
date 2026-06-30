@@ -1,3 +1,4 @@
 - [Next.js → Vite compat shims](nextjs-to-vite-migration.md) — how next/link + next/navigation are emulated on wouter for the storefront migration.
 - [SSRF guard for user URLs](ssrf-user-url-fetch.md) — any api-server fetch of a user-supplied URL must use urlGuard's safeFetch, never bare fetch.
 - [Replit AI has no embeddings](replit-ai-embeddings-unsupported.md) — neither OpenAI nor Gemini Replit integration does embeddings; use a local model for key-free vector search.
+- [zod/v4 needs a direct dep](zod-v4-direct-dep.md) — importing "zod/v4" in a package fails unless that package lists zod itself; transitive via a workspace sibling isn't enough under pnpm.

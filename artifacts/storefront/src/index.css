@@ -1428,6 +1428,114 @@ html[data-theme="dark"] .filter-chip {
   margin-bottom: var(--space-32);
 }
 
+.tool-detail__manage {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  margin-top: var(--space-16);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.manage-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  padding: var(--space-24);
+  margin-bottom: var(--space-32);
+  border: 1px solid var(--divider-primary);
+  border-radius: var(--radius-16);
+  background: var(--surface-grey-1, var(--surface-white));
+}
+
+.manage-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-12);
+}
+
+.manage-panel__gate,
+.manage-panel__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+}
+
+.manage-panel__block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  align-items: flex-start;
+}
+
+.manage-panel__block .form-field {
+  width: 100%;
+}
+
+.manage-panel__divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.manage-panel__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-16);
+}
+
+@media (max-width: 640px) {
+  .manage-panel__row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.manage-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-16);
+  padding-top: var(--space-8);
+}
+
+.manage-panel__saved {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  color: var(--text-success, #1a7f5a);
+}
+
+.manage-panel__error {
+  padding: var(--space-10) var(--space-12);
+  border-radius: var(--radius-12);
+  background: var(--surface-error-1, #fdeceb);
+  color: var(--text-error, #b42318);
+}
+
+.manage-panel__keycard {
+  display: flex;
+  gap: var(--space-12);
+  padding: var(--space-16);
+  border-radius: var(--radius-12);
+  background: var(--surface-primary-1, #eef2ff);
+  border: 1px solid var(--border-primary);
+}
+
+.manage-panel__key {
+  display: block;
+  margin-top: var(--space-8);
+  padding: var(--space-8) var(--space-10);
+  border-radius: var(--radius-8);
+  background: var(--surface-white);
+  border: 1px solid var(--divider-primary);
+  font-family: var(--font-mono, monospace);
+  word-break: break-all;
+}
+
 .tool-detail__tags {
   display: flex;
   align-items: center;
