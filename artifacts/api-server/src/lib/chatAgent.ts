@@ -106,7 +106,18 @@ For every system or data source the user has named (CRM, Slack, Google Calendar,
 
 Ask about one system at a time if there are several. Record: confirmed-API, manual-only, or unsure.
 
-If ANY key system is manual-only or unsure, you must NOT recommend a full automated build. The right call is manual-first (shared tracker, spreadsheet, or Slack workflow), automating only the feeds that have confirmed APIs.
+CAPABILITY-VERIFICATION — run this BEFORE recording any system as manual-only or concluding a tool "can't" do something:
+
+(a) Catalogue re-check: Gate 1 already searched, but if the user has since named a specific capability gap, confirm no existing catalogue tool covers that gap before treating it as unmet.
+
+(b) Native-platform check: The following capabilities are ASSUMED TRUE for Claude and ChatGPT unless the user's own context proves otherwise:
+  • Claude (Claude.ai, Claude Code, Claude in desktop/cowork apps, or API with code-execution enabled) CAN: generate and directly output real files (Word, Excel, PowerPoint, PDF, images, code), browse the web, execute code, and call connected tools/APIs when given access. It is not limited to conversational Q&A.
+  • ChatGPT (Canvas / Advanced Data Analysis / GPT-4 with tools) CAN: generate real files, run code, browse, and call connected tools/APIs when given access.
+  If the user's task is covered natively by one of these platforms, say so and treat it as a confirmed path — do NOT mark it as manual-only.
+
+(c) Uncertainty rule: If you are not certain a limitation is still true (capabilities change), say so explicitly — "I'm not certain [platform] still can't do [X] — worth a quick check before we build around that assumption" — rather than asserting it as fact.
+
+Only after running (a)–(c): if ANY key system is genuinely manual-only or truly unsure, you must NOT recommend a full automated build. The right call is manual-first (shared tracker, spreadsheet, or Slack workflow), automating only the feeds that have confirmed APIs.
 
 ━━ GATE 4 — AUDIENCE RECONCILIATION ━━
 If the user's original framing named a team, a department, or a headcount (e.g. "30 people", "the ops team") but a later answer says "just me" or "only I'll use it", ask ONE reconciling question: "Just to make sure — is this for you alone, or does the whole [team/group] need it?" Do not silently collapse a team need into a personal tool.
@@ -114,13 +125,13 @@ If the user's original framing named a team, a department, or a headcount (e.g. 
 ━━ RECOMMENDATION ━━
 Only AFTER all four gates are resolved, call record_recommendation EXACTLY ONCE — including for the manual/no-build path. The tool call is required for EVERY recommendation, whether you are saying "build this" or "don't build this yet". Without the tool call the recommendation is lost and the UI cannot render it. Pick the CHEAPEST PATH THAT ACTUALLY WORKS — in this order:
 
-1. manual — when feasibility is unproven (manual-only or unsure systems) OR the audience is one person with low frequency. Tell the user plainly NOT to build the full app yet; recommend starting with a shared tracker, Slack workflow, or spreadsheet, and automating only what has a confirmed API.
-2. claude-skill — when the need is repeatable text-in / text-out with no UI and no live system integrations required.
+1. manual — when feasibility is unproven (manual-only or unsure systems) OR the audience is one person with low frequency. Tell the user plainly NOT to build the full app yet; recommend starting with a shared tracker, Slack workflow, or spreadsheet, and automating only what has a confirmed API. GUARD: before choosing manual, confirm you are NOT defaulting to it because of an unverified capability claim about an existing platform (Claude, ChatGPT, or a catalogue tool). If a platform tool could cover the need natively, the right call is claude-skill (or whichever fits), not manual.
+2. claude-skill — when the need is repeatable text-in / text-out with no UI and no live system integrations required. Also use this when Claude or ChatGPT already handles the need natively and the user just needs a repeatable prompt or skill — do not recommend building something new in that case.
 3. replit — when a UI is genuinely needed AND integrations are confirmed AND the user count is small.
 4. zeps — when the need is a no-code conversational agent or workflow.
 5. real-app — when there are many users, production requirements, or high-stakes data handling.
 
-NEVER name a builder the feasibility answers contradict (e.g. do not recommend a full automated app when a key system is manual-only). NEVER default to Zeps or Replit out of habit.
+NEVER name a builder the feasibility answers contradict (e.g. do not recommend a full automated app when a key system is manual-only). NEVER default to Zeps or Replit out of habit. NEVER recommend a build when an existing platform capability (Claude, ChatGPT) already covers the need — the cheapest path wins.
 
 After calling record_recommendation, write ONE warm closing sentence. It must name the recommended path AND reference the user's concrete scenario AND the feasible systems. If the recommendation is "manual", explicitly say not to build the full app yet and why. Also mention the platform team on Slack as an alternative.
 
@@ -270,22 +281,54 @@ function buildResult(
   };
 }
 
+/**
+ * Patterns that unambiguously signal registration intent from the user's last
+ * message. When matched on the first turn we force tool_choice to
+ * start_registration so the LLM cannot accidentally call search_catalogue.
+ */
+const REGISTRATION_PATTERNS: RegExp[] = [
+  /\badd\s+my\s+tool\b/i,
+  /\bregister\s+my\s+tool\b/i,
+  /\blist\s+my\s+tool\b/i,
+  /\bhow\s+do\s+I\s+register\b/i,
+  /\bI\s+(just\s+)?(built|made|finished(\s+building)?)\b/i,
+  /\badd\s+.+\s+to\s+the\s+catalogue\b/i,
+  /\bI\s+just\s+finished\s+building\b/i,
+  /\bwhat\s+do\s+I\s+do\s+next.{0,30}built\b/i,
+];
+
+function isRegistrationIntent(text: string): boolean {
+  return REGISTRATION_PATTERNS.some((re) => re.test(text));
+}
+
 export async function runChat(history: ChatTurn[]): Promise<ChatResult> {
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "system", content: SYSTEM_PROMPT },
     ...history.map((turn) => ({ role: turn.role, content: turn.content })),
   ];
 
+  // Deterministic registration-intent guard: if the last user message clearly
+  // signals the user wants to list a tool they already built, force the first
+  // LLM call to use start_registration so it cannot accidentally search.
+  const lastUserMessage =
+    [...history].reverse().find((t) => t.role === "user")?.content ?? "";
+  const forceRegisterOnFirstTurn = isRegistrationIntent(lastUserMessage);
+
   const found = new Map<string, ApiTool>();
   let handoff: Handoff | null = null;
   let registration: { url: string | null } | null = null;
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
+    const toolChoice: OpenAI.Chat.Completions.ChatCompletionCreateParams["tool_choice"] =
+      turn === 0 && forceRegisterOnFirstTurn
+        ? { type: "function", function: { name: "start_registration" } }
+        : "auto";
+
     const completion = await openai.chat.completions.create({
       model: MODEL,
       messages,
       tools: [REGISTER_TOOL, SEARCH_TOOL, HANDOFF_TOOL],
-      tool_choice: "auto",
+      tool_choice: toolChoice,
     });
 
     const choice = completion.choices[0]?.message;
