@@ -1,6 +1,7 @@
 import type OpenAI from "openai";
 import { openai, OPENAI_MODEL } from "./openaiClient";
 import { searchCatalogue, MIN_MATCH_SIMILARITY, type ApiTool } from "./catalogue";
+import { verifyCapability } from "./verifyCapability";
 
 const MODEL = OPENAI_MODEL;
 const MAX_TURNS = 8;
@@ -110,12 +111,17 @@ CAPABILITY-VERIFICATION — run this BEFORE recording any system as manual-only 
 
 (a) Catalogue re-check: Gate 1 already searched, but if the user has since named a specific capability gap, confirm no existing catalogue tool covers that gap before treating it as unmet.
 
-(b) Native-platform check: The following capabilities are ASSUMED TRUE for Claude and ChatGPT unless the user's own context proves otherwise:
+(b) Live platform check: Before asserting ANY negative capability claim about Claude, ChatGPT, or any named AI platform ("X can't do Y", "X is limited to", "X doesn't support"), call verify_capability(platform, capability). Branch on the result:
+  • supported === true → treat the capability as confirmed; do NOT assert the limitation; route accordingly.
+  • supported === false → you may assert the limitation but note the source.
+  • supported === "unknown" → fall back to the static baseline below and explicitly flag the claim as unverified: "I'm not certain [platform] still can't do [X] — worth a quick check before we build around that assumption."
+
+  Static baseline (fallback when verify_capability returns "unknown"):
   • Claude (Claude.ai, Claude Code, Claude in desktop/cowork apps, or API with code-execution enabled) CAN: generate and directly output real files (Word, Excel, PowerPoint, PDF, images, code), browse the web, execute code, and call connected tools/APIs when given access. It is not limited to conversational Q&A.
   • ChatGPT (Canvas / Advanced Data Analysis / GPT-4 with tools) CAN: generate real files, run code, browse, and call connected tools/APIs when given access.
-  If the user's task is covered natively by one of these platforms, say so and treat it as a confirmed path — do NOT mark it as manual-only.
+  If the user's task is covered natively by one of these platforms (live check or baseline), say so and treat it as a confirmed path — do NOT mark it as manual-only.
 
-(c) Uncertainty rule: If you are not certain a limitation is still true (capabilities change), say so explicitly — "I'm not certain [platform] still can't do [X] — worth a quick check before we build around that assumption" — rather than asserting it as fact.
+(c) Uncertainty rule: If verify_capability returns "unknown" AND the static baseline does not cover the claim, say so explicitly — "I'm not certain [platform] still can't do [X] — worth a quick check before we build around that assumption" — rather than asserting it as fact.
 
 Only after running (a)–(c): if ANY key system is genuinely manual-only or truly unsure, you must NOT recommend a full automated build. The right call is manual-first (shared tracker, spreadsheet, or Slack workflow), automating only the feeds that have confirmed APIs.
 
@@ -191,6 +197,32 @@ const HANDOFF_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
         },
       },
       required: ["builder", "reason", "prompt"],
+      additionalProperties: false,
+    },
+  },
+};
+
+const VERIFY_CAPABILITY_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "verify_capability",
+    description:
+      "Check whether a named AI platform (e.g. Claude, ChatGPT) supports a specific capability by consulting the vendor's own documentation. Call this BEFORE asserting any negative capability claim (\"X can't do Y\", \"manual-only\", \"not supported\") about Claude or ChatGPT. Returns { supported: bool | \"unknown\", source, checked_at }. If supported === true, treat the capability as confirmed and do NOT assert the limitation. If supported === \"unknown\", fall back to the static baseline and flag the claim as unverified.",
+    parameters: {
+      type: "object",
+      properties: {
+        platform: {
+          type: "string",
+          description:
+            "The AI platform to check (e.g. \"Claude\", \"ChatGPT\", \"OpenAI\", \"Anthropic\").",
+        },
+        capability: {
+          type: "string",
+          description:
+            "The specific capability to verify (e.g. \"generate Excel files\", \"browse the web\", \"execute code\").",
+        },
+      },
+      required: ["platform", "capability"],
       additionalProperties: false,
     },
   },
@@ -327,7 +359,7 @@ export async function runChat(history: ChatTurn[]): Promise<ChatResult> {
     const completion = await openai.chat.completions.create({
       model: MODEL,
       messages,
-      tools: [REGISTER_TOOL, SEARCH_TOOL, HANDOFF_TOOL],
+      tools: [REGISTER_TOOL, SEARCH_TOOL, HANDOFF_TOOL, VERIFY_CAPABILITY_TOOL],
       tool_choice: toolChoice,
     });
 
@@ -416,6 +448,40 @@ export async function runChat(history: ChatTurn[]): Promise<ChatResult> {
               ? "Recommendation recorded (manual-first path). Write one warm closing sentence telling the user NOT to build the full app yet, name the manual-first approach and why, reference their concrete scenario and the systems without confirmed APIs, and mention the platform team on Slack."
               : "Recommendation recorded. Write one warm closing sentence naming this builder and why, referencing the user's concrete scenario and the confirmed systems, and mention the platform team on Slack as an alternative.",
           }),
+        });
+        continue;
+      }
+
+      if (call.function.name === "verify_capability") {
+        let vcPlatform = "";
+        let vcCapability = "";
+        try {
+          const args = JSON.parse(call.function.arguments || "{}");
+          vcPlatform = typeof args.platform === "string" ? args.platform : "";
+          vcCapability = typeof args.capability === "string" ? args.capability : "";
+        } catch {
+          /* leave empty, will return unknown */
+        }
+        let vcResult: Awaited<ReturnType<typeof verifyCapability>>;
+        try {
+          vcResult = await verifyCapability(vcPlatform, vcCapability);
+        } catch {
+          vcResult = {
+            supported: "unknown",
+            source: "",
+            checked_at: new Date().toISOString(),
+          };
+        }
+        const note =
+          vcResult.supported === true
+            ? `The live docs confirm ${vcPlatform} DOES support "${vcCapability}". Do NOT assert this as a limitation. Treat it as a confirmed capability and route accordingly — do not recommend manual-only because of this.`
+            : vcResult.supported === false
+              ? `The live docs indicate ${vcPlatform} does NOT support "${vcCapability}" (source: ${vcResult.source}). You may note this limitation, citing the source.`
+              : `Live check inconclusive. Fall back to the static baseline for ${vcPlatform} and explicitly flag any claim about "${vcCapability}" as unverified: say "I'm not certain [platform] still can't do [X] — worth a quick check before we build around that assumption."`;
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: JSON.stringify({ ...vcResult, note }),
         });
         continue;
       }
