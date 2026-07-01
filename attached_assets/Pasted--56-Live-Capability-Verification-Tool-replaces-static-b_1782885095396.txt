@@ -1,0 +1,32 @@
+**#56 - Live Capability Verification Tool (replaces static baseline list)**
+
+**What & Why**
+
+#55 ships a hardcoded baseline capability list in Gate 3 — it fixes the immediate bug (asserting stale limitations as fact) but has the same expiration problem in a different place: the list rots the moment a platform ships a new capability, and nothing forces a recheck. This ticket replaces "recite a memorized list" with "call a tool that checks." Requires a schema change that #55 explicitly scoped out — that's intentional; #55 is the cheap fix shipped now, this is the durable one.
+
+**Done looks like**
+
+At Gate 3, before the concierge asserts any negative capability claim ("X can't do Y", "manual-only"), it calls `verify_capability(platform, capability)` instead of reading from a static list. The tool returns a live answer (via web search against docs.claude.com / platform.openai.com / vendor docs, or a cached-with-TTL lookup) rather than model memory. If the tool call fails or times out, the concierge falls back to the #55 baseline list and flags the claim as unverified in its response, rather than blocking. The static list in #55 becomes the fallback layer, not the primary source. No more silent staleness — every negative capability claim is either freshly checked or explicitly labeled "unverified, using cached baseline."
+
+**Out of scope**
+
+* Rebuilding `search_catalogue` or `start_registration`
+* Changing Gate 1, 2, or 4
+* A general-purpose web browsing tool for the concierge outside of capability checks — this is scoped narrowly to platform capability lookups, not open-ended research
+
+**Steps**
+
+1. Add `verify_capability(platform: string, capability: string)` to the tool schema — returns `{ supported: bool | "unknown", source: string, checked_at: timestamp }`.
+2. Implement it as a scoped web search/fetch against a short allowlist (docs.claude.com, platform.openai.com, anthropic.com/news, openai.com/index) — not general web search, to keep it fast and avoid irrelevant results.
+3. Add a TTL cache (suggest 14 days) keyed on `(platform, capability)` so repeat questions in the same window don't re-fetch.
+4. Update Gate 3 in SYSTEM_PROMPT: before asserting any negative capability claim, call `verify_capability`. If `supported` comes back `true`, don't assert the limitation — route to the matching recommendation instead. If `unknown` (tool failure/timeout), fall back to the #55 baseline list and explicitly flag the claim as unverified in the response to the user.
+5. Log every `verify_capability` call (platform, capability, result, cache hit/miss) — this becomes the dataset for noticing when the baseline list drifts from reality, and for catching platforms/capabilities people ask about often enough to hardcode later.
+6. Set a recurring check (quarterly, or triggered off the log in step 5) to refresh the #55 static baseline list from what `verify_capability` has actually been returning.
+7. Run `pnpm --filter @workspace/api-server run test` — confirm Gate 3 latency increase (one extra tool call) doesn't breach existing response-time thresholds; add a threshold test if none exists.
+
+**Relevant files**
+
+* `artifacts/api-server/src/lib/chatAgent.ts` (Gate 3 + tool schema, same file as #55)
+* New: `artifacts/api-server/src/lib/verifyCapability.ts` (fetch + cache logic)
+
+**Depends on:** #55 (baseline list must exist first as the fallback layer)
