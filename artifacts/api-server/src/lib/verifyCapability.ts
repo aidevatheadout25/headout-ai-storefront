@@ -22,8 +22,12 @@ export const _testOverrides: {
 } = { impl: null };
 
 const CACHE_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
+const REFRESH_LOOKAHEAD_MS = 24 * 60 * 60 * 1000; // refresh when < 24 h left
+const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // scan every hour
 
 interface CacheEntry {
+  platform: string;
+  capability: string;
   result: CapabilityResult;
   expires: number;
 }
@@ -81,14 +85,11 @@ async function fetchPageText(url: string): Promise<string> {
 }
 
 /**
- * Check whether a platform supports a given capability by consulting the
- * vendor's own documentation pages (allowlist only). Results are cached
- * in-process with a 14-day TTL.
- *
- * Every call is logged with platform, capability, result, and cache-hit status
- * so that drift can be detected over time.
+ * Core fetch + LLM logic — no cache read/write. Always returns a
+ * CapabilityResult; supported may be "unknown" when doc pages are unreachable
+ * or the LLM call fails.
  */
-export async function verifyCapability(
+async function fetchFreshResult(
   platform: string,
   capability: string,
 ): Promise<CapabilityResult> {
@@ -96,18 +97,6 @@ export async function verifyCapability(
   // immediately — bypasses network, cache, and LLM calls.
   if (_testOverrides.impl) {
     return _testOverrides.impl(platform, capability);
-  }
-
-  const cacheKey = `${normalizePlatform(platform)}::${capability.toLowerCase().trim()}`;
-  const now = Date.now();
-
-  const cached = capabilityCache.get(cacheKey);
-  if (cached && cached.expires > now) {
-    logger.info(
-      { platform, capability, result: cached.result, cacheHit: true },
-      "verify_capability cache hit",
-    );
-    return cached.result;
   }
 
   const docUrls = getDocUrls(platform);
@@ -128,17 +117,11 @@ export async function verifyCapability(
   }
 
   if (!pageText) {
-    const result: CapabilityResult = {
+    return {
       supported: "unknown",
       source: "",
       checked_at: new Date().toISOString(),
     };
-    logger.info(
-      { platform, capability, result, cacheHit: false, reason: "no_page_content" },
-      "verify_capability result",
-    );
-    capabilityCache.set(cacheKey, { result, expires: now + CACHE_TTL_MS });
-    return result;
   }
 
   try {
@@ -171,29 +154,175 @@ export async function verifyCapability(
     const supported: boolean | "unknown" =
       typeof parsed.supported === "boolean" ? parsed.supported : "unknown";
 
-    const result: CapabilityResult = {
+    return {
       supported,
       source: sourceUrl,
       checked_at: new Date().toISOString(),
     };
-
-    logger.info(
-      { platform, capability, result, cacheHit: false },
-      "verify_capability result",
-    );
-    capabilityCache.set(cacheKey, { result, expires: now + CACHE_TTL_MS });
-    return result;
   } catch (err) {
-    const result: CapabilityResult = {
+    logger.warn(
+      { platform, capability, sourceUrl, err },
+      "verify_capability: LLM call failed, returning unknown",
+    );
+    return {
       supported: "unknown",
       source: sourceUrl,
       checked_at: new Date().toISOString(),
     };
-    logger.warn(
-      { platform, capability, result, cacheHit: false, err },
-      "verify_capability: LLM call failed, returning unknown",
-    );
-    capabilityCache.set(cacheKey, { result, expires: now + CACHE_TTL_MS });
-    return result;
   }
+}
+
+/**
+ * Check whether a platform supports a given capability by consulting the
+ * vendor's own documentation pages (allowlist only). Results are cached
+ * in-process with a 14-day TTL.
+ *
+ * Every call is logged with platform, capability, result, and cache-hit status
+ * so that drift can be detected over time.
+ */
+export async function verifyCapability(
+  platform: string,
+  capability: string,
+): Promise<CapabilityResult> {
+  const cacheKey = `${normalizePlatform(platform)}::${capability.toLowerCase().trim()}`;
+  const now = Date.now();
+
+  const cached = capabilityCache.get(cacheKey);
+  if (cached && cached.expires > now) {
+    logger.info(
+      { platform, capability, result: cached.result, cacheHit: true },
+      "verify_capability cache hit",
+    );
+    return cached.result;
+  }
+
+  const result = await fetchFreshResult(platform, capability);
+
+  logger.info(
+    { platform, capability, result, cacheHit: false },
+    "verify_capability result",
+  );
+  capabilityCache.set(cacheKey, { platform, capability, result, expires: now + CACHE_TTL_MS });
+  return result;
+}
+
+/**
+ * Start a background scheduler that proactively refreshes cached capability
+ * entries approaching their TTL expiry (within 24 h). Enabled only when the
+ * CAPABILITY_REFRESH_ENABLED env var is set to a truthy value.
+ *
+ * Entries where the `supported` value flips are logged at WARN level so
+ * operator alerts can be wired up downstream.
+ *
+ * Returns a cleanup function that cancels the interval.
+ */
+export function startCapabilityRefreshScheduler(): (() => void) | null {
+  const enabled = process.env["CAPABILITY_REFRESH_ENABLED"];
+  if (!enabled || enabled === "false" || enabled === "0") {
+    logger.info(
+      "verify_capability scheduler: disabled (set CAPABILITY_REFRESH_ENABLED=true to enable)",
+    );
+    return null;
+  }
+
+  logger.info(
+    { intervalMs: REFRESH_INTERVAL_MS, lookaheadMs: REFRESH_LOOKAHEAD_MS },
+    "verify_capability scheduler: starting",
+  );
+
+  const runRefresh = async () => {
+    const now = Date.now();
+    const candidates: Array<{ key: string; entry: CacheEntry }> = [];
+
+    for (const [key, entry] of Array.from(capabilityCache.entries())) {
+      const timeLeft = entry.expires - now;
+      if (timeLeft > 0 && timeLeft <= REFRESH_LOOKAHEAD_MS) {
+        candidates.push({ key, entry });
+      }
+    }
+
+    if (candidates.length === 0) {
+      logger.debug("verify_capability scheduler: no entries near expiry, skipping");
+      return;
+    }
+
+    logger.info(
+      { count: candidates.length },
+      "verify_capability scheduler: refreshing near-expiry entries",
+    );
+
+    for (const { key, entry } of candidates) {
+      try {
+        const fresh = await fetchFreshResult(entry.platform, entry.capability);
+        const oldSupported = entry.result.supported;
+        const newSupported = fresh.supported;
+
+        if (newSupported === "unknown" && oldSupported !== "unknown") {
+          logger.warn(
+            {
+              platform: entry.platform,
+              capability: entry.capability,
+              oldSupported,
+              reason: "transient_unknown",
+            },
+            "verify_capability scheduler: refresh returned unknown — keeping prior definitive result, extending TTL",
+          );
+          capabilityCache.set(key, {
+            platform: entry.platform,
+            capability: entry.capability,
+            result: entry.result,
+            expires: now + CACHE_TTL_MS,
+          });
+          continue;
+        }
+
+        if (oldSupported !== newSupported) {
+          logger.warn(
+            {
+              platform: entry.platform,
+              capability: entry.capability,
+              oldSupported,
+              newSupported,
+              source: fresh.source,
+            },
+            "verify_capability scheduler: capability answer flipped — cache updated",
+          );
+        } else {
+          logger.info(
+            {
+              platform: entry.platform,
+              capability: entry.capability,
+              supported: newSupported,
+            },
+            "verify_capability scheduler: entry refreshed, no change",
+          );
+        }
+
+        capabilityCache.set(key, {
+          platform: entry.platform,
+          capability: entry.capability,
+          result: fresh,
+          expires: now + CACHE_TTL_MS,
+        });
+      } catch (err) {
+        logger.warn(
+          { platform: entry.platform, capability: entry.capability, err },
+          "verify_capability scheduler: refresh attempt failed, keeping old entry",
+        );
+      }
+    }
+  };
+
+  const handle = setInterval(() => {
+    void runRefresh().catch((err) =>
+      logger.error({ err }, "verify_capability scheduler: unexpected error"),
+    );
+  }, REFRESH_INTERVAL_MS);
+
+  handle.unref();
+
+  return () => {
+    clearInterval(handle);
+    logger.info("verify_capability scheduler: stopped");
+  };
 }

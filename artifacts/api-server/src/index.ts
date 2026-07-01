@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { seedCatalogueIfEmpty } from "./lib/seed";
+import { startCapabilityRefreshScheduler } from "./lib/verifyCapability";
 
 const rawPort = process.env["PORT"];
 
@@ -27,4 +28,6 @@ app.listen(port, (err) => {
   void seedCatalogueIfEmpty().catch((seedErr) =>
     logger.error({ err: seedErr }, "Catalogue seeding failed"),
   );
+
+  startCapabilityRefreshScheduler();
 });
