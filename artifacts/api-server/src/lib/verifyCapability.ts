@@ -8,6 +8,19 @@ export interface CapabilityResult {
   checked_at: string;
 }
 
+/**
+ * Test-only seam.  In production this object is untouched (its property is
+ * null) and verifyCapability runs the real fetch + LLM path.  In tests, set
+ * `_testOverrides.impl` to a stub before calling runChat — the function reads
+ * this reference on every invocation so each test can supply a fresh value.
+ *
+ * ESM live-binding semantics make the mutable object the easiest cross-loader
+ * seam: tests import the object and mutate its property; no mock.module needed.
+ */
+export const _testOverrides: {
+  impl: ((platform: string, capability: string) => Promise<CapabilityResult>) | null;
+} = { impl: null };
+
 const CACHE_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
 
 interface CacheEntry {
@@ -79,6 +92,12 @@ export async function verifyCapability(
   platform: string,
   capability: string,
 ): Promise<CapabilityResult> {
+  // Test-seam: if a stub has been installed (by unit tests only), delegate
+  // immediately — bypasses network, cache, and LLM calls.
+  if (_testOverrides.impl) {
+    return _testOverrides.impl(platform, capability);
+  }
+
   const cacheKey = `${normalizePlatform(platform)}::${capability.toLowerCase().trim()}`;
   const now = Date.now();
 
