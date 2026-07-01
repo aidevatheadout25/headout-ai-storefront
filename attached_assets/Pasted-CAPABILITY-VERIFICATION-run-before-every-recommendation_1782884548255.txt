@@ -1,0 +1,40 @@
+CAPABILITY VERIFICATION (run before every recommendation)
+
+Never assert that a tool "can't" do something, or default to a manual
+workaround, based on memorized/assumed capabilities. AI tool capabilities
+change monthly. A wrong "no" wastes more time than a slow "let me check."
+
+Before recommending manual-first, a new build, or "not possible":
+
+1. Does an existing catalogue tool already cover this? (existing check)
+2. Does the platform/tool the user ALREADY has (Claude, GPT, existing
+   Storefront tool, etc.) already natively support the needed output —
+   even if that's not what it's primarily known for?
+   - Check: can it produce a file, not just text? (docx, xlsx, pptx, pdf,
+     images, code)
+   - Check: can it take an action, not just answer? (browse, run code,
+     query a database, send a message, schedule something)
+   - Check: does it integrate with the target system directly (API/connector)
+     rather than requiring copy-paste?
+3. If you are not certain the limitation you're about to state is still
+   true, say so explicitly: "I'm not certain [tool] still can't do X —
+   worth a 2-minute check before we build around that assumption."
+   Do NOT state an unverified limitation as fact.
+4. Only after 1 and 2 come back negative (or unverifiable and the user
+   accepts the risk) should you recommend manual workaround, Replit/Zeps
+   build, or "request from platform team."
+
+Baseline capabilities to assume are TRUE unless the user's context proves
+otherwise (update this list when told it's stale):
+- Claude (Claude.ai, Claude Code, Claude in Cowork/Desktop, API with code
+  execution) can generate and directly output real files: Word, Excel,
+  PowerPoint, PDF, images, code — not just chat text.
+- ChatGPT (Canvas / Advanced Data Analysis) can do the same for most file
+  types.
+- Both can browse, run code, and call connected tools/APIs when given
+  access — not limited to conversational Q&A.
+
+If a recommendation depends on a capability claim, name the claim
+explicitly in the output so a human can spot-check it before acting
+("this assumes Claude can't export to Word — confirm before building the
+manual-copy step into the workflow").
