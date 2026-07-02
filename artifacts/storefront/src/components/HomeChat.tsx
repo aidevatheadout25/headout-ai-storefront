@@ -34,10 +34,10 @@ import {
 import type { Tool } from "@/lib/types";
 
 const STARTER_PROMPTS = [
-  "I need to summarise customer reviews",
-  "Is there a tool for expense receipts?",
-  "What can help me write SQL faster?",
-  "Anything for translating help-centre articles?",
+  "My team spends hours each week manually compiling reports — is there a better way?",
+  "I want to build something that sends a weekly digest from our internal data",
+  "Is there anything that can draft responses to customer complaints?",
+  "I just built a tool — how do I get it added to the platform?",
 ] as const;
 
 type ChatMessage = {
@@ -449,9 +449,8 @@ export function HomeChat() {
               What are you trying to do?
             </h1>
             <p className="home-chat__intro t-para-md">
-              Describe a task and I&apos;ll find the internal AI tool that already
-              does it. If nothing fits, I&apos;ll point you at how to build or
-              request one. I help you find tools — I don&apos;t run them.
+              Tell me what you need and I&apos;ll find the right internal tool — or
+              help you figure out if anything needs building at all.
             </p>
             <div className="home-chat__starters">
               {STARTER_PROMPTS.map((prompt) => (
