@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { runChat, type ChatTurn } from "../lib/chatAgent";
+import { runChat, type ChatTurn, type ChatUserContext } from "../lib/chatAgent";
 import {
   appendTurn,
   createConversation,
@@ -61,7 +61,11 @@ router.post("/chat", async (req: Request, res: Response) => {
 
   try {
     const userText = lastUserText(history);
-    const result = await runChat(history);
+    const userCtx: ChatUserContext = {
+      email: (req.user as { email?: string } | undefined)?.email,
+      userId: req.user?.id,
+    };
+    const result = await runChat(history, userCtx);
 
     if (!conversationId) {
       const conversation = await createConversation(

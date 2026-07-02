@@ -1,11 +1,13 @@
 import {
   db,
   toolsTable,
+  toolFlagsTable,
+  accessRequestsTable,
   type ToolRow,
   type InsertTool,
 } from "@workspace/db";
 import { and, asc, cosineDistance, desc, eq, getTableColumns, sql } from "drizzle-orm";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { embed } from "./embeddings";
 import { normalizeUrl } from "./normalizeUrl";
 
@@ -157,6 +159,62 @@ export async function listTools(
     .where(where ? and(where) : undefined)
     .orderBy(desc(toolsTable.updatedAt));
   return rows.filter((row) => canView(row)).map(rowToApiTool);
+}
+
+/** List tools filtered by team and/or type — for chat browsing. */
+export async function listToolsByFilter(opts: {
+  type?: string;
+  team?: string;
+  limit?: number;
+} = {}): Promise<ApiTool[]> {
+  const conditions = [];
+  if (opts.type) conditions.push(eq(toolsTable.type, opts.type));
+  if (opts.team) conditions.push(eq(toolsTable.team, opts.team));
+
+  const rows = await db
+    .select()
+    .from(toolsTable)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(desc(toolsTable.updatedAt))
+    .limit(opts.limit ?? 20);
+
+  return rows.filter((row) => canView(row)).map(rowToApiTool);
+}
+
+/** Record a user-reported issue with a tool. */
+export async function insertToolFlag(data: {
+  toolId: string;
+  reason: string;
+  details?: string;
+  reporterEmail?: string;
+}): Promise<void> {
+  await db.insert(toolFlagsTable).values({
+    toolId: data.toolId,
+    reason: data.reason,
+    details: data.details ?? "",
+    reporterEmail: data.reporterEmail ?? "",
+  });
+}
+
+/** Record a user access request for a restricted tool. */
+export async function insertAccessRequest(data: {
+  toolId: string;
+  reason: string;
+  requesterEmail?: string;
+}): Promise<void> {
+  await db.insert(accessRequestsTable).values({
+    toolId: data.toolId,
+    reason: data.reason,
+    requesterEmail: data.requesterEmail ?? "",
+  });
+}
+
+/** Constant-time comparison of a plaintext manage token against a tool's stored hash. */
+export function verifyManageToken(row: ToolRow, token: string | undefined): boolean {
+  if (!token || !row.manageTokenHash) return false;
+  const aBuf = Buffer.from(hashManageToken(token));
+  const bBuf = Buffer.from(row.manageTokenHash);
+  return aBuf.length === bBuf.length && timingSafeEqual(aBuf, bBuf);
 }
 
 /**

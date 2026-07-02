@@ -1,6 +1,17 @@
 import type OpenAI from "openai";
 import { openai, OPENAI_MODEL } from "./openaiClient";
-import { searchCatalogue, MIN_MATCH_SIMILARITY, type ApiTool } from "./catalogue";
+import {
+  searchCatalogue,
+  listToolsByFilter,
+  getToolById,
+  getToolRowById,
+  insertToolFlag,
+  insertAccessRequest,
+  verifyManageToken,
+  updateTool,
+  MIN_MATCH_SIMILARITY,
+  type ApiTool,
+} from "./catalogue";
 import { verifyCapability } from "./verifyCapability";
 
 const MODEL = OPENAI_MODEL;
@@ -135,6 +146,30 @@ When you make the recommendation, be specific. Name the path AND explain the rea
 
 Always mention the platform team on Slack as a resource.
 
+━━ BROWSING THE CATALOGUE ━━
+When a user wants to explore rather than search — "show me all data tools", "what has the ops team built?", "list all Claude skills" — call browse_catalogue with the appropriate type and/or team filters. Present results the same way as search: name each tool with one sentence on what it does. The UI renders a card for every tool you name.
+
+Valid type values: app, skill, docs, mcp, plugin, script, slack-bot, zep.
+Valid team values: Platform, Applied AI, Supply Ops, Growth, Content.
+
+━━ TOOL DETAILS ━━
+When a user asks about a specific tool — "tell me more about X", "who owns Y?", "what's the access level for Z?" — and you have its ID from a prior search or browse, call get_tool_details. Present the key facts in plain prose: what it does, the team, access requirements, and the link. Never fabricate details not in the result. If you don't have the tool's ID yet, run search_catalogue or browse_catalogue first.
+
+━━ FLAGGING ISSUES ━━
+When a user reports a problem — "the link is broken", "this tool is outdated", "the description is wrong" — identify the tool by name using search_catalogue if the ID is not already known, then call flag_tool with the ID and reason. Write a brief warm confirmation after. Valid reasons: broken-link, outdated, wrong-info, other.
+
+━━ REQUESTING ACCESS ━━
+When a user says they need access to a tool — "I need access to X", "how do I get access to Y?" — first check the tool's accessLevel. If it's open, tell them they can use it directly. If access is restricted (request or sensitive), ask what they'll use it for if not already stated, then call request_access(toolId, reason). Confirm warmly after.
+
+━━ UPDATING YOUR TOOLS ━━
+When a user wants to edit a tool they own — "update the URL for my tool", "change the description of X" — follow this sequence:
+1. Confirm which tool and which field they want to change.
+2. Confirm the new value.
+3. Ask for their manage key: "You received a manage key when you first claimed this tool — it's a long string of letters and numbers. Paste it here and I'll apply the change."
+4. Once you have all three, call update_tool. Never call it before step 3 is complete.
+
+Updatable fields: url, title, oneLiner, description, status. If the manage key is wrong, say so and ask them to double-check. If they can't find it, direct them to the platform team on Slack.
+
 ━━ TONE AND APPROACH ━━
 - Be direct. One clear recommendation beats three hedged options.
 - Be warm. You're a thoughtful colleague who knows the stack, not a form.
@@ -249,6 +284,143 @@ const REGISTER_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
+const BROWSE_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "browse_catalogue",
+    description:
+      "List tools filtered by team and/or type when the user wants to browse or explore rather than search for a specific capability. Use for 'show me all data tools', 'what has the ops team built?', 'list all Claude skills'.",
+    parameters: {
+      type: "object",
+      properties: {
+        type: {
+          type: "string",
+          description:
+            "Filter by tool type. Valid values: app, skill, docs, mcp, plugin, script, slack-bot, zep. Omit to return all types.",
+        },
+        team: {
+          type: "string",
+          description:
+            "Filter by team name (Platform, Applied AI, Supply Ops, Growth, Content). Omit to return all teams.",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum results to return. Defaults to 12.",
+        },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+  },
+};
+
+const DETAIL_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "get_tool_details",
+    description:
+      "Fetch full details about a specific tool when the user asks about it by name — 'how does X work?', 'who owns X?', 'what access level is X?'. Use the tool's ID from a prior search or browse.",
+    parameters: {
+      type: "object",
+      properties: {
+        toolId: {
+          type: "string",
+          description: "The UUID of the tool to fetch details for.",
+        },
+      },
+      required: ["toolId"],
+      additionalProperties: false,
+    },
+  },
+};
+
+const FLAG_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "flag_tool",
+    description:
+      "Report a problem with a tool on behalf of the user. Call when the user says a tool is broken, has a dead link, is outdated, or has incorrect information. Identify the tool ID from context or a prior search before calling.",
+    parameters: {
+      type: "object",
+      properties: {
+        toolId: {
+          type: "string",
+          description: "The UUID of the tool being flagged.",
+        },
+        reason: {
+          type: "string",
+          enum: ["broken-link", "outdated", "wrong-info", "other"],
+          description: "The category of the problem.",
+        },
+        details: {
+          type: "string",
+          description: "Optional extra detail the user provided about the issue.",
+        },
+      },
+      required: ["toolId", "reason"],
+      additionalProperties: false,
+    },
+  },
+};
+
+const ACCESS_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "request_access",
+    description:
+      "Submit an access request for a tool that requires approval (accessLevel is 'request' or 'sensitive'). Ask for the user's reason before calling if they haven't provided one.",
+    parameters: {
+      type: "object",
+      properties: {
+        toolId: {
+          type: "string",
+          description: "The UUID of the tool to request access for.",
+        },
+        reason: {
+          type: "string",
+          description: "Why the user needs access — what they will use the tool for.",
+        },
+      },
+      required: ["toolId", "reason"],
+      additionalProperties: false,
+    },
+  },
+};
+
+const UPDATE_TOOL_DEF: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "update_tool",
+    description:
+      "Update a field on a tool the user owns. Only call after: (1) user confirmed the tool and field, (2) user confirmed the new value, (3) user provided their manage key. Never call before all three.",
+    parameters: {
+      type: "object",
+      properties: {
+        toolId: {
+          type: "string",
+          description: "The UUID of the tool to update.",
+        },
+        field: {
+          type: "string",
+          enum: ["url", "title", "oneLiner", "description", "status"],
+          description: "The field to update.",
+        },
+        value: {
+          type: "string",
+          description: "The new value for the field.",
+        },
+        manageToken: {
+          type: "string",
+          description:
+            "The manage key the user provided. Issued when the tool was claimed.",
+        },
+      },
+      required: ["toolId", "field", "value", "manageToken"],
+      additionalProperties: false,
+    },
+  },
+};
+
 function pickRecommended(found: Map<string, ApiTool>, message: string): ApiTool[] {
   const lower = message.toLowerCase();
   const named = [...found.values()].filter((t) =>
@@ -328,7 +500,12 @@ function isRegistrationIntent(text: string): boolean {
   return REGISTRATION_PATTERNS.some((re) => re.test(text));
 }
 
-export async function runChat(history: ChatTurn[]): Promise<ChatResult> {
+export type ChatUserContext = {
+  email?: string;
+  userId?: string;
+};
+
+export async function runChat(history: ChatTurn[], userContext?: ChatUserContext): Promise<ChatResult> {
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "system", content: SYSTEM_PROMPT },
     ...history.map((turn) => ({ role: turn.role, content: turn.content })),
@@ -354,7 +531,17 @@ export async function runChat(history: ChatTurn[]): Promise<ChatResult> {
     const completion = await openai.chat.completions.create({
       model: MODEL,
       messages,
-      tools: [REGISTER_TOOL, SEARCH_TOOL, HANDOFF_TOOL, VERIFY_CAPABILITY_TOOL],
+      tools: [
+        REGISTER_TOOL,
+        SEARCH_TOOL,
+        BROWSE_TOOL,
+        DETAIL_TOOL,
+        FLAG_TOOL,
+        ACCESS_TOOL,
+        UPDATE_TOOL_DEF,
+        HANDOFF_TOOL,
+        VERIFY_CAPABILITY_TOOL,
+      ],
       tool_choice: toolChoice,
     });
 
@@ -477,6 +664,144 @@ export async function runChat(history: ChatTurn[]): Promise<ChatResult> {
           role: "tool",
           tool_call_id: call.id,
           content: JSON.stringify({ ...vcResult, note }),
+        });
+        continue;
+      }
+
+      if (call.function.name === "browse_catalogue") {
+        let browseArgs: { type?: string; team?: string; limit?: number } = {};
+        try { browseArgs = JSON.parse(call.function.arguments || "{}"); } catch { /* use defaults */ }
+        const browseResults = await listToolsByFilter({
+          type: browseArgs.type,
+          team: browseArgs.team,
+          limit: browseArgs.limit ?? 12,
+        });
+        for (const tool of browseResults) found.set(tool.id, tool);
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: JSON.stringify(
+            browseResults.length > 0
+              ? browseResults.map((t) => ({
+                  id: t.id,
+                  name: t.name,
+                  type: t.types[0],
+                  team: t.team,
+                  oneLiner: t.oneLiner,
+                  accessLevel: t.accessLevel,
+                  status: t.status,
+                }))
+              : { results: [], note: "No tools found matching those filters." },
+          ),
+        });
+        continue;
+      }
+
+      if (call.function.name === "get_tool_details") {
+        let detailArgs: { toolId?: string } = {};
+        try { detailArgs = JSON.parse(call.function.arguments || "{}"); } catch { /* use defaults */ }
+        const tool = detailArgs.toolId ? await getToolById(detailArgs.toolId) : null;
+        if (tool) found.set(tool.id, tool);
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: tool
+            ? JSON.stringify({
+                id: tool.id,
+                name: tool.name,
+                type: tool.types[0],
+                team: tool.team,
+                oneLiner: tool.oneLiner,
+                description: tool.description,
+                accessLevel: tool.accessLevel,
+                status: tool.status,
+                owner: tool.owner.name,
+                link: tool.link,
+                tags: tool.tags,
+              })
+            : JSON.stringify({ error: "Tool not found." }),
+        });
+        continue;
+      }
+
+      if (call.function.name === "flag_tool") {
+        let flagArgs: { toolId?: string; reason?: string; details?: string } = {};
+        try { flagArgs = JSON.parse(call.function.arguments || "{}"); } catch { /* use defaults */ }
+        let flagOk = false;
+        if (flagArgs.toolId && flagArgs.reason) {
+          try {
+            await insertToolFlag({
+              toolId: flagArgs.toolId,
+              reason: flagArgs.reason,
+              details: flagArgs.details,
+              reporterEmail: userContext?.email,
+            });
+            flagOk = true;
+          } catch { /* flagOk stays false */ }
+        }
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: JSON.stringify(
+            flagOk
+              ? { ok: true, note: "Flag submitted. Write a warm one-sentence confirmation — the issue has been logged and the platform team will review it." }
+              : { ok: false, note: "Flag could not be saved. Apologise briefly and ask them to report it directly on Slack." },
+          ),
+        });
+        continue;
+      }
+
+      if (call.function.name === "request_access") {
+        let accessArgs: { toolId?: string; reason?: string } = {};
+        try { accessArgs = JSON.parse(call.function.arguments || "{}"); } catch { /* use defaults */ }
+        let accessOk = false;
+        if (accessArgs.toolId && accessArgs.reason) {
+          try {
+            await insertAccessRequest({
+              toolId: accessArgs.toolId,
+              reason: accessArgs.reason,
+              requesterEmail: userContext?.email,
+            });
+            accessOk = true;
+          } catch { /* accessOk stays false */ }
+        }
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: JSON.stringify(
+            accessOk
+              ? { ok: true, note: "Access request submitted. Write a warm one-sentence confirmation — the request is logged and the tool owner will be in touch." }
+              : { ok: false, note: "Request could not be saved. Apologise briefly and ask them to reach out to the tool owner directly on Slack." },
+          ),
+        });
+        continue;
+      }
+
+      if (call.function.name === "update_tool") {
+        let updateArgs: { toolId?: string; field?: string; value?: string; manageToken?: string } = {};
+        try { updateArgs = JSON.parse(call.function.arguments || "{}"); } catch { /* use defaults */ }
+        let updateNote = "";
+        if (updateArgs.toolId && updateArgs.field && updateArgs.value && updateArgs.manageToken) {
+          const row = await getToolRowById(updateArgs.toolId);
+          if (!row) {
+            updateNote = "Tool not found. Ask the user to confirm the tool name.";
+          } else if (!verifyManageToken(row, updateArgs.manageToken)) {
+            updateNote = "The manage key is incorrect. Ask the user to check it and try again — it was issued when they first claimed the tool.";
+          } else {
+            try {
+              await updateTool(updateArgs.toolId, { [updateArgs.field]: updateArgs.value });
+              updateNote = `Update applied. Write a warm one-sentence confirmation that the ${updateArgs.field} has been updated.`;
+            } catch {
+              updateNote = "The update failed. Ask them to try again or contact the platform team on Slack.";
+            }
+          }
+        } else {
+          updateNote = "Missing required arguments — need tool ID, field, new value, and manage key before calling update_tool.";
+        }
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: JSON.stringify({ note: updateNote }),
         });
         continue;
       }

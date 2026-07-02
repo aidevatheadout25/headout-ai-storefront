@@ -82,3 +82,26 @@ export const insertToolSchema = createInsertSchema(toolsTable).omit({
 
 export type InsertTool = z.infer<typeof insertToolSchema>;
 export type ToolRow = typeof toolsTable.$inferSelect;
+
+/** Append-only log of user-reported tool issues. */
+export const toolFlagsTable = pgTable("tool_flags", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  toolId: uuid("tool_id").notNull(),
+  reason: text("reason").notNull().default("other"),
+  details: text("details").notNull().default(""),
+  reporterEmail: text("reporter_email").notNull().default(""),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/** Append-only log of access requests for restricted tools. */
+export const accessRequestsTable = pgTable("access_requests", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  toolId: uuid("tool_id").notNull(),
+  reason: text("reason").notNull().default(""),
+  requesterEmail: text("requester_email").notNull().default(""),
+  status: text("status").notNull().default("pending"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export type ToolFlagRow = typeof toolFlagsTable.$inferSelect;
+export type AccessRequestRow = typeof accessRequestsTable.$inferSelect;

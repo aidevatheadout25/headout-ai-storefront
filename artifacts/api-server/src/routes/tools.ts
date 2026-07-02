@@ -11,6 +11,8 @@ import {
   getToolRowById,
   hashManageToken,
   insertTool,
+  insertAccessRequest,
+  insertToolFlag,
   listTools,
   updateTool,
 } from "../lib/catalogue";
@@ -625,6 +627,50 @@ router.patch("/tools/:id", async (req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, "Failed to update tool");
     return res.status(500).json({ error: "Failed to update tool" });
+  }
+});
+
+/** POST /api/tools/:id/flag — report a tool as broken, outdated, or incorrect. */
+router.post("/tools/:id/flag", async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  try {
+    const tool = await getToolById(id);
+    if (!tool) return res.status(404).json({ error: "Tool not found" });
+
+    const reason =
+      typeof req.body?.reason === "string" ? req.body.reason.trim() : "other";
+    const details =
+      typeof req.body?.details === "string" ? req.body.details.trim() : "";
+    const reporterEmail = req.isAuthenticated()
+      ? ((req.user as { email?: string })?.email ?? "")
+      : "";
+
+    await insertToolFlag({ toolId: id, reason, details, reporterEmail });
+    return res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Failed to flag tool");
+    return res.status(500).json({ error: "Failed to flag tool" });
+  }
+});
+
+/** POST /api/tools/:id/access-request — request access to a restricted tool. */
+router.post("/tools/:id/access-request", async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  try {
+    const tool = await getToolById(id);
+    if (!tool) return res.status(404).json({ error: "Tool not found" });
+
+    const reason =
+      typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+    const requesterEmail = req.isAuthenticated()
+      ? ((req.user as { email?: string })?.email ?? "")
+      : "";
+
+    await insertAccessRequest({ toolId: id, reason, requesterEmail });
+    return res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Failed to submit access request");
+    return res.status(500).json({ error: "Failed to submit access request" });
   }
 });
 
