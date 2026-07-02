@@ -153,12 +153,6 @@ async function fetchFreshResult(
   platform: string,
   capability: string,
 ): Promise<CapabilityResult> {
-  // Test-seam: if a stub has been installed (by unit tests only), delegate
-  // immediately — bypasses network, cache, and LLM calls.
-  if (_testOverrides.impl) {
-    return _testOverrides.impl(platform, capability);
-  }
-
   const docUrls = getDocUrls(platform);
   let pageText = "";
   let sourceUrl = "";
@@ -244,6 +238,13 @@ export async function verifyCapability(
   platform: string,
   capability: string,
 ): Promise<CapabilityResult> {
+  // Test-seam: a stub installed by unit tests always wins — it must run before
+  // the known-baseline and cache checks so every branch (true/false/unknown) is
+  // reachable in isolation.
+  if (_testOverrides.impl) {
+    return _testOverrides.impl(platform, capability);
+  }
+
   // Fast path: well-known stable capabilities never need a network round-trip.
   // Vendor doc homepages don't explicitly enumerate these so a live fetch would
   // return "unknown" and cause the AI to recommend building something needless.
