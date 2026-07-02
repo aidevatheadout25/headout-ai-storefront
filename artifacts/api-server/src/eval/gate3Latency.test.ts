@@ -12,13 +12,13 @@
  * network latency while still catching runaway loops or infinite hangs.
  *
  * Run with: `pnpm --filter @workspace/api-server run test`
- * Requires: DATABASE_URL (seeded) + OPENAI_API_KEY
+ * Requires: DATABASE_URL (seeded) + AI_INTEGRATIONS_ANTHROPIC_BASE_URL
  */
 import { test, before, describe } from "node:test";
 import assert from "node:assert/strict";
 import { seedCatalogueIfEmpty } from "../lib/seed";
 
-const AI_READY = !!process.env.OPENAI_API_KEY;
+const AI_READY = !!process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL;
 
 /** Maximum wall-clock time (ms) allowed for a single verifyCapability call. */
 const VERIFY_CAPABILITY_TIMEOUT_MS = 20_000;

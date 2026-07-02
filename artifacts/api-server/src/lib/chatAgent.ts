@@ -1,5 +1,5 @@
-import type OpenAI from "openai";
-import { openai, OPENAI_MODEL } from "./openaiClient";
+import type Anthropic from "@anthropic-ai/sdk";
+import { anthropic, CLAUDE_MODEL } from "./anthropicClient";
 import {
   searchCatalogue,
   listToolsByFilter,
@@ -14,7 +14,7 @@ import {
 } from "./catalogue";
 import { verifyCapability } from "./verifyCapability";
 
-const MODEL = OPENAI_MODEL;
+const MODEL = CLAUDE_MODEL;
 const MAX_TURNS = 8;
 
 export type ChatTurn = { role: "user" | "assistant"; content: string };
@@ -179,247 +179,223 @@ Updatable fields: url, title, oneLiner, description, status. If the manage key i
 - Never invent or name a tool that wasn't in the search results.
 - If the request is genuinely ambiguous before you can search, ask exactly one short clarifying question.`;
 
-const SEARCH_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
-  type: "function",
-  function: {
-    name: "search_catalogue",
-    description:
-      "Search the internal Headout catalogue for tools matching a capability or problem. Returns the most relevant tools with id, name, type, one-liner and tags. Do NOT call this when the user has registration intent (e.g. 'add my tool', 'I built X', 'register my tool') — use start_registration instead.",
-    parameters: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description:
-            "A concise natural-language description of the capability or problem the user wants a tool for.",
-        },
+const SEARCH_TOOL: Anthropic.Tool = {
+  name: "search_catalogue",
+  description:
+    "Search the internal Headout catalogue for tools matching a capability or problem. Returns the most relevant tools with id, name, type, one-liner and tags. Do NOT call this when the user has registration intent (e.g. 'add my tool', 'I built X', 'register my tool') — use start_registration instead.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description:
+          "A concise natural-language description of the capability or problem the user wants a tool for.",
       },
-      required: ["query"],
-      additionalProperties: false,
     },
+    required: ["query"],
   },
 };
 
-const HANDOFF_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
-  type: "function",
-  function: {
-    name: "record_recommendation",
-    description:
-      "Record the final recommendation once all four gates are resolved: (1) reuse-check — user confirmed nothing existing fits, (2) concrete scenario with trigger+actor+outcome collected, (3) feasibility per named system captured (API confirmed or manual-only noted), (4) audience reconciled. REQUIRED for every outcome — including 'do not build yet' / manual-first paths. This is how the UI surfaces the recommendation; without this call the recommendation is invisible. Never call before all four gates are resolved.",
-    parameters: {
-      type: "object",
-      properties: {
-        builder: {
-          type: "string",
-          enum: BUILDER_IDS,
-          description:
-            "The cheapest path that actually works: manual > claude-skill > replit > claude-code > zeps > real-app. NEVER default to Zeps or Replit — pick by fit and feasibility.",
-        },
-        reason: {
-          type: "string",
-          description:
-            "One short sentence on why this path fits — must reference the user's concrete scenario AND the feasible systems AND the reconciled audience.",
-        },
-        prompt: {
-          type: "string",
-          description:
-            "A concise build brief synthesised from the scoping answers, used to pre-fill the builder (or empty string for the manual path).",
-        },
+const HANDOFF_TOOL: Anthropic.Tool = {
+  name: "record_recommendation",
+  description:
+    "Record the final recommendation once all four gates are resolved: (1) reuse-check — user confirmed nothing existing fits, (2) concrete scenario with trigger+actor+outcome collected, (3) feasibility per named system captured (API confirmed or manual-only noted), (4) audience reconciled. REQUIRED for every outcome — including 'do not build yet' / manual-first paths. This is how the UI surfaces the recommendation; without this call the recommendation is invisible. Never call before all four gates are resolved.",
+  input_schema: {
+    type: "object",
+    properties: {
+      builder: {
+        type: "string",
+        enum: BUILDER_IDS,
+        description:
+          "The cheapest path that actually works: manual > claude-skill > replit > claude-code > zeps > real-app. NEVER default to Zeps or Replit — pick by fit and feasibility.",
       },
-      required: ["builder", "reason", "prompt"],
-      additionalProperties: false,
+      reason: {
+        type: "string",
+        description:
+          "One short sentence on why this path fits — must reference the user's concrete scenario AND the feasible systems AND the reconciled audience.",
+      },
+      prompt: {
+        type: "string",
+        description:
+          "A concise build brief synthesised from the scoping answers, used to pre-fill the builder (or empty string for the manual path).",
+      },
     },
+    required: ["builder", "reason", "prompt"],
   },
 };
 
-const VERIFY_CAPABILITY_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
-  type: "function",
-  function: {
-    name: "verify_capability",
-    description:
-      "Check whether a named AI platform (e.g. Claude, ChatGPT) supports a specific capability by consulting the vendor's own documentation. Call this BEFORE asserting any negative capability claim (\"X can't do Y\", \"manual-only\", \"not supported\") about Claude or ChatGPT. Returns { supported: bool | \"unknown\", source, checked_at }. If supported === true, treat the capability as confirmed and do NOT assert the limitation. If supported === \"unknown\", fall back to the static baseline and flag the claim as unverified.",
-    parameters: {
-      type: "object",
-      properties: {
-        platform: {
-          type: "string",
-          description:
-            "The AI platform to check (e.g. \"Claude\", \"ChatGPT\", \"OpenAI\", \"Anthropic\").",
-        },
-        capability: {
-          type: "string",
-          description:
-            "The specific capability to verify (e.g. \"generate Excel files\", \"browse the web\", \"execute code\").",
-        },
+const VERIFY_CAPABILITY_TOOL: Anthropic.Tool = {
+  name: "verify_capability",
+  description:
+    "Check whether a named AI platform (e.g. Claude, ChatGPT) supports a specific capability by consulting the vendor's own documentation. Call this BEFORE asserting any negative capability claim (\"X can't do Y\", \"manual-only\", \"not supported\") about Claude or ChatGPT. Returns { supported: bool | \"unknown\", source, checked_at }. If supported === true, treat the capability as confirmed and do NOT assert the limitation. If supported === \"unknown\", fall back to the static baseline and flag the claim as unverified.",
+  input_schema: {
+    type: "object",
+    properties: {
+      platform: {
+        type: "string",
+        description:
+          "The AI platform to check (e.g. \"Claude\", \"ChatGPT\", \"OpenAI\", \"Anthropic\").",
       },
-      required: ["platform", "capability"],
-      additionalProperties: false,
+      capability: {
+        type: "string",
+        description:
+          "The specific capability to verify (e.g. \"generate Excel files\", \"browse the web\", \"execute code\").",
+      },
     },
+    required: ["platform", "capability"],
   },
 };
 
-const REGISTER_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
-  type: "function",
-  function: {
-    name: "start_registration",
-    description:
-      "MUST be called (before search_catalogue) whenever the user signals they have already built or finished a tool and want it listed in the catalogue. Trigger phrases include — but are not limited to — 'I built X', 'how do I register this', 'register my tool', 'add my tool', 'add my tool to the catalogue', 'I just finished building something', 'what do I do now that I built this', or when the user pastes a URL to something they made. Do NOT call search_catalogue first. Do NOT ask a clarifying question first. Call this immediately, then tell the user registration happens right here.",
-    parameters: {
-      type: "object",
-      properties: {
-        url: {
-          type: "string",
-          description:
-            "The URL the user provided for their tool, if any. Omit (or pass empty string) if no URL was given yet.",
-        },
-        name: {
-          type: "string",
-          description:
-            "The name of the tool the user mentioned, if any. Optional.",
-        },
+const REGISTER_TOOL: Anthropic.Tool = {
+  name: "start_registration",
+  description:
+    "MUST be called (before search_catalogue) whenever the user signals they have already built or finished a tool and want it listed in the catalogue. Trigger phrases include — but are not limited to — 'I built X', 'how do I register this', 'register my tool', 'add my tool', 'add my tool to the catalogue', 'I just finished building something', 'what do I do now that I built this', or when the user pastes a URL to something they made. Do NOT call search_catalogue first. Do NOT ask a clarifying question first. Call this immediately, then tell the user registration happens right here.",
+  input_schema: {
+    type: "object",
+    properties: {
+      url: {
+        type: "string",
+        description:
+          "The URL the user provided for their tool, if any. Omit (or pass empty string) if no URL was given yet.",
       },
-      required: [],
-      additionalProperties: false,
+      name: {
+        type: "string",
+        description:
+          "The name of the tool the user mentioned, if any. Optional.",
+      },
     },
+    required: [],
   },
 };
 
-const BROWSE_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
-  type: "function",
-  function: {
-    name: "browse_catalogue",
-    description:
-      "List tools filtered by team and/or type when the user wants to browse or explore rather than search for a specific capability. Use for 'show me all data tools', 'what has the ops team built?', 'list all Claude skills'.",
-    parameters: {
-      type: "object",
-      properties: {
-        type: {
-          type: "string",
-          description:
-            "Filter by tool type. Valid values: app, skill, docs, mcp, plugin, script, slack-bot, zep. Omit to return all types.",
-        },
-        team: {
-          type: "string",
-          description:
-            "Filter by team name (Platform, Applied AI, Supply Ops, Growth, Content). Omit to return all teams.",
-        },
-        limit: {
-          type: "number",
-          description: "Maximum results to return. Defaults to 12.",
-        },
+const BROWSE_TOOL: Anthropic.Tool = {
+  name: "browse_catalogue",
+  description:
+    "List tools filtered by team and/or type when the user wants to browse or explore rather than search for a specific capability. Use for 'show me all data tools', 'what has the ops team built?', 'list all Claude skills'.",
+  input_schema: {
+    type: "object",
+    properties: {
+      type: {
+        type: "string",
+        description:
+          "Filter by tool type. Valid values: app, skill, docs, mcp, plugin, script, slack-bot, zep. Omit to return all types.",
       },
-      required: [],
-      additionalProperties: false,
+      team: {
+        type: "string",
+        description:
+          "Filter by team name (Platform, Applied AI, Supply Ops, Growth, Content). Omit to return all teams.",
+      },
+      limit: {
+        type: "number",
+        description: "Maximum results to return. Defaults to 12.",
+      },
     },
+    required: [],
   },
 };
 
-const DETAIL_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
-  type: "function",
-  function: {
-    name: "get_tool_details",
-    description:
-      "Fetch full details about a specific tool when the user asks about it by name — 'how does X work?', 'who owns X?', 'what access level is X?'. Use the tool's ID from a prior search or browse.",
-    parameters: {
-      type: "object",
-      properties: {
-        toolId: {
-          type: "string",
-          description: "The UUID of the tool to fetch details for.",
-        },
+const DETAIL_TOOL: Anthropic.Tool = {
+  name: "get_tool_details",
+  description:
+    "Fetch full details about a specific tool when the user asks about it by name — 'how does X work?', 'who owns X?', 'what access level is X?'. Use the tool's ID from a prior search or browse.",
+  input_schema: {
+    type: "object",
+    properties: {
+      toolId: {
+        type: "string",
+        description: "The UUID of the tool to fetch details for.",
       },
-      required: ["toolId"],
-      additionalProperties: false,
     },
+    required: ["toolId"],
   },
 };
 
-const FLAG_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
-  type: "function",
-  function: {
-    name: "flag_tool",
-    description:
-      "Report a problem with a tool on behalf of the user. Call when the user says a tool is broken, has a dead link, is outdated, or has incorrect information. Identify the tool ID from context or a prior search before calling.",
-    parameters: {
-      type: "object",
-      properties: {
-        toolId: {
-          type: "string",
-          description: "The UUID of the tool being flagged.",
-        },
-        reason: {
-          type: "string",
-          enum: ["broken-link", "outdated", "wrong-info", "other"],
-          description: "The category of the problem.",
-        },
-        details: {
-          type: "string",
-          description: "Optional extra detail the user provided about the issue.",
-        },
+const FLAG_TOOL: Anthropic.Tool = {
+  name: "flag_tool",
+  description:
+    "Report a problem with a tool on behalf of the user. Call when the user says a tool is broken, has a dead link, is outdated, or has incorrect information. Identify the tool ID from context or a prior search before calling.",
+  input_schema: {
+    type: "object",
+    properties: {
+      toolId: {
+        type: "string",
+        description: "The UUID of the tool being flagged.",
       },
-      required: ["toolId", "reason"],
-      additionalProperties: false,
+      reason: {
+        type: "string",
+        enum: ["broken-link", "outdated", "wrong-info", "other"],
+        description: "The category of the problem.",
+      },
+      details: {
+        type: "string",
+        description: "Optional extra detail the user provided about the issue.",
+      },
     },
+    required: ["toolId", "reason"],
   },
 };
 
-const ACCESS_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
-  type: "function",
-  function: {
-    name: "request_access",
-    description:
-      "Submit an access request for a tool that requires approval (accessLevel is 'request' or 'sensitive'). Ask for the user's reason before calling if they haven't provided one.",
-    parameters: {
-      type: "object",
-      properties: {
-        toolId: {
-          type: "string",
-          description: "The UUID of the tool to request access for.",
-        },
-        reason: {
-          type: "string",
-          description: "Why the user needs access — what they will use the tool for.",
-        },
+const ACCESS_TOOL: Anthropic.Tool = {
+  name: "request_access",
+  description:
+    "Submit an access request for a tool that requires approval (accessLevel is 'request' or 'sensitive'). Ask for the user's reason before calling if they haven't provided one.",
+  input_schema: {
+    type: "object",
+    properties: {
+      toolId: {
+        type: "string",
+        description: "The UUID of the tool to request access for.",
       },
-      required: ["toolId", "reason"],
-      additionalProperties: false,
+      reason: {
+        type: "string",
+        description: "Why the user needs access — what they will use the tool for.",
+      },
     },
+    required: ["toolId", "reason"],
   },
 };
 
-const UPDATE_TOOL_DEF: OpenAI.Chat.Completions.ChatCompletionTool = {
-  type: "function",
-  function: {
-    name: "update_tool",
-    description:
-      "Update a field on a tool the user owns. Only call after: (1) user confirmed the tool and field, (2) user confirmed the new value, (3) user provided their manage key. Never call before all three.",
-    parameters: {
-      type: "object",
-      properties: {
-        toolId: {
-          type: "string",
-          description: "The UUID of the tool to update.",
-        },
-        field: {
-          type: "string",
-          enum: ["url", "title", "oneLiner", "description", "status"],
-          description: "The field to update.",
-        },
-        value: {
-          type: "string",
-          description: "The new value for the field.",
-        },
-        manageToken: {
-          type: "string",
-          description:
-            "The manage key the user provided. Issued when the tool was claimed.",
-        },
+const UPDATE_TOOL_DEF: Anthropic.Tool = {
+  name: "update_tool",
+  description:
+    "Update a field on a tool the user owns. Only call after: (1) user confirmed the tool and field, (2) user confirmed the new value, (3) user provided their manage key. Never call before all three.",
+  input_schema: {
+    type: "object",
+    properties: {
+      toolId: {
+        type: "string",
+        description: "The UUID of the tool to update.",
       },
-      required: ["toolId", "field", "value", "manageToken"],
-      additionalProperties: false,
+      field: {
+        type: "string",
+        enum: ["url", "title", "oneLiner", "description", "status"],
+        description: "The field to update.",
+      },
+      value: {
+        type: "string",
+        description: "The new value for the field.",
+      },
+      manageToken: {
+        type: "string",
+        description:
+          "The manage key the user provided. Issued when the tool was claimed.",
+      },
     },
+    required: ["toolId", "field", "value", "manageToken"],
   },
 };
+
+const ALL_TOOLS: Anthropic.Tool[] = [
+  REGISTER_TOOL,
+  SEARCH_TOOL,
+  BROWSE_TOOL,
+  DETAIL_TOOL,
+  FLAG_TOOL,
+  ACCESS_TOOL,
+  UPDATE_TOOL_DEF,
+  HANDOFF_TOOL,
+  VERIFY_CAPABILITY_TOOL,
+];
 
 function pickRecommended(found: Map<string, ApiTool>, message: string): ApiTool[] {
   const lower = message.toLowerCase();
@@ -431,34 +407,23 @@ function pickRecommended(found: Map<string, ApiTool>, message: string): ApiTool[
 
 type Handoff = { builder: BuilderId; reason: string; prompt: string };
 
-function parseHandoff(rawArgs: string): Handoff {
-  let parsed: { builder?: unknown; reason?: unknown; prompt?: unknown } = {};
-  try {
-    parsed = JSON.parse(rawArgs || "{}");
-  } catch {
-    parsed = {};
-  }
-  const builder = BUILDER_IDS.includes(parsed.builder as BuilderId)
-    ? (parsed.builder as BuilderId)
-    : // Never silently fall back to a specific builder; use the most conservative default.
-      "manual";
+function parseHandoff(rawArgs: unknown): Handoff {
+  const parsed = (typeof rawArgs === "object" && rawArgs !== null ? rawArgs : {}) as Record<string, unknown>;
+  const builder = BUILDER_IDS.includes(parsed["builder"] as BuilderId)
+    ? (parsed["builder"] as BuilderId)
+    : "manual";
   return {
     builder,
-    reason: typeof parsed.reason === "string" ? parsed.reason : "",
-    prompt: typeof parsed.prompt === "string" ? parsed.prompt : "",
+    reason: typeof parsed["reason"] === "string" ? parsed["reason"] : "",
+    prompt: typeof parsed["prompt"] === "string" ? parsed["prompt"] : "",
   };
 }
 
-function parseRegistration(rawArgs: string): { url: string | null } {
-  let parsed: { url?: unknown } = {};
-  try {
-    parsed = JSON.parse(rawArgs || "{}");
-  } catch {
-    parsed = {};
-  }
+function parseRegistration(rawArgs: unknown): { url: string | null } {
+  const parsed = (typeof rawArgs === "object" && rawArgs !== null ? rawArgs : {}) as Record<string, unknown>;
   const url =
-    typeof parsed.url === "string" && parsed.url.trim()
-      ? parsed.url.trim()
+    typeof parsed["url"] === "string" && parsed["url"].trim()
+      ? parsed["url"].trim()
       : null;
   return { url };
 }
@@ -506,14 +471,11 @@ export type ChatUserContext = {
 };
 
 export async function runChat(history: ChatTurn[], userContext?: ChatUserContext): Promise<ChatResult> {
-  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: SYSTEM_PROMPT },
-    ...history.map((turn) => ({ role: turn.role, content: turn.content })),
-  ];
+  const messages: Anthropic.MessageParam[] = history.map((turn) => ({
+    role: turn.role,
+    content: turn.content,
+  }));
 
-  // Deterministic registration-intent guard: if the last user message clearly
-  // signals the user wants to list a tool they already built, force the first
-  // LLM call to use start_registration so it cannot accidentally search.
   const lastUserMessage =
     [...history].reverse().find((t) => t.role === "user")?.content ?? "";
   const forceRegisterOnFirstTurn = isRegistrationIntent(lastUserMessage);
@@ -523,70 +485,59 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
   let registration: { url: string | null } | null = null;
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const toolChoice: OpenAI.Chat.Completions.ChatCompletionCreateParams["tool_choice"] =
+    const toolChoice: Anthropic.MessageCreateParams["tool_choice"] =
       turn === 0 && forceRegisterOnFirstTurn
-        ? { type: "function", function: { name: "start_registration" } }
-        : "auto";
+        ? { type: "tool", name: "start_registration" }
+        : { type: "auto" };
 
-    const completion = await openai.chat.completions.create({
+    const response = await anthropic.messages.create({
       model: MODEL,
-      messages,
-      tools: [
-        REGISTER_TOOL,
-        SEARCH_TOOL,
-        BROWSE_TOOL,
-        DETAIL_TOOL,
-        FLAG_TOOL,
-        ACCESS_TOOL,
-        UPDATE_TOOL_DEF,
-        HANDOFF_TOOL,
-        VERIFY_CAPABILITY_TOOL,
-      ],
+      max_tokens: 8192,
+      system: SYSTEM_PROMPT,
+      tools: ALL_TOOLS,
       tool_choice: toolChoice,
+      messages,
     });
 
-    const choice = completion.choices[0]?.message;
-    if (!choice) break;
-    messages.push(choice);
+    messages.push({ role: "assistant", content: response.content });
 
-    const toolCalls = choice.tool_calls ?? [];
-    if (toolCalls.length === 0) {
-      const message = choice.content ?? "";
+    const toolUseBlocks = response.content.filter(
+      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+    );
 
-      // If the LLM gave a text response without calling record_recommendation,
-      // check whether the conversation has passed all four gates (no catalogue
-      // matches + enough user turns = scoping is done). If so, force one final
-      // call with tool_choice required so the recommendation is always recorded
-      // as a proper handoff and the UI renders the card.
+    if (toolUseBlocks.length === 0) {
+      const textBlock = response.content.find(
+        (b): b is Anthropic.TextBlock => b.type === "text",
+      );
+      const message = textBlock?.text ?? "";
+
       if (handoff === null && registration === null && found.size === 0) {
         const userTurns = messages.filter((m) => m.role === "user").length;
         if (userTurns >= 3) {
           try {
-            const forced = await openai.chat.completions.create({
+            const forced = await anthropic.messages.create({
               model: MODEL,
+              max_tokens: 8192,
+              system:
+                SYSTEM_PROMPT +
+                "\n\nAll scoping information has been gathered. You MUST now call record_recommendation to register your recommendation — including if your recommendation is the manual/no-build path. The UI cannot surface the recommendation without this call.",
+              tools: [HANDOFF_TOOL],
+              tool_choice: { type: "tool", name: "record_recommendation" },
               messages: [
                 ...messages,
                 {
-                  role: "system" as const,
+                  role: "user" as const,
                   content:
-                    "All scoping information has been gathered. You MUST now call record_recommendation to register your recommendation — including if your recommendation is the manual/no-build path. The UI cannot surface the recommendation without this call.",
+                    "Please record your recommendation now.",
                 },
               ],
-              tools: [HANDOFF_TOOL],
-              tool_choice: {
-                type: "function",
-                function: { name: "record_recommendation" },
-              },
             });
-            const forcedChoice = forced.choices[0]?.message;
-            if (forcedChoice?.tool_calls) {
-              for (const call of forcedChoice.tool_calls) {
-                if (call.type !== "function") continue;
-                if (call.function.name === "record_recommendation") {
-                  handoff = parseHandoff(call.function.arguments);
-                  break;
-                }
-              }
+            const forcedToolBlock = forced.content.find(
+              (b): b is Anthropic.ToolUseBlock =>
+                b.type === "tool_use" && b.name === "record_recommendation",
+            );
+            if (forcedToolBlock) {
+              handoff = parseHandoff(forcedToolBlock.input);
             }
           } catch {
             // Forced finalization failed — fall through with text-only result.
@@ -594,20 +545,18 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
         }
       }
 
-      // At hand-off the closing line need not re-name a tool, so don't gate the
-      // returned tools on the message text — there are none to recommend.
       const recommended = handoff || registration ? [] : pickRecommended(found, message);
       return buildResult(message, recommended, handoff, registration);
     }
 
-    for (const call of toolCalls) {
-      if (call.type !== "function") continue;
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
 
-      if (call.function.name === "start_registration") {
-        registration = parseRegistration(call.function.arguments);
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
+    for (const block of toolUseBlocks) {
+      if (block.name === "start_registration") {
+        registration = parseRegistration(block.input);
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
           content: JSON.stringify({
             ok: true,
             note: registration.url
@@ -618,12 +567,12 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
         continue;
       }
 
-      if (call.function.name === "record_recommendation") {
-        handoff = parseHandoff(call.function.arguments);
+      if (block.name === "record_recommendation") {
+        handoff = parseHandoff(block.input);
         const isManual = handoff.builder === "manual";
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
           content: JSON.stringify({
             ok: true,
             note: isManual
@@ -634,16 +583,10 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
         continue;
       }
 
-      if (call.function.name === "verify_capability") {
-        let vcPlatform = "";
-        let vcCapability = "";
-        try {
-          const args = JSON.parse(call.function.arguments || "{}");
-          vcPlatform = typeof args.platform === "string" ? args.platform : "";
-          vcCapability = typeof args.capability === "string" ? args.capability : "";
-        } catch {
-          /* leave empty, will return unknown */
-        }
+      if (block.name === "verify_capability") {
+        const args = block.input as { platform?: string; capability?: string };
+        const vcPlatform = typeof args.platform === "string" ? args.platform : "";
+        const vcCapability = typeof args.capability === "string" ? args.capability : "";
         let vcResult: Awaited<ReturnType<typeof verifyCapability>>;
         try {
           vcResult = await verifyCapability(vcPlatform, vcCapability);
@@ -660,26 +603,25 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
             : vcResult.supported === false
               ? `The live docs indicate ${vcPlatform} does NOT support "${vcCapability}" (source: ${vcResult.source}). You may note this limitation, citing the source.`
               : `Live check inconclusive. Fall back to the static baseline for ${vcPlatform} and explicitly flag any claim about "${vcCapability}" as unverified: say "I'm not certain [platform] still can't do [X] — worth a quick check before we build around that assumption."`;
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
           content: JSON.stringify({ ...vcResult, note }),
         });
         continue;
       }
 
-      if (call.function.name === "browse_catalogue") {
-        let browseArgs: { type?: string; team?: string; limit?: number } = {};
-        try { browseArgs = JSON.parse(call.function.arguments || "{}"); } catch { /* use defaults */ }
+      if (block.name === "browse_catalogue") {
+        const browseArgs = block.input as { type?: string; team?: string; limit?: number };
         const browseResults = await listToolsByFilter({
           type: browseArgs.type,
           team: browseArgs.team,
           limit: browseArgs.limit ?? 12,
         });
         for (const tool of browseResults) found.set(tool.id, tool);
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
           content: JSON.stringify(
             browseResults.length > 0
               ? browseResults.map((t) => ({
@@ -697,14 +639,13 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
         continue;
       }
 
-      if (call.function.name === "get_tool_details") {
-        let detailArgs: { toolId?: string } = {};
-        try { detailArgs = JSON.parse(call.function.arguments || "{}"); } catch { /* use defaults */ }
+      if (block.name === "get_tool_details") {
+        const detailArgs = block.input as { toolId?: string };
         const tool = detailArgs.toolId ? await getToolById(detailArgs.toolId) : null;
         if (tool) found.set(tool.id, tool);
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
           content: tool
             ? JSON.stringify({
                 id: tool.id,
@@ -724,9 +665,8 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
         continue;
       }
 
-      if (call.function.name === "flag_tool") {
-        let flagArgs: { toolId?: string; reason?: string; details?: string } = {};
-        try { flagArgs = JSON.parse(call.function.arguments || "{}"); } catch { /* use defaults */ }
+      if (block.name === "flag_tool") {
+        const flagArgs = block.input as { toolId?: string; reason?: string; details?: string };
         let flagOk = false;
         if (flagArgs.toolId && flagArgs.reason) {
           try {
@@ -739,9 +679,9 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
             flagOk = true;
           } catch { /* flagOk stays false */ }
         }
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
           content: JSON.stringify(
             flagOk
               ? { ok: true, note: "Flag submitted. Write a warm one-sentence confirmation — the issue has been logged and the platform team will review it." }
@@ -751,9 +691,8 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
         continue;
       }
 
-      if (call.function.name === "request_access") {
-        let accessArgs: { toolId?: string; reason?: string } = {};
-        try { accessArgs = JSON.parse(call.function.arguments || "{}"); } catch { /* use defaults */ }
+      if (block.name === "request_access") {
+        const accessArgs = block.input as { toolId?: string; reason?: string };
         let accessOk = false;
         if (accessArgs.toolId && accessArgs.reason) {
           try {
@@ -765,9 +704,9 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
             accessOk = true;
           } catch { /* accessOk stays false */ }
         }
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
           content: JSON.stringify(
             accessOk
               ? { ok: true, note: "Access request submitted. Write a warm one-sentence confirmation — the request is logged and the tool owner will be in touch." }
@@ -777,9 +716,8 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
         continue;
       }
 
-      if (call.function.name === "update_tool") {
-        let updateArgs: { toolId?: string; field?: string; value?: string; manageToken?: string } = {};
-        try { updateArgs = JSON.parse(call.function.arguments || "{}"); } catch { /* use defaults */ }
+      if (block.name === "update_tool") {
+        const updateArgs = block.input as { toolId?: string; field?: string; value?: string; manageToken?: string };
         let updateNote = "";
         if (updateArgs.toolId && updateArgs.field && updateArgs.value && updateArgs.manageToken) {
           const row = await getToolRowById(updateArgs.toolId);
@@ -798,32 +736,25 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
         } else {
           updateNote = "Missing required arguments — need tool ID, field, new value, and manage key before calling update_tool.";
         }
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
           content: JSON.stringify({ note: updateNote }),
         });
         continue;
       }
 
-      let query = "";
-      try {
-        query = String(JSON.parse(call.function.arguments || "{}").query ?? "");
-      } catch {
-        query = "";
-      }
+      // Default: search_catalogue
+      const searchArgs = block.input as { query?: string };
+      const query = typeof searchArgs.query === "string" ? searchArgs.query : "";
       const results = await searchCatalogue(query, 6);
-      // Drop weak matches before the agent ever sees them: anything below the
-      // minimum-similarity threshold is only loosely related and must not be
-      // recommendable. This reliably flips loosely-related asks onto the
-      // build/request next-steps path instead of surfacing a bad fit.
       const strong = results.filter(
         (t) => (t.similarity ?? 0) >= MIN_MATCH_SIMILARITY,
       );
       for (const tool of strong) found.set(tool.id, tool);
-      messages.push({
-        role: "tool",
-        tool_call_id: call.id,
+      toolResults.push({
+        type: "tool_result",
+        tool_use_id: block.id,
         content: JSON.stringify(
           strong.length > 0
             ? strong.map((t) => ({
@@ -838,6 +769,8 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
         ),
       });
     }
+
+    messages.push({ role: "user", content: toolResults });
   }
 
   // Exhausted turns without a clean final answer — surface what we found.

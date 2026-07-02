@@ -15,8 +15,8 @@
  * native ESM, CJS) without requiring mock.module.
  *
  * Run with: `pnpm --filter @workspace/api-server run test`
- * Requires: OPENAI_API_KEY  (the concierge agent loop calls the LLM).
- * Skipped automatically when OPENAI_API_KEY is absent.
+ * Requires: AI_INTEGRATIONS_ANTHROPIC_BASE_URL  (the concierge agent loop calls the LLM).
+ * Skipped automatically when the Anthropic integration is absent.
  */
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -24,7 +24,7 @@ import { _testOverrides } from "../lib/verifyCapability";
 import { runChat } from "../lib/chatAgent";
 import { seedCatalogueIfEmpty } from "../lib/seed";
 
-const AI_READY = !!process.env.OPENAI_API_KEY;
+const AI_READY = !!process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL;
 
 before(async () => {
   await seedCatalogueIfEmpty();

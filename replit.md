@@ -11,7 +11,7 @@ A **chat-first meta-catalogue** of the internal AI tools, apps, skills, docs, pl
 - `pnpm run build` — typecheck + build all packages (needs `PORT` + `BASE_PATH`, injected by the platform)
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - `pnpm --filter @workspace/api-server exec tsx src/lib/seed.ts` — (re)seed ~25 tools with embeddings (idempotent)
-- Required env: `DATABASE_URL` (Postgres) and `OPENAI_API_KEY` (the user's own OpenAI key). Chat + tool inference call OpenAI directly via `src/lib/openaiClient.ts` (model from `OPENAI_MODEL`, default `gpt-4o`) — **not** the Replit AI integration proxy. Embeddings need no key (local model).
+- Required env: `DATABASE_URL` (Postgres). Chat, tool inference, and capability checks all use the **Anthropic Replit integration** (`AI_INTEGRATIONS_ANTHROPIC_BASE_URL` / `AI_INTEGRATIONS_ANTHROPIC_API_KEY`, auto-provisioned — no manual key needed). Model: `claude-sonnet-4-6`. Embeddings need no key (local model).
 
 ## Stack
 
@@ -20,7 +20,7 @@ A **chat-first meta-catalogue** of the internal AI tools, apps, skills, docs, pl
 - API: Express 5
 - DB: PostgreSQL + **pgvector** + Drizzle ORM
 - Embeddings: local `@huggingface/transformers` (`Xenova/all-MiniLM-L6-v2`, 384-dim) — no API key
-- Chat / metadata inference: OpenAI direct with the user's own `OPENAI_API_KEY` (`src/lib/openaiClient.ts`, `OPENAI_MODEL` default `gpt-4o`)
+- Chat / metadata inference: Anthropic via Replit AI integration (`src/lib/anthropicClient.ts`, model `claude-sonnet-4-6`)
 - Validation: Zod (`zod/v4`), `drizzle-zod`
 - Build: esbuild (api-server), Vite (storefront)
 

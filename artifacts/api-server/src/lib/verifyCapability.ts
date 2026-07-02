@@ -1,5 +1,5 @@
 import { safeFetch } from "./urlGuard";
-import { openai, OPENAI_MODEL } from "./openaiClient";
+import { anthropic, CLAUDE_MODEL } from "./anthropicClient";
 import { logger } from "./logger";
 
 export interface CapabilityResult {
@@ -179,28 +179,25 @@ async function fetchFreshResult(
   }
 
   try {
-    const completion = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
+    const response = await anthropic.messages.create({
+      model: CLAUDE_MODEL,
+      max_tokens: 300,
+      system:
+        'You are a factual assistant. Given a vendor documentation snippet, determine whether the platform supports the specified capability. Reply ONLY with a JSON object using this exact shape: {"supported": true|false|"unknown", "evidence": "<one sentence from the text confirming or denying the capability, or \\"not found\\" if no clear mention>"}\nDo NOT add any other keys or prose.',
       messages: [
-        {
-          role: "system",
-          content:
-            'You are a factual assistant. Given a vendor documentation snippet, determine whether the platform supports the specified capability. Reply ONLY with a JSON object using this exact shape: {"supported": true|false|"unknown", "evidence": "<one sentence from the text confirming or denying the capability, or \\"not found\\" if no clear mention>"}\nDo NOT add any other keys or prose.',
-        },
         {
           role: "user",
           content: `Platform: ${platform}\nCapability to check: ${capability}\n\nDocumentation snippet (from ${sourceUrl}):\n${pageText}`,
         },
       ],
-      response_format: { type: "json_object" },
-      temperature: 0,
-      max_tokens: 200,
     });
 
-    const raw = completion.choices[0]?.message?.content ?? "{}";
+    const textBlock = response.content.find((b) => b.type === "text");
+    const raw = textBlock?.type === "text" ? textBlock.text.trim() : "{}";
+
     let parsed: { supported?: unknown; evidence?: string } = {};
     try {
-      parsed = JSON.parse(raw);
+      parsed = JSON.parse(raw) as { supported?: unknown; evidence?: string };
     } catch {
       parsed = {};
     }
@@ -238,16 +235,10 @@ export async function verifyCapability(
   platform: string,
   capability: string,
 ): Promise<CapabilityResult> {
-  // Test-seam: a stub installed by unit tests always wins — it must run before
-  // the known-baseline and cache checks so every branch (true/false/unknown) is
-  // reachable in isolation.
   if (_testOverrides.impl) {
     return _testOverrides.impl(platform, capability);
   }
 
-  // Fast path: well-known stable capabilities never need a network round-trip.
-  // Vendor doc homepages don't explicitly enumerate these so a live fetch would
-  // return "unknown" and cause the AI to recommend building something needless.
   const knownResult = checkKnownCapabilities(platform, capability);
   if (knownResult) {
     logger.info(
@@ -283,11 +274,6 @@ export async function verifyCapability(
  * Start a background scheduler that proactively refreshes cached capability
  * entries approaching their TTL expiry (within 24 h). Enabled only when the
  * CAPABILITY_REFRESH_ENABLED env var is set to a truthy value.
- *
- * Entries where the `supported` value flips are logged at WARN level so
- * operator alerts can be wired up downstream.
- *
- * Returns a cleanup function that cancels the interval.
  */
 export function startCapabilityRefreshScheduler(): (() => void) | null {
   const enabled = process.env["CAPABILITY_REFRESH_ENABLED"];

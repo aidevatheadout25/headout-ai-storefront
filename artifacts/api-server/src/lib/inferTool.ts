@@ -1,4 +1,5 @@
-import { openai, OPENAI_MODEL } from "./openaiClient";
+import { anthropic, CLAUDE_MODEL } from "./anthropicClient";
+import type Anthropic from "@anthropic-ai/sdk";
 import type { InsertTool } from "@workspace/db";
 import { safeFetch } from "./urlGuard";
 import { fetchTagVocabulary } from "./catalogue";
@@ -10,7 +11,7 @@ import {
   TAG_POLICY_PROMPT,
 } from "./tagPolicy";
 
-const MODEL = OPENAI_MODEL;
+const MODEL = CLAUDE_MODEL;
 
 const TOOL_TYPES = [
   "app",
@@ -138,32 +139,23 @@ export type InferToolResult = {
   lowConfidence: boolean;
 };
 
-const JSON_SCHEMA = {
+const INFER_TOOL_DEF: Anthropic.Tool = {
   name: "tool_metadata",
-  strict: true,
-  schema: {
+  description: "Extract structured catalogue metadata for an internal Headout AI tool.",
+  input_schema: {
     type: "object",
-    additionalProperties: false,
     properties: {
-      type: { type: "string", enum: TOOL_TYPES },
+      type: { type: "string", enum: TOOL_TYPES as unknown as string[] },
       title: { type: "string" },
       oneLiner: { type: "string" },
       description: { type: "string" },
       tags: { type: "array", items: { type: "string" } },
-      team: { type: "string", enum: TEAMS },
+      team: { type: "string", enum: TEAMS as unknown as string[] },
       lowConfidence: { type: "boolean" },
     },
-    required: [
-      "type",
-      "title",
-      "oneLiner",
-      "description",
-      "tags",
-      "team",
-      "lowConfidence",
-    ],
+    required: ["type", "title", "oneLiner", "description", "tags", "team", "lowConfidence"],
   },
-} as const;
+};
 
 /** Heuristic: did the page give us anything real to classify from? */
 function hasUsableSignal(signals: PageSignals): boolean {
@@ -207,25 +199,24 @@ export async function inferToolFromUrl(url: string): Promise<InferToolResult> {
   ]);
   const usableSignal = hasUsableSignal(signals);
 
-  const completion = await openai.chat.completions.create({
+  const response = await anthropic.messages.create({
     model: MODEL,
-    response_format: { type: "json_schema", json_schema: JSON_SCHEMA },
+    max_tokens: 8192,
+    tools: [INFER_TOOL_DEF],
+    tool_choice: { type: "tool", name: "tool_metadata" },
+    system:
+      "You catalogue internal AI tools for Headout (a travel/experiences company). " +
+      "Classify the tool ONLY from the supplied page signals (title, meta/OpenGraph " +
+      "description, site name, and visible text). Do NOT infer what the tool does from " +
+      "the URL, its slug, or its path — if the signals do not state what it does, do not " +
+      "invent specifics. The one-liner is one factual sentence grounded in the signals. " +
+      "If unsure of the team, choose Platform. " +
+      "Set lowConfidence to true whenever the signals are too thin to classify confidently " +
+      "(for example an almost-empty client-rendered page). When lowConfidence is true, give a " +
+      "minimal best-effort guess from the title/site name and keep the description short and " +
+      "generic rather than fabricating capabilities.\n\n" +
+      TAG_POLICY_PROMPT,
     messages: [
-      {
-        role: "system",
-        content:
-          "You catalogue internal AI tools for Headout (a travel/experiences company). " +
-          "Classify the tool ONLY from the supplied page signals (title, meta/OpenGraph " +
-          "description, site name, and visible text). Do NOT infer what the tool does from " +
-          "the URL, its slug, or its path — if the signals do not state what it does, do not " +
-          "invent specifics. The one-liner is one factual sentence grounded in the signals. " +
-          "If unsure of the team, choose Platform. " +
-          "Set lowConfidence to true whenever the signals are too thin to classify confidently " +
-          "(for example an almost-empty client-rendered page). When lowConfidence is true, give a " +
-          "minimal best-effort guess from the title/site name and keep the description short and " +
-          "generic rather than fabricating capabilities.\n\n" +
-          TAG_POLICY_PROMPT,
-      },
       {
         role: "user",
         content: `URL: ${url}\n${
@@ -241,37 +232,34 @@ export async function inferToolFromUrl(url: string): Promise<InferToolResult> {
     ],
   });
 
-  const raw = completion.choices[0]?.message?.content ?? "{}";
-  const parsed = JSON.parse(raw) as {
-    type: string;
-    title: string;
-    oneLiner: string;
-    description: string;
-    tags: string[];
-    team: string;
-    lowConfidence: boolean;
+  const toolBlock = response.content.find(
+    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === "tool_metadata",
+  );
+
+  const parsed = (toolBlock?.input ?? {}) as {
+    type?: string;
+    title?: string;
+    oneLiner?: string;
+    description?: string;
+    tags?: string[];
+    team?: string;
+    lowConfidence?: boolean;
   };
 
-  // Guarantee a policy-compliant tag set: if the first proposal normalizes to
-  // fewer than MIN_TAGS (e.g. it was all banned/generic), reprompt once for
-  // specific facets. If it still falls short, surface it as low confidence so
-  // the reviewer/chat fills the gap rather than storing a weak entry.
-  const { tags, belowMin } = await resolveInferredTags(parsed.tags, () =>
-    regenerateTags(url, parsed, signals, vocabulary),
+  const { tags, belowMin } = await resolveInferredTags(parsed.tags ?? [], () =>
+    regenerateTags(url, parsed as { title: string; oneLiner: string; description: string }, signals, vocabulary),
   );
 
   const preview: InferredTool = {
-    type: zep ? "zep" : parsed.type,
-    title: parsed.title,
-    oneLiner: parsed.oneLiner,
-    description: parsed.description,
+    type: zep ? "zep" : (parsed.type as InferredTool["type"] ?? "app"),
+    title: parsed.title ?? "",
+    oneLiner: parsed.oneLiner ?? "",
+    description: parsed.description ?? "",
     tags,
-    team: parsed.team || "Platform",
+    team: parsed.team ?? "Platform",
     url,
     ownerName: "",
     ownerSlackId: "",
-    // URL-submitted entries are unverified until an owner claims them — this
-    // surfaces the "Pending owner confirmation" chip in the UI.
     verified: false,
     source: "manual",
     visibility: "org",
@@ -281,26 +269,25 @@ export async function inferToolFromUrl(url: string): Promise<InferToolResult> {
 
   return {
     preview,
-    lowConfidence: !usableSignal || parsed.lowConfidence || belowMin,
+    lowConfidence: !usableSignal || (parsed.lowConfidence ?? false) || belowMin,
   };
 }
 
-const TAGS_SCHEMA = {
+const TAGS_TOOL_DEF: Anthropic.Tool = {
   name: "tool_tags",
-  strict: true,
-  schema: {
+  description: "Extract a list of specific catalogue tags for an internal Headout AI tool.",
+  input_schema: {
     type: "object",
-    additionalProperties: false,
-    properties: { tags: { type: "array", items: { type: "string" } } },
+    properties: {
+      tags: { type: "array", items: { type: "string" } },
+    },
     required: ["tags"],
   },
-} as const;
+};
 
 /**
  * Focused recovery reprompt: ask only for a fresh tag set when the first
- * inference yielded too few specific facets. Grounds the model in the same
- * signals + existing vocabulary and restates the policy with extra emphasis on
- * the banned list and the {@link MIN_TAGS}–{@link MAX_TAGS} count.
+ * inference yielded too few specific facets.
  */
 async function regenerateTags(
   url: string,
@@ -308,18 +295,17 @@ async function regenerateTags(
   signals: PageSignals,
   vocabulary: string[],
 ): Promise<string[]> {
-  const completion = await openai.chat.completions.create({
+  const response = await anthropic.messages.create({
     model: MODEL,
-    response_format: { type: "json_schema", json_schema: TAGS_SCHEMA },
+    max_tokens: 8192,
+    tools: [TAGS_TOOL_DEF],
+    tool_choice: { type: "tool", name: "tool_tags" },
+    system:
+      "You assign catalogue tags for an internal Headout AI tool. Return ONLY tags. " +
+      `You MUST return between ${MIN_TAGS} and ${MAX_TAGS} SPECIFIC facet tags — never the banned generic words. ` +
+      "Ground the tags in the supplied details and page signals; prefer existing vocabulary.\n\n" +
+      TAG_POLICY_PROMPT,
     messages: [
-      {
-        role: "system",
-        content:
-          "You assign catalogue tags for an internal Headout AI tool. Return ONLY tags. " +
-          `You MUST return between ${MIN_TAGS} and ${MAX_TAGS} SPECIFIC facet tags — never the banned generic words. ` +
-          "Ground the tags in the supplied details and page signals; prefer existing vocabulary.\n\n" +
-          TAG_POLICY_PROMPT,
-      },
       {
         role: "user",
         content: `URL: ${url}\nTitle: ${parsed.title}\nOne-liner: ${parsed.oneLiner}\nDescription: ${parsed.description}\nExisting catalogue tags (reuse these before inventing new ones): ${renderTagVocabulary(
@@ -328,7 +314,10 @@ async function regenerateTags(
       },
     ],
   });
-  const raw = completion.choices[0]?.message?.content ?? "{}";
-  const out = JSON.parse(raw) as { tags?: unknown };
+
+  const toolBlock = response.content.find(
+    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === "tool_tags",
+  );
+  const out = (toolBlock?.input ?? {}) as { tags?: unknown };
   return Array.isArray(out.tags) ? (out.tags as string[]) : [];
 }

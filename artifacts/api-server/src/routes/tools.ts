@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod/v4";
-import type OpenAI from "openai";
+import type Anthropic from "@anthropic-ai/sdk";
 import {
   claimTool,
   DuplicateToolError,
@@ -26,7 +26,7 @@ import {
 } from "../lib/tagPolicy";
 import { inferToolFromUrl, isZepsUrl, type InferredTool } from "../lib/inferTool";
 import { logger } from "../lib/logger";
-import { openai, OPENAI_MODEL } from "../lib/openaiClient";
+import { anthropic, CLAUDE_MODEL } from "../lib/anthropicClient";
 import {
   assertSafePublicUrl,
   isSafeLinkScheme,
@@ -208,25 +208,21 @@ function buildOpeningMessage(preview: InferredTool, lowConfidence: boolean): str
   return `I found **${preview.title}** — looks like a ${preview.type} from the ${preview.team} team. Does that sound right, or anything to correct?`;
 }
 
-const FINALIZE_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
-  type: "function",
-  function: {
-    name: "finalize_tool",
-    description:
-      "Call this when all required fields are confirmed and the user has approved the details. Supply the complete, final tool draft.",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        type: { type: "string", enum: TOOL_TYPES as unknown as string[] },
-        title: { type: "string" },
-        oneLiner: { type: "string" },
-        description: { type: "string" },
-        tags: { type: "array", items: { type: "string" } },
-        team: { type: "string", enum: TEAMS as unknown as string[] },
-      },
-      required: ["type", "title", "oneLiner", "description", "tags", "team"],
+const FINALIZE_TOOL: Anthropic.Tool = {
+  name: "finalize_tool",
+  description:
+    "Call this when all required fields are confirmed and the user has approved the details. Supply the complete, final tool draft.",
+  input_schema: {
+    type: "object",
+    properties: {
+      type: { type: "string", enum: TOOL_TYPES as unknown as string[] },
+      title: { type: "string" },
+      oneLiner: { type: "string" },
+      description: { type: "string" },
+      tags: { type: "array", items: { type: "string" } },
+      team: { type: "string", enum: TEAMS as unknown as string[] },
     },
+    required: ["type", "title", "oneLiner", "description", "tags", "team"],
   },
 };
 
@@ -368,31 +364,27 @@ Rules:
 - When the user confirms (e.g. "yes", "looks good", or supplies the last missing detail), call finalize_tool right away. Do not ask again after they've said yes.`;
 
     try {
-      const llmMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-        { role: "system", content: systemPrompt },
-        ...messages.map((m) => ({ role: m.role, content: m.content })),
-      ];
-
-      const completion = await openai.chat.completions.create({
-        model: OPENAI_MODEL,
-        messages: llmMessages,
+      const response = await anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: 8192,
+        system: systemPrompt,
         tools: [FINALIZE_TOOL],
-        tool_choice: "auto",
+        tool_choice: { type: "auto" },
+        messages: messages.map((m) => ({ role: m.role, content: m.content })),
       });
 
-      const choice = completion.choices[0]?.message;
-      if (!choice) {
+      const textBlock = response.content.find((b) => b.type === "text");
+      const toolBlock = response.content.find(
+        (b): b is Anthropic.ToolUseBlock =>
+          b.type === "tool_use" && b.name === "finalize_tool",
+      );
+
+      if (!textBlock && !toolBlock) {
         return res.status(500).json({ error: "No response from AI" });
       }
 
-      const toolCall = choice.tool_calls?.[0];
-      if (toolCall?.type === "function" && toolCall.function.name === "finalize_tool") {
-        let finalArgs: Partial<ToolDraftPayload> = {};
-        try {
-          finalArgs = JSON.parse(toolCall.function.arguments ?? "{}") as Partial<ToolDraftPayload>;
-        } catch {
-          // keep empty
-        }
+      if (toolBlock) {
+        const finalArgs = (toolBlock.input ?? {}) as Partial<ToolDraftPayload>;
         const finalTags = normalizeTags(finalArgs.tags ?? clientPreview.tags);
         // Don't finalise below the policy minimum — keep the conversation open
         // and ask for more specific facets instead of saving a weak entry.
@@ -424,7 +416,7 @@ Rules:
       // LLM replied with a text question.
       return res.status(200).json({
         ready: false,
-        message: choice.content ?? "",
+        message: textBlock?.type === "text" ? textBlock.text : "",
         preview: clientPreview,
       });
     } catch (err) {
