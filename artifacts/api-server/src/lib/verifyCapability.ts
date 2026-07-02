@@ -21,6 +21,66 @@ export const _testOverrides: {
   impl: ((platform: string, capability: string) => Promise<CapabilityResult>) | null;
 } = { impl: null };
 
+/**
+ * Hardcoded baseline for well-known, stable platform capabilities.
+ * These facts don't change month-to-month and the vendor doc homepages don't
+ * explicitly enumerate them, so a live fetch would return "unknown" and
+ * accidentally cause the AI to recommend building something unnecessary.
+ *
+ * Both the platform and capability pattern must match (case-insensitive).
+ * Checked before the cache and network — always wins.
+ */
+const KNOWN_TRUE: Array<{ platform: RegExp; capability: RegExp }> = [
+  // Claude / Anthropic — file generation (Word, Excel, PDF, CSV, PowerPoint, any format)
+  {
+    platform: /claude|anthropic/,
+    capability: /\b(word|\.docx?|doc\s+file|excel|\.xlsx?|spreadsheet|pdf|powerpoint|\.pptx?|csv|tsv|file\s+format|file\s+output|output.*file|generate.*file|create.*file|download.*file|file.*download)/,
+  },
+  // Claude — code execution
+  {
+    platform: /claude|anthropic/,
+    capability: /(execut|run|sandbox).{0,20}(code|python|script|notebook)|code.{0,20}(execut|run|sandbox)/,
+  },
+  // Claude — web browsing
+  {
+    platform: /claude|anthropic/,
+    capability: /(browse|search|fetch|access).{0,20}(web|internet|url|page|site)|web.{0,20}(browse|search)/,
+  },
+  // ChatGPT / OpenAI — file generation
+  {
+    platform: /chatgpt|openai|gpt/,
+    capability: /\b(word|\.docx?|doc\s+file|excel|\.xlsx?|spreadsheet|pdf|powerpoint|\.pptx?|csv|tsv|file\s+format|file\s+output|output.*file|generate.*file|create.*file|download.*file|file.*download)/,
+  },
+  // ChatGPT — code execution / Advanced Data Analysis
+  {
+    platform: /chatgpt|openai|gpt/,
+    capability: /(execut|run|sandbox).{0,20}(code|python|script)|code.{0,20}(execut|run|sandbox)|advanced data analysis|code interpreter/,
+  },
+  // ChatGPT — web browsing
+  {
+    platform: /chatgpt|openai|gpt/,
+    capability: /(browse|search|fetch|access).{0,20}(web|internet|url|page|site)|web.{0,20}(browse|search)/,
+  },
+];
+
+function checkKnownCapabilities(
+  platform: string,
+  capability: string,
+): CapabilityResult | null {
+  const normPlatform = platform.toLowerCase();
+  const normCapability = capability.toLowerCase();
+  for (const known of KNOWN_TRUE) {
+    if (known.platform.test(normPlatform) && known.capability.test(normCapability)) {
+      return {
+        supported: true,
+        source: "known-capabilities-baseline",
+        checked_at: new Date().toISOString(),
+      };
+    }
+  }
+  return null;
+}
+
 const CACHE_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
 const REFRESH_LOOKAHEAD_MS = 24 * 60 * 60 * 1000; // refresh when < 24 h left
 const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // scan every hour
@@ -184,6 +244,18 @@ export async function verifyCapability(
   platform: string,
   capability: string,
 ): Promise<CapabilityResult> {
+  // Fast path: well-known stable capabilities never need a network round-trip.
+  // Vendor doc homepages don't explicitly enumerate these so a live fetch would
+  // return "unknown" and cause the AI to recommend building something needless.
+  const knownResult = checkKnownCapabilities(platform, capability);
+  if (knownResult) {
+    logger.info(
+      { platform, capability, result: knownResult },
+      "verify_capability: known-baseline hit, skipping network",
+    );
+    return knownResult;
+  }
+
   const cacheKey = `${normalizePlatform(platform)}::${capability.toLowerCase().trim()}`;
   const now = Date.now();
 
