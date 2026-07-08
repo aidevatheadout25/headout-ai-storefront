@@ -5,6 +5,7 @@ import analyzeZepRouter from "./analyzeZep";
 import toolsRouter from "./tools";
 import chatRouter from "./chat";
 import conversationsRouter from "./conversations";
+import briefsRouter from "./briefs";
 
 const router: IRouter = Router();
 
@@ -14,5 +15,6 @@ router.use(analyzeZepRouter);
 router.use(toolsRouter);
 router.use(chatRouter);
 router.use(conversationsRouter);
+router.use(briefsRouter);
 
 export default router;

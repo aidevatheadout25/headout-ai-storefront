@@ -7,7 +7,7 @@ import {
 } from "@workspace/db";
 import { and, asc, desc, eq } from "drizzle-orm";
 import type { ApiTool } from "./catalogue";
-import type { BuilderId, FunnelStage } from "./chatAgent";
+import type { BriefPayload, BuilderId, FunnelStage, KillPayload } from "./chatAgent";
 
 export type ConversationSummary = {
   id: string;
@@ -27,6 +27,8 @@ export type SavedMessage = {
   buildPrompt: string | null;
   /** Set only when stage === "register": the captured URL, or null if not yet provided. */
   registration: { url: string | null } | null;
+  briefPayload: BriefPayload | null;
+  killPayload: KillPayload | null;
   userQuery: string | null;
   createdAt: string;
 };
@@ -41,23 +43,52 @@ function toSummary(row: ConversationRow): ConversationSummary {
 }
 
 function toMessage(row: MessageRow): SavedMessage {
+  const rawStage = row.stage;
   const stage: FunnelStage =
-    row.stage === "handoff"
+    rawStage === "handoff"
       ? "handoff"
-      : row.stage === "register"
+      : rawStage === "register"
         ? "register"
-        : "chat";
+        : rawStage === "scope"
+          ? "scope"
+          : rawStage === "brief"
+            ? "brief"
+            : rawStage === "kill"
+              ? "kill"
+              : rawStage === "disambiguation"
+                ? "disambiguation"
+                : "chat";
+
+  // brief/kill payloads are stored as a wrapper object in the tools jsonb column
+  // to avoid needing a schema migration.
+  const toolsRaw = row.tools as unknown;
+  let briefPayload: BriefPayload | null = null;
+  let killPayload: KillPayload | null = null;
+  let tools: ApiTool[] | null = null;
+
+  if (toolsRaw && typeof toolsRaw === "object" && !Array.isArray(toolsRaw)) {
+    const payload = toolsRaw as Record<string, unknown>;
+    if (stage === "brief" && payload._briefPayload) {
+      briefPayload = payload._briefPayload as BriefPayload;
+    } else if (stage === "kill" && payload._killPayload) {
+      killPayload = payload._killPayload as KillPayload;
+    }
+  } else {
+    tools = (toolsRaw as ApiTool[] | null) ?? null;
+  }
+
   return {
     id: row.id,
     role: row.role === "assistant" ? "assistant" : "user",
     text: row.text,
-    tools: (row.tools as ApiTool[] | null) ?? null,
+    tools,
     noMatch: row.noMatch,
     stage,
     recommendedBuilder: (row.recommendedBuilder as BuilderId | null) ?? null,
     buildPrompt: stage === "register" ? null : row.buildPrompt,
-    registration:
-      stage === "register" ? { url: row.buildPrompt ?? null } : null,
+    registration: stage === "register" ? { url: row.buildPrompt ?? null } : null,
+    briefPayload,
+    killPayload,
     userQuery: row.userQuery,
     createdAt: row.createdAt.toISOString(),
   };
@@ -150,6 +181,9 @@ export async function userOwnsConversation(
  * When stage === "register", the captured URL is stored in build_prompt so it
  * survives a reload without a schema migration. It is reconstructed as
  * registration.url in toMessage on read.
+ *
+ * When stage === "brief" or "kill", the payload is stored in the tools jsonb
+ * column as a wrapper object (no schema migration needed).
  */
 export async function appendTurn(
   conversationId: string,
@@ -162,6 +196,8 @@ export async function appendTurn(
     recommendedBuilder: BuilderId | null;
     buildPrompt: string | null;
     registration: { url: string | null } | null;
+    briefPayload?: BriefPayload | null;
+    killPayload?: KillPayload | null;
   },
 ): Promise<void> {
   // For register stage, persist the captured URL via build_prompt.
@@ -169,6 +205,14 @@ export async function appendTurn(
     turn.stage === "register"
       ? (turn.registration?.url ?? null)
       : turn.buildPrompt;
+
+  // Store brief/kill payloads in the tools jsonb column as a wrapper.
+  let toolsToStore: unknown = turn.tools;
+  if (turn.stage === "brief" && turn.briefPayload) {
+    toolsToStore = { _briefPayload: turn.briefPayload };
+  } else if (turn.stage === "kill" && turn.killPayload) {
+    toolsToStore = { _killPayload: turn.killPayload };
+  }
 
   await db.insert(messagesTable).values([
     {
@@ -180,7 +224,7 @@ export async function appendTurn(
       conversationId,
       role: "assistant",
       text: turn.assistantText,
-      tools: turn.tools,
+      tools: toolsToStore as Record<string, unknown>[],
       noMatch: turn.noMatch,
       stage: turn.stage,
       recommendedBuilder: turn.recommendedBuilder,

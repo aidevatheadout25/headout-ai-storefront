@@ -8,6 +8,11 @@ import {
   type KeyboardEvent,
 } from "react";
 import { Button, ButtonLink } from "@/components/Button";
+import { BriefCard } from "@/components/BriefCard";
+import { ChecklistCard } from "@/components/ChecklistCard";
+import { KillCard } from "@/components/KillCard";
+import { ReviewCard } from "@/components/ReviewCard";
+import { ScaffoldCard } from "@/components/ScaffoldCard";
 import { Icon } from "@/components/Icon";
 import { ToolCard } from "@/components/ToolCard";
 import { ToolDetailOverlay } from "@/components/ToolDetailOverlay";
@@ -18,9 +23,13 @@ import {
   fetchConversation,
   sendChat,
   type AddChatTurn,
+  type BriefPayload,
   type BuilderId,
   type ChatTurn,
   type FunnelStage,
+  type KillPayload,
+  type ReviewResult,
+  type ScaffoldResult,
   type ToolPreview,
 } from "@/lib/api";
 import { useAuthContext } from "@/lib/auth-context";
@@ -40,6 +49,22 @@ const STARTER_PROMPTS = [
   "I just built a tool — how do I get it added to the platform?",
 ] as const;
 
+const SCOPE_LAUNCHERS = [
+  { label: "🔍 Find an existing tool", text: "I need to find an existing tool" },
+  { label: "🔨 Build something new", text: "I want to scope an idea for a new internal tool" },
+  { label: "➕ Register a tool I built", text: "I just built a tool and want to add it to the catalogue" },
+] as const;
+
+const JOURNEY_PILL_LABELS: Partial<Record<FunnelStage, string>> = {
+  scope: "Scoping",
+  brief: "Writing brief",
+  kill: "Redirected",
+  handoff: "Building",
+  register: "Registering",
+};
+
+type JourneyPhase = "brief" | "scaffold" | "checklist" | "review" | "live" | null;
+
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -50,6 +75,8 @@ type ChatMessage = {
   recommendedBuilder?: BuilderId | null;
   buildPrompt?: string | null;
   registration?: { url: string | null } | null;
+  briefPayload?: BriefPayload | null;
+  killPayload?: KillPayload | null;
   userQuery?: string;
   addReady?: boolean;
   addDraft?: ToolPreview;
@@ -57,6 +84,13 @@ type ChatMessage = {
 
 function msgId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+/** Infer the visible mode pill label from all messages. */
+function pillLabel(messages: ChatMessage[]): string | null {
+  const last = [...messages].reverse().find((m) => m.role === "assistant");
+  if (!last?.stage) return null;
+  return JOURNEY_PILL_LABELS[last.stage] ?? null;
 }
 
 export function HomeChat() {
@@ -86,6 +120,12 @@ export function HomeChat() {
   // ── Tool detail overlay ───────────────────────────────────────────────────
   const [detailToolId, setDetailToolId] = useState<string | null>(null);
 
+  // ── Builder journey state ─────────────────────────────────────────────────
+  const [journeyPhase, setJourneyPhase] = useState<JourneyPhase>(null);
+  const [activeBrief, setActiveBrief] = useState<BriefPayload | null>(null);
+  const [scaffoldResult, setScaffoldResult] = useState<ScaffoldResult | null>(null);
+  const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null);
+
   const started = messages.length > 0;
 
   const scrollToEnd = useCallback(() => {
@@ -99,7 +139,7 @@ export function HomeChat() {
 
   useEffect(() => {
     scrollToEnd();
-  }, [messages, sending, scrollToEnd]);
+  }, [messages, sending, journeyPhase, scrollToEnd]);
 
   // Auto-grow the composer with its content, up to a max height (then scroll).
   useLayoutEffect(() => {
@@ -220,21 +260,21 @@ export function HomeChat() {
         turns.push({ role: "user", content: text });
 
         const result = await sendChat(turns, conversationId);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: msgId(),
-            role: "assistant",
-            text: result.message,
-            tools: result.tools,
-            noMatch: result.noMatch,
-            stage: result.stage,
-            recommendedBuilder: result.recommendedBuilder,
-            buildPrompt: result.buildPrompt,
-            registration: result.registration,
-            userQuery: text,
-          },
-        ]);
+        const newMsg: ChatMessage = {
+          id: msgId(),
+          role: "assistant",
+          text: result.message,
+          tools: result.tools,
+          noMatch: result.noMatch,
+          stage: result.stage,
+          recommendedBuilder: result.recommendedBuilder,
+          buildPrompt: result.buildPrompt,
+          registration: result.registration,
+          briefPayload: result.briefPayload,
+          killPayload: result.killPayload,
+          userQuery: text,
+        };
+        setMessages((prev) => [...prev, newMsg]);
 
         if (result.conversationId && result.conversationId !== conversationId) {
           loadedConvRef.current = result.conversationId;
@@ -259,6 +299,14 @@ export function HomeChat() {
             void runAddChatRef.current(url);
           }
         }
+
+        // When the critique agent produces a brief, enter the builder journey.
+        if (result.stage === "brief" && result.briefPayload) {
+          setActiveBrief(result.briefPayload);
+          setJourneyPhase("brief");
+        }
+
+        // Kill — no extra journey state needed, just show the kill card in the message.
       } catch {
         setError("The catalogue assistant is unavailable right now — try again.");
       } finally {
@@ -336,6 +384,10 @@ export function HomeChat() {
       setAddDraft(null);
       setAddTurns([]);
       setError(null);
+      setJourneyPhase(null);
+      setActiveBrief(null);
+      setScaffoldResult(null);
+      setReviewResult(null);
       return;
     }
 
@@ -356,19 +408,22 @@ export function HomeChat() {
           recommendedBuilder: m.recommendedBuilder,
           buildPrompt: m.buildPrompt,
           registration: m.registration,
+          briefPayload: m.briefPayload,
+          killPayload: m.killPayload,
           userQuery: m.userQuery ?? undefined,
         }));
         setMessages(mapped);
 
-        // If the last assistant message in the reloaded conversation was a
-        // register stage (i.e. the user hadn't finished registering yet),
-        // re-enter add mode so they can continue.
         const lastAssistant = [...mapped].reverse().find((m) => m.role === "assistant");
         if (lastAssistant?.stage === "register") {
           setAddMode(true);
           setAddUrl("");
           setAddDraft(null);
           setAddTurns([]);
+        } else if (lastAssistant?.stage === "brief" && lastAssistant.briefPayload) {
+          setActiveBrief(lastAssistant.briefPayload);
+          setJourneyPhase("brief");
+          setAddMode(false);
         } else {
           setAddMode(false);
         }
@@ -404,7 +459,6 @@ export function HomeChat() {
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    // Enter sends; Shift+Enter inserts a newline.
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       const trimmed = input.trim();
@@ -414,16 +468,55 @@ export function HomeChat() {
     }
   }
 
+  // Builder journey handlers
+  const handleScaffold = useCallback((result: ScaffoldResult) => {
+    setScaffoldResult(result);
+    setJourneyPhase("scaffold");
+  }, []);
+
+  const handleChecklistDone = useCallback(() => {
+    setJourneyPhase("review");
+  }, []);
+
+  const handleHelpRequest = useCallback(
+    (helpText: string) => {
+      submitText(helpText);
+    },
+    [submitText],
+  );
+
+  const handleReviewLive = useCallback((result: ReviewResult) => {
+    setReviewResult(result);
+    setJourneyPhase("live");
+  }, []);
+
+  // Determine if the "fork" chip (nothing fits — scope it) is visible on the last message.
+  const lastMessage = [...messages].reverse().find((m) => m.role === "assistant");
+  const showScopeChip =
+    lastMessage?.noMatch &&
+    lastMessage.stage !== "scope" &&
+    lastMessage.stage !== "brief" &&
+    lastMessage.stage !== "kill" &&
+    journeyPhase === null &&
+    !addMode;
+
+  const currentPillLabel = pillLabel(messages);
+
   const inputPlaceholder = addMode && !addUrl
     ? "Paste a link — e.g. https://…"
     : addMode
       ? "Reply…"
       : 'Describe a task, e.g. \u201csummarise customer reviews\u201d\u2026';
 
+  const isJourneyActive = journeyPhase !== null;
+
   return (
     <div className="home-chat">
       {isAuthenticated && (
         <div className="home-chat__header">
+          {currentPillLabel && (
+            <span className="home-chat__mode-pill t-label-xs">{currentPillLabel}</span>
+          )}
           <a href="/" className="home-chat__new-chat-btn" title="New chat" aria-label="New chat">
             <svg
               width="18"
@@ -464,6 +557,18 @@ export function HomeChat() {
                 </button>
               ))}
             </div>
+            <div className="home-chat__launchers">
+              {SCOPE_LAUNCHERS.map((l) => (
+                <button
+                  key={l.label}
+                  type="button"
+                  className="home-chat__launcher t-label-sm"
+                  onClick={() => submitText(l.text)}
+                >
+                  {l.label}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -495,6 +600,12 @@ export function HomeChat() {
                   </div>
                 )}
 
+                {/* kill card */}
+                {message.stage === "kill" && message.killPayload && (
+                  <KillCard kill={message.killPayload} />
+                )}
+
+                {/* Handoff / no-match with scope fork chip */}
                 {message.stage === "handoff" &&
                   (() => {
                     const prompt = message.buildPrompt || message.userQuery || message.text;
@@ -573,6 +684,93 @@ export function HomeChat() {
           </ul>
         )}
 
+        {/* Nothing fits → scope fork chip */}
+        {showScopeChip && !sending && (
+          <div className="home-chat__scope-fork">
+            <p className="home-chat__scope-fork-label t-label-sm">
+              Nothing fits what you described.
+            </p>
+            <button
+              type="button"
+              className="home-chat__chip home-chat__chip--scope t-para-sm"
+              onClick={() => submitText("Let's scope the idea — I want to build it")}
+            >
+              🔨 Nothing fits — let&apos;s scope it
+            </button>
+          </div>
+        )}
+
+        {/* ── Builder journey cards ─────────────────────────────────────── */}
+        {isJourneyActive && (
+          <div className="home-chat__journey">
+            {/* Phase 1: Brief (always shown when journey is active) */}
+            {journeyPhase === "brief" && activeBrief && (
+              <BriefCard brief={activeBrief} onScaffold={handleScaffold} />
+            )}
+
+            {/* Phase 2+: Brief collapsed → Scaffold card */}
+            {(journeyPhase === "scaffold" ||
+              journeyPhase === "checklist" ||
+              journeyPhase === "review" ||
+              journeyPhase === "live") &&
+              scaffoldResult && (
+                <ScaffoldCard scaffold={scaffoldResult} />
+              )}
+
+            {/* Phase 3: Checklist */}
+            {(journeyPhase === "checklist" ||
+              journeyPhase === "review" ||
+              journeyPhase === "live") &&
+              scaffoldResult && (
+                <ChecklistCard
+                  buildId={scaffoldResult.buildId}
+                  onDone={handleChecklistDone}
+                  onHelp={handleHelpRequest}
+                />
+              )}
+
+            {/* Phase 4: Review */}
+            {(journeyPhase === "review" || journeyPhase === "live") &&
+              scaffoldResult && (
+                <ReviewCard
+                  buildId={scaffoldResult.buildId}
+                  onLive={handleReviewLive}
+                />
+              )}
+
+            {/* Phase 5: Live ceremony */}
+            {journeyPhase === "live" && reviewResult && (
+              <div className="home-chat__live-banner">
+                <span className="t-heading-sm">🎉 Your tool is live!</span>
+                <div className="home-chat__live-actions">
+                  <ButtonLink href={`/tools/${reviewResult.toolId}`} variant="primary" size="sm">
+                    View {reviewResult.toolName} →
+                  </ButtonLink>
+                  <ButtonLink
+                    href={`/?q=${encodeURIComponent(reviewResult.toolName)}`}
+                    variant="secondary"
+                    size="sm"
+                  >
+                    Try searching for it
+                  </ButtonLink>
+                </div>
+              </div>
+            )}
+
+            {/* Journey progression: brief → scaffold transition */}
+            {journeyPhase === "brief" && activeBrief && (
+              <p className="home-chat__journey-hint t-label-sm">
+                Edit any field above, then click <strong>Create my repo</strong>.
+              </p>
+            )}
+            {journeyPhase === "scaffold" && scaffoldResult && (
+              <p className="home-chat__journey-hint t-label-sm">
+                Work through the checklist below to get ready for review.
+              </p>
+            )}
+          </div>
+        )}
+
         {error && (
           <p className="home-chat__error t-para-sm" role="alert">
             {error}
@@ -581,6 +779,19 @@ export function HomeChat() {
       </div>
 
       <div className="home-chat__footer">
+        {/* Journey phase pill */}
+        {isJourneyActive && (
+          <div className="home-chat__journey-phase">
+            {(["brief", "scaffold", "checklist", "review", "live"] as JourneyPhase[]).map((phase, i) => (
+              <span
+                key={phase}
+                className={`home-chat__journey-step ${journeyPhase === phase ? "home-chat__journey-step--active" : ""} ${["scaffold", "checklist", "review", "live"].slice(0, ["scaffold", "checklist", "review", "live"].indexOf(journeyPhase as string)).includes(phase ?? "") ? "home-chat__journey-step--done" : ""}`}
+              >
+                {i + 1}. {phase}
+              </span>
+            ))}
+          </div>
+        )}
         <form className="home-chat__composer" onSubmit={handleSubmit}>
           <div className="home-chat__input-wrap">
             <Icon name="spark" size={20} className="home-chat__input-icon" />

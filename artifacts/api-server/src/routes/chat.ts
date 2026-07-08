@@ -64,6 +64,7 @@ router.post("/chat", async (req: Request, res: Response) => {
     const userCtx: ChatUserContext = {
       email: (req.user as { email?: string } | undefined)?.email,
       userId: req.user?.id,
+      conversationId: conversationId ?? undefined,
     };
     const result = await runChat(history, userCtx);
 
@@ -84,6 +85,8 @@ router.post("/chat", async (req: Request, res: Response) => {
       recommendedBuilder: result.recommendedBuilder,
       buildPrompt: result.buildPrompt,
       registration: result.registration,
+      briefPayload: result.briefPayload,
+      killPayload: result.killPayload,
     });
 
     return res.json({ ...result, conversationId });

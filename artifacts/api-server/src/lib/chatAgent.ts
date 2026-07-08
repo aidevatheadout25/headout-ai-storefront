@@ -63,8 +63,40 @@ const BUILDER_LABELS: Record<BuilderId, string> = {
  *   render with `recommendedBuilder` as the primary action.
  * - `register`: the user has signalled they already built something and want it
  *   listed in the catalogue; the UI switches to the add-tool paste-link flow.
+ * - `scope`: the user entered the Builder journey critique loop; the UI shows
+ *   the scoping conversation without the normal handoff buttons.
+ * - `brief`: the critique agent produced a requirements brief; the UI shows
+ *   the editable BriefCard with a "Create my repo" button.
+ * - `kill`: the critique agent called recommend_kill; the UI shows a kill card
+ *   with an actionable alternative instead of a brief.
+ * - `disambiguation`: off-script input detected mid-flow; the UI shows chips.
  */
-export type FunnelStage = "chat" | "handoff" | "register";
+export type FunnelStage =
+  | "chat"
+  | "handoff"
+  | "register"
+  | "scope"
+  | "brief"
+  | "kill"
+  | "disambiguation";
+
+export type BriefPayload = {
+  conversationId?: string;
+  searchContext: { query: string; nearMisses: { name: string; oneLiner: string }[] };
+  problem: string;
+  users: string;
+  frequency: string;
+  mustDo: string[];
+  wontDo: string[];
+  appClass: "micro" | "full";
+  risk: "low" | "high";
+};
+
+export type KillPayload = {
+  reason: string;
+  alternative: string;
+  alternativeUrl?: string;
+};
 
 export type ChatResult = {
   message: string;
@@ -79,6 +111,10 @@ export type ChatResult = {
   buildPrompt: string | null;
   /** Set only at the register stage: the URL captured from the user, or null if not yet provided. */
   registration: { url: string | null } | null;
+  /** Set when stage === 'brief': the full draft brief produced by the critique agent. */
+  briefPayload: BriefPayload | null;
+  /** Set when stage === 'kill': reason + alternative from the critique agent. */
+  killPayload: KillPayload | null;
 };
 
 const SYSTEM_PROMPT = `You are the AI PM advisor for Headout's internal AI Storefront — the platform where Headout teams discover, use, and register internal AI tools.
@@ -398,6 +434,129 @@ const ALL_TOOLS: Anthropic.Tool[] = [
   VERIFY_CAPABILITY_TOOL,
 ];
 
+// ─── Scope / Critique mode ────────────────────────────────────────────────────
+
+const DRAFT_BRIEF_TOOL: Anthropic.Tool = {
+  name: "draft_brief",
+  description:
+    "Call this once you have gathered enough information to write a requirements brief. Only call after the user has confirmed a genuine build need AND you have all required fields. Never call if recommend_kill is more appropriate.",
+  input_schema: {
+    type: "object",
+    properties: {
+      problem: { type: "string", description: "One sentence: what problem does this solve?" },
+      users: { type: "string", description: "Who uses it? (e.g. 'Supply Ops team, ~8 people')" },
+      frequency: { type: "string", description: "How often? (e.g. 'daily', 'weekly', 'ad-hoc')" },
+      mustDo: {
+        type: "array",
+        items: { type: "string" },
+        description: "2–5 must-have capabilities. Be specific.",
+      },
+      wontDo: {
+        type: "array",
+        items: { type: "string" },
+        description: "3+ explicit out-of-scope items to keep scope tight.",
+      },
+      appClass: {
+        type: "string",
+        enum: ["micro", "full"],
+        description: "micro = simple script/skill/bot; full = proper UI + backend app.",
+      },
+      risk: {
+        type: "string",
+        enum: ["low", "high"],
+        description: "low = internal tool, small audience; high = customer-facing or financial data.",
+      },
+    },
+    required: ["problem", "users", "frequency", "mustDo", "wontDo", "appClass", "risk"],
+  },
+};
+
+const RECOMMEND_KILL_TOOL: Anthropic.Tool = {
+  name: "recommend_kill",
+  description:
+    "Call this when the idea should NOT be built: one-off task, already solvable natively by Claude, too risky, or clearly out of scope. Provide a concrete actionable alternative the user can do RIGHT NOW instead.",
+  input_schema: {
+    type: "object",
+    properties: {
+      reason: {
+        type: "string",
+        description: "Plain-language explanation of why a build is not the right call.",
+      },
+      alternative: {
+        type: "string",
+        description: "The specific thing they can do instead (e.g. 'Use Claude.ai — paste the data and ask it to summarise', 'Set up a Slack reminder', 'Use the existing Reporting Tool in the catalogue').",
+      },
+      alternativeUrl: {
+        type: "string",
+        description: "An optional URL for the alternative (catalogue link, Claude.ai, Slack, etc.).",
+      },
+    },
+    required: ["reason", "alternative"],
+  },
+};
+
+const SCOPE_TOOLS: Anthropic.Tool[] = [DRAFT_BRIEF_TOOL, RECOMMEND_KILL_TOOL];
+
+function buildScopeSystemPrompt(
+  searchContext: { query: string; nearMisses: { name: string; oneLiner: string }[] },
+): string {
+  const nearMissLines =
+    searchContext.nearMisses.length > 0
+      ? searchContext.nearMisses
+          .map((t) => `  • ${t.name}: ${t.oneLiner}`)
+          .join("\n")
+      : "  (none — no close catalogue matches)";
+
+  return `You are a sharp Headout AI PM running a requirements critique session. The user searched the catalogue and found nothing adequate. Your job is to challenge the build idea, then either produce a tight requirements brief OR recommend not building it at all.
+
+━━ SEARCH CONTEXT (do NOT ask the user to repeat this) ━━
+Original query: "${searchContext.query}"
+Near-misses from the catalogue:
+${nearMissLines}
+
+━━ YOUR APPROACH ━━
+1. Ask ONE focused question at a time — maximum 6 questions total across the session.
+2. Challenge grounded in the near-misses: ask if the existing tools could solve this with a workflow change.
+3. After two justified pushbacks from the user ("no, that doesn't work because X"), concede and proceed.
+4. Be direct. Warm but honest. No sycophancy. If it's a one-off task, say so plainly.
+
+━━ KILL CRITERIA — call recommend_kill if ━━
+- The task happens less than twice a week OR is a genuine one-off
+- Claude.ai natively solves this with a good prompt (no build needed)
+- The user only wants a file output (Word, Excel, PDF, CSV) — Claude does this natively
+- The audience is one person and the frequency is low
+
+━━ BRIEF CRITERIA — call draft_brief if ━━
+- The task is repeated, affects more than one person, AND is NOT solvable by Claude natively
+- You have gathered: problem, users, frequency, 2–5 must-dos, 3+ won't-dos, app class, risk level
+
+━━ RULES ━━
+- End with EXACTLY ONE call: either draft_brief or recommend_kill. No other outcome.
+- Cap the session at 12 turns. If you hit the cap without enough info, make your best call.
+- Never produce a brief as chat text — always use the draft_brief tool.
+- Never invent information the user didn't provide.
+- No markdown headers. Short paragraphs. One question mark per message.`;
+}
+
+/** Detect if the current chat is in scope/critique mode. */
+function isScopeMode(history: ChatTurn[]): boolean {
+  return history.some(
+    (t) =>
+      t.role === "user" &&
+      /let['']?s?\s+scope\s+it|scope\s+this|scope\s+the\s+idea/i.test(t.content),
+  );
+}
+
+/** Extract the search context from the chat history (last search query + near-misses). */
+function extractSearchContext(
+  history: ChatTurn[],
+): { query: string; nearMisses: { name: string; oneLiner: string }[] } {
+  const lastUserMsg = [...history]
+    .reverse()
+    .find((t) => t.role === "user" && !/let['']?s?\s+scope/i.test(t.content));
+  return { query: lastUserMsg?.content.slice(0, 120) ?? "", nearMisses: [] };
+}
+
 function pickRecommended(found: Map<string, ApiTool>, message: string): ApiTool[] {
   const lower = message.toLowerCase();
   const named = [...found.values()].filter((t) =>
@@ -434,15 +593,25 @@ function buildResult(
   tools: ApiTool[],
   handoff: Handoff | null,
   registration: { url: string | null } | null = null,
+  extra: {
+    stage?: FunnelStage;
+    briefPayload?: BriefPayload | null;
+    killPayload?: KillPayload | null;
+  } = {},
 ): ChatResult {
+  const stage: FunnelStage =
+    extra.stage ??
+    (registration ? "register" : handoff ? "handoff" : "chat");
   return {
     message,
     tools,
     noMatch: tools.length === 0,
-    stage: registration ? "register" : handoff ? "handoff" : "chat",
+    stage,
     recommendedBuilder: handoff?.builder ?? null,
     buildPrompt: handoff?.prompt ?? null,
     registration,
+    briefPayload: extra.briefPayload ?? null,
+    killPayload: extra.killPayload ?? null,
   };
 }
 
@@ -469,9 +638,155 @@ function isRegistrationIntent(text: string): boolean {
 export type ChatUserContext = {
   email?: string;
   userId?: string;
+  conversationId?: string;
 };
 
+const SCOPE_MAX_TURNS = 12;
+
+/** Run the critique/scope loop when the user chose "Let's scope it." */
+async function runScopeChat(
+  history: ChatTurn[],
+  userContext?: ChatUserContext,
+): Promise<ChatResult> {
+  const searchContext = extractSearchContext(history);
+  const systemPrompt = buildScopeSystemPrompt(searchContext);
+
+  const messages: Anthropic.MessageParam[] = history.map((turn) => ({
+    role: turn.role,
+    content: turn.content,
+  }));
+
+  for (let turn = 0; turn < SCOPE_MAX_TURNS; turn++) {
+    let response: Awaited<ReturnType<typeof anthropic.messages.create>>;
+    try {
+      response = await anthropic.messages.create({
+        model: MODEL,
+        max_tokens: 4096,
+        system: systemPrompt,
+        tools: SCOPE_TOOLS,
+        tool_choice: { type: "auto" },
+        messages,
+        temperature: 0,
+      });
+    } catch {
+      return buildResult(
+        "Something went wrong with the critique session — let's try again.",
+        [],
+        null,
+        null,
+        { stage: "scope" },
+      );
+    }
+
+    messages.push({ role: "assistant", content: response.content });
+
+    const toolUseBlocks = response.content.filter(
+      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+    );
+
+    if (toolUseBlocks.length === 0) {
+      const textBlock = response.content.find(
+        (b): b is Anthropic.TextBlock => b.type === "text",
+      );
+      return buildResult(textBlock?.text ?? "", [], null, null, { stage: "scope" });
+    }
+
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+
+    for (const block of toolUseBlocks) {
+      if (block.name === "draft_brief") {
+        const args = (block.input ?? {}) as Record<string, unknown>;
+        let brief: BriefPayload;
+        try {
+          brief = {
+            conversationId: userContext?.conversationId,
+            searchContext,
+            problem: typeof args.problem === "string" ? args.problem : "",
+            users: typeof args.users === "string" ? args.users : "",
+            frequency: typeof args.frequency === "string" ? args.frequency : "",
+            mustDo: Array.isArray(args.mustDo) ? (args.mustDo as string[]) : [],
+            wontDo: Array.isArray(args.wontDo) ? (args.wontDo as string[]) : [],
+            appClass: args.appClass === "full" ? "full" : "micro",
+            risk: args.risk === "high" ? "high" : "low",
+          };
+        } catch {
+          // Retry once with forced brief
+          brief = {
+            conversationId: userContext?.conversationId,
+            searchContext,
+            problem: "Build a tool to address the described need",
+            users: "Internal team",
+            frequency: "Regularly",
+            mustDo: ["Core functionality"],
+            wontDo: ["External integrations", "Mobile support", "Real-time collaboration"],
+            appClass: "micro",
+            risk: "low",
+          };
+        }
+
+        const textBlock = response.content.find(
+          (b): b is Anthropic.TextBlock => b.type === "text",
+        );
+        const message =
+          textBlock?.text ||
+          "I've put together a requirements brief based on our conversation. Review and edit it, then click Create my repo when you're ready.";
+
+        return buildResult(message, [], null, null, {
+          stage: "brief",
+          briefPayload: brief,
+        });
+      }
+
+      if (block.name === "recommend_kill") {
+        const args = (block.input ?? {}) as Record<string, unknown>;
+        const kill: KillPayload = {
+          reason:
+            typeof args.reason === "string" ? args.reason : "This doesn't need a build.",
+          alternative:
+            typeof args.alternative === "string"
+              ? args.alternative
+              : "Use Claude.ai directly.",
+          alternativeUrl:
+            typeof args.alternativeUrl === "string" ? args.alternativeUrl : undefined,
+        };
+        const textBlock = response.content.find(
+          (b): b is Anthropic.TextBlock => b.type === "text",
+        );
+        const message =
+          textBlock?.text || `${kill.reason} Instead: ${kill.alternative}`;
+
+        return buildResult(message, [], null, null, {
+          stage: "kill",
+          killPayload: kill,
+        });
+      }
+
+      toolResults.push({
+        type: "tool_result",
+        tool_use_id: block.id,
+        content: JSON.stringify({ error: "Unknown tool" }),
+      });
+    }
+
+    messages.push({ role: "user", content: toolResults });
+  }
+
+  // Hit the turn cap — force a brief
+  return buildResult(
+    "We've been through quite a few questions. Let me put together a brief based on what you've told me.",
+    [],
+    null,
+    null,
+    { stage: "scope" },
+  );
+}
+
 export async function runChat(history: ChatTurn[], userContext?: ChatUserContext): Promise<ChatResult> {
+  // ── Scope / critique mode ─────────────────────────────────────────────────
+  if (isScopeMode(history)) {
+    return runScopeChat(history, userContext);
+  }
+
   const messages: Anthropic.MessageParam[] = history.map((turn) => ({
     role: turn.role,
     content: turn.content,

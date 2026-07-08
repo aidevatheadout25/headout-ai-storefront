@@ -31,7 +31,8 @@ A **chat-first meta-catalogue** of the internal AI tools, apps, skills, docs, pl
 - `artifacts/storefront/src/components/HomeChat.tsx` — the chat front door; `Sidebar.tsx` — read-only nav (Home + Browse catalogue only).
 - `artifacts/storefront/src/index.css` — plain-CSS styles. Design tokens + Halyard fonts come from `artifacts/storefront/public/design-system/colors_and_type.css`, linked in `index.html`.
 - `lib/db/src/schema/tools.ts` — the `tools` Drizzle table (incl. pgvector `embedding` column), exported via `@workspace/db`.
-- `artifacts/api-server/src/routes/` — `tools.ts` (GET list/get, POST add-by-URL, **POST `:id/claim`**, **PATCH `:id`** owner/admin edit), `chat.ts` (POST chat). `lib/catalogue.ts` (cosine top-K search, plus `claimTool`/`updateTool`/`getToolRowById`/`hashManageToken`), `lib/chatAgent.ts` (concierge agent loop), `lib/inferTool.ts` (URL → metadata), `lib/embeddings.ts` (local model), `lib/seed.ts` + `lib/seedData.ts`.
+- `lib/db/src/schema/briefs.ts` — `briefs` + `builds` tables for the builder journey; push with `pnpm --filter @workspace/db run push`.
+- `artifacts/api-server/src/routes/` — `tools.ts` (GET list/get, POST add-by-URL, **POST `:id/claim`**, **PATCH `:id`** owner/admin edit), `chat.ts` (POST chat), **`briefs.ts`** (POST /api/briefs, PATCH /api/briefs/:id, POST /api/scaffold, POST /api/builds/:id/verify-step, POST /api/builds/:id/submit-review). `lib/catalogue.ts` (cosine top-K search, plus `claimTool`/`updateTool`/`getToolRowById`/`hashManageToken`), `lib/chatAgent.ts` (concierge agent loop, incl. scope/brief/kill mode), `lib/inferTool.ts` (URL → metadata), `lib/embeddings.ts` (local model), `lib/seed.ts` + `lib/seedData.ts`.
 - `artifacts/storefront/src/components/ToolManagePanel.tsx` — the owner claim/edit panel surfaced from `ToolDetailView`; `src/lib/manageTokens.ts` — per-tool manage-key storage (localStorage).
 - `.migration-backup/` — the original imported Next.js source, kept as a historical reference (no longer the parity target).
 
@@ -47,6 +48,8 @@ A **chat-first meta-catalogue** of the internal AI tools, apps, skills, docs, pl
 ## Product
 
 A single chat front door to find existing internal AI tools (apps, skills, docs, MCPs, plugins, scripts, slack-bots, zeps). On a match it shows inline tool cards that link to read-only detail pages; on no match it offers a Zeps build link and/or a Slack request link. A filterable/searchable read-only registry at `/registry` browses the full catalogue. "+ Add a tool" ingests a pasted URL and infers its metadata via the LLM.
+
+**Builder journey** (full scope → ship flow): when a user has no catalogue match and says "let's scope it", the critique agent runs a multi-turn interview and produces either a requirements brief (editable `BriefCard`) or a kill recommendation (`KillCard`). Confirming the brief triggers a simulated repo scaffold (`ScaffoldCard`), a four-step builder checklist (`ChecklistCard` with per-step verify + help chips), a multi-stage simulated review sequence (`ReviewCard`), and real tool insertion into the catalogue with embeddings. The journey is tracked by `briefs` + `builds` DB tables; built tools get `source='built'` and are immediately findable via semantic search.
 
 ## User preferences
 

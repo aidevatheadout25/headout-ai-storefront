@@ -23,9 +23,33 @@ export type BuilderId =
   | "zeps"
   | "real-app";
 
-/** Build-gate funnel stage; only `handoff` renders the build/Slack hand-off UI.
- *  `register` switches the composer into the add-tool paste-link flow. */
-export type FunnelStage = "chat" | "handoff" | "register";
+/** Build-gate funnel stage. */
+export type FunnelStage =
+  | "chat"
+  | "handoff"
+  | "register"
+  | "scope"
+  | "brief"
+  | "kill"
+  | "disambiguation";
+
+export type BriefPayload = {
+  conversationId?: string;
+  searchContext: { query: string; nearMisses: { name: string; oneLiner: string }[] };
+  problem: string;
+  users: string;
+  frequency: string;
+  mustDo: string[];
+  wontDo: string[];
+  appClass: "micro" | "full";
+  risk: "low" | "high";
+};
+
+export type KillPayload = {
+  reason: string;
+  alternative: string;
+  alternativeUrl?: string;
+};
 
 export type ChatResult = {
   message: string;
@@ -36,6 +60,10 @@ export type ChatResult = {
   buildPrompt: string | null;
   /** Set only when stage === "register": the captured URL, or null if not yet provided. */
   registration: { url: string | null } | null;
+  /** Set when stage === "brief": the full requirements brief from the critique agent. */
+  briefPayload: BriefPayload | null;
+  /** Set when stage === "kill": the kill recommendation from the critique agent. */
+  killPayload: KillPayload | null;
   conversationId: string;
 };
 
@@ -57,6 +85,8 @@ export type SavedMessage = {
   buildPrompt: string | null;
   /** Set only when stage === "register": the captured URL, or null if not yet provided. */
   registration: { url: string | null } | null;
+  briefPayload: BriefPayload | null;
+  killPayload: KillPayload | null;
   userQuery: string | null;
   createdAt: string;
 };
@@ -288,4 +318,55 @@ export async function updateTool(
     authHeaders(auth),
   );
   return data.tool;
+}
+
+// ─── Builder journey ──────────────────────────────────────────────────────────
+
+/** Persist a draft brief from the critique agent. Returns the saved brief row. */
+export async function createBrief(
+  brief: BriefPayload,
+): Promise<{ brief: { id: string } & BriefPayload }> {
+  return postJson("/briefs", brief);
+}
+
+/** Partially update a brief (user edits the brief card). */
+export async function updateBrief(
+  id: string,
+  patch: Partial<BriefPayload>,
+): Promise<{ brief: { id: string } & BriefPayload }> {
+  return mutateJson(`/briefs/${encodeURIComponent(id)}`, "PATCH", patch);
+}
+
+export type ScaffoldResult = {
+  repoUrl: string;
+  contents: string[];
+  briefId: string;
+  buildId: string;
+};
+
+/** Simulate repo scaffolding from a confirmed brief. */
+export async function scaffoldRepo(briefId: string): Promise<ScaffoldResult> {
+  return postJson("/scaffold", { briefId });
+}
+
+/** Verify a checklist step for a build. */
+export async function verifyStep(
+  buildId: string,
+  step: 0 | 1 | 2 | 3,
+): Promise<{ ok: boolean }> {
+  return postJson(`/builds/${encodeURIComponent(buildId)}/verify-step`, { step });
+}
+
+export type ReviewEvent = { stage: string; label: string; ok: boolean };
+
+export type ReviewResult = {
+  events: ReviewEvent[];
+  toolId: string;
+  toolName: string;
+  toolSlug: string;
+};
+
+/** Run the simulated review sequence and insert the tool into the catalogue. */
+export async function submitReview(buildId: string): Promise<ReviewResult> {
+  return postJson(`/builds/${encodeURIComponent(buildId)}/submit-review`, {});
 }
