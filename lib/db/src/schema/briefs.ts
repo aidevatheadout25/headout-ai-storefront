@@ -26,6 +26,7 @@ export const briefsTable = pgTable(
     searchContext: jsonb("search_context")
       .notNull()
       .default(sql`'{}'::jsonb`),
+    title: text("title"),
     problem: text("problem").notNull().default(""),
     users: text("users").notNull().default(""),
     frequency: text("frequency").notNull().default(""),

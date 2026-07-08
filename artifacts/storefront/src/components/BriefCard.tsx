@@ -128,6 +128,11 @@ export function BriefCard({ brief: initialBrief, onScaffold }: Props) {
 
       <div className="brief-card__body">
         <FieldInput
+          label="Tool name (2–4 words)"
+          value={brief.title ?? ""}
+          onChange={(v) => handleChange("title", v)}
+        />
+        <FieldInput
           label="Problem"
           value={brief.problem}
           onChange={(v) => handleChange("problem", v)}

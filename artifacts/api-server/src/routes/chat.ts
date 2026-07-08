@@ -61,10 +61,21 @@ router.post("/chat", async (req: Request, res: Response) => {
 
   try {
     const userText = lastUserText(history);
+    const bodyMode = (req.body as { mode?: unknown })?.mode;
+    const bodyCtx = (req.body as { searchContext?: unknown })?.searchContext;
+    const searchContext =
+      bodyCtx &&
+      typeof bodyCtx === "object" &&
+      !Array.isArray(bodyCtx) &&
+      "query" in bodyCtx
+        ? (bodyCtx as { query: string; nearMisses: { name: string; oneLiner: string }[] })
+        : undefined;
     const userCtx: ChatUserContext = {
       email: (req.user as { email?: string } | undefined)?.email,
       userId: req.user?.id,
       conversationId: conversationId ?? undefined,
+      mode: bodyMode === "scope" ? "scope" : undefined,
+      searchContext,
     };
     const result = await runChat(history, userCtx);
 

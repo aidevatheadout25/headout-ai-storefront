@@ -36,6 +36,7 @@ export type FunnelStage =
 export type BriefPayload = {
   conversationId?: string;
   searchContext: { query: string; nearMisses: { name: string; oneLiner: string }[] };
+  title?: string;
   problem: string;
   users: string;
   frequency: string;
@@ -158,13 +159,21 @@ export async function fetchTool(id: string): Promise<Tool | null> {
   }
 }
 
+export type SendChatOpts = {
+  mode?: "scope";
+  searchContext?: { query: string; nearMisses: { name: string; oneLiner: string }[] };
+};
+
 export async function sendChat(
   messages: ChatTurn[],
   conversationId?: string | null,
+  opts?: SendChatOpts,
 ): Promise<ChatResult> {
   return postJson<ChatResult>("/chat", {
     messages,
     ...(conversationId ? { conversationId } : {}),
+    ...(opts?.mode ? { mode: opts.mode } : {}),
+    ...(opts?.searchContext ? { searchContext: opts.searchContext } : {}),
   });
 }
 

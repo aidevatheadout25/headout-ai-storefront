@@ -83,6 +83,7 @@ export type FunnelStage =
 export type BriefPayload = {
   conversationId?: string;
   searchContext: { query: string; nearMisses: { name: string; oneLiner: string }[] };
+  title?: string;
   problem: string;
   users: string;
   frequency: string;
@@ -443,6 +444,10 @@ const DRAFT_BRIEF_TOOL: Anthropic.Tool = {
   input_schema: {
     type: "object",
     properties: {
+      title: {
+        type: "string",
+        description: "A short tool-style name for this tool, 2–4 words, title-cased. E.g. 'Experiment Compare', 'Report Compiler', 'Review Digest Bot'. NOT a sentence — a product name.",
+      },
       problem: { type: "string", description: "One sentence: what problem does this solve?" },
       users: { type: "string", description: "Who uses it? (e.g. 'Supply Ops team, ~8 people')" },
       frequency: { type: "string", description: "How often? (e.g. 'daily', 'weekly', 'ad-hoc')" },
@@ -467,7 +472,7 @@ const DRAFT_BRIEF_TOOL: Anthropic.Tool = {
         description: "low = internal tool, small audience; high = customer-facing or financial data.",
       },
     },
-    required: ["problem", "users", "frequency", "mustDo", "wontDo", "appClass", "risk"],
+    required: ["title", "problem", "users", "frequency", "mustDo", "wontDo", "appClass", "risk"],
   },
 };
 
@@ -530,24 +535,18 @@ ${nearMissLines}
 - The task is repeated, affects more than one person, AND is NOT solvable by Claude natively
 - You have gathered: problem, users, frequency, 2–5 must-dos, 3+ won't-dos, app class, risk level
 
+━━ OFF-SCRIPT INPUT ━━
+If the user says something that is clearly a mode-switch or off-topic (e.g. "show me the registry", "search for X instead", "never mind", "forget it"), respond with one short sentence acknowledging the request and ending the scope session (e.g. "Got it — stepping out of scope mode."). Do NOT call draft_brief or recommend_kill. The conversation will return to normal search mode.
+
 ━━ RULES ━━
-- End with EXACTLY ONE call: either draft_brief or recommend_kill. No other outcome.
+- End with EXACTLY ONE call: either draft_brief or recommend_kill. No other outcome (unless off-script input, per above).
 - Cap the session at 12 turns. If you hit the cap without enough info, make your best call.
 - Never produce a brief as chat text — always use the draft_brief tool.
 - Never invent information the user didn't provide.
 - No markdown headers. Short paragraphs. One question mark per message.`;
 }
 
-/** Detect if the current chat is in scope/critique mode. */
-function isScopeMode(history: ChatTurn[]): boolean {
-  return history.some(
-    (t) =>
-      t.role === "user" &&
-      /let['']?s?\s+scope\s+it|scope\s+this|scope\s+the\s+idea/i.test(t.content),
-  );
-}
-
-/** Extract the search context from the chat history (last search query + near-misses). */
+/** Extract the search context from the chat history (last user query, no near-misses). */
 function extractSearchContext(
   history: ChatTurn[],
 ): { query: string; nearMisses: { name: string; oneLiner: string }[] } {
@@ -639,6 +638,10 @@ export type ChatUserContext = {
   email?: string;
   userId?: string;
   conversationId?: string;
+  /** When 'scope', routes directly to the critique agent without regex history scan. */
+  mode?: "scope";
+  /** Near-miss tools from the last search — populated by the client when entering scope. */
+  searchContext?: { query: string; nearMisses: { name: string; oneLiner: string }[] };
 };
 
 const SCOPE_MAX_TURNS = 12;
@@ -648,7 +651,7 @@ async function runScopeChat(
   history: ChatTurn[],
   userContext?: ChatUserContext,
 ): Promise<ChatResult> {
-  const searchContext = extractSearchContext(history);
+  const searchContext = userContext?.searchContext ?? extractSearchContext(history);
   const systemPrompt = buildScopeSystemPrompt(searchContext);
 
   const messages: Anthropic.MessageParam[] = history.map((turn) => ({
@@ -701,6 +704,7 @@ async function runScopeChat(
           brief = {
             conversationId: userContext?.conversationId,
             searchContext,
+            title: typeof args.title === "string" && args.title ? args.title : undefined,
             problem: typeof args.problem === "string" ? args.problem : "",
             users: typeof args.users === "string" ? args.users : "",
             frequency: typeof args.frequency === "string" ? args.frequency : "",
@@ -782,8 +786,8 @@ async function runScopeChat(
 }
 
 export async function runChat(history: ChatTurn[], userContext?: ChatUserContext): Promise<ChatResult> {
-  // ── Scope / critique mode ─────────────────────────────────────────────────
-  if (isScopeMode(history)) {
+  // ── Scope / critique mode — trust the explicit flag from the client ────────
+  if (userContext?.mode === "scope") {
     return runScopeChat(history, userContext);
   }
 

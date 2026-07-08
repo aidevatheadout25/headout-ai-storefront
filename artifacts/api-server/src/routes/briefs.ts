@@ -14,6 +14,7 @@ const briefSchema = z.object({
     query: z.string().default(""),
     nearMisses: z.array(z.any()).default([]),
   }).default({ query: "", nearMisses: [] }),
+  title: z.string().optional(),
   problem: z.string().default(""),
   users: z.string().default(""),
   frequency: z.string().default(""),
@@ -39,6 +40,7 @@ router.post("/briefs", async (req: Request, res: Response) => {
       .values({
         conversationId: data.conversationId ?? null,
         searchContext: data.searchContext as Record<string, unknown>,
+        title: data.title ?? null,
         problem: data.problem,
         users: data.users,
         frequency: data.frequency,
@@ -65,6 +67,7 @@ router.patch("/briefs/:id", async (req: Request, res: Response) => {
   const data = parsed.data;
   try {
     const values: Record<string, unknown> = { updatedAt: new Date() };
+    if (data.title !== undefined) values.title = data.title;
     if (data.problem !== undefined) values.problem = data.problem;
     if (data.users !== undefined) values.users = data.users;
     if (data.frequency !== undefined) values.frequency = data.frequency;
@@ -101,7 +104,7 @@ router.post("/scaffold", async (req: Request, res: Response) => {
   const brief = briefs[0];
   if (!brief) return res.status(404).json({ error: "Brief not found" });
 
-  const slug = slugify(brief.problem || "new-tool");
+  const slug = slugify(brief.title || brief.problem || "new-tool");
   const repoUrl = `https://github.com/headout-internal/${slug}`;
 
   const contents = [
@@ -201,16 +204,16 @@ router.post(
     }
 
     const reviewState = Object.fromEntries(
-      events.map((e) => [e.stage, { ok: e.stage }]),
+      events.map((e) => [e.stage, { ok: e.ok, label: e.label }]),
     );
     await db
       .update(buildsTable)
       .set({ reviewState: reviewState as Record<string, unknown>, updatedAt: new Date() })
       .where(sql`${buildsTable.id} = ${build.id}`);
 
-    const title = brief.problem
+    const title = brief.title || (brief.problem
       ? brief.problem.slice(0, 60).replace(/\.$/, "")
-      : "Builder Tool";
+      : "Builder Tool");
     const slug = slugify(title);
 
     const mustDo = (brief.mustDo ?? []) as string[];

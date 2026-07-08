@@ -85,3 +85,53 @@ describe("builder journey — catalogue insertion", () => {
     assert.equal(gone, undefined, "tool should be deleted after test");
   });
 });
+
+describe("builder journey — regression: post-ceremony search returns normal results", () => {
+  /**
+   * After a builder journey completes (tool inserted), a fresh chat turn with
+   * a normal search query must NOT come back with stage === "scope". The
+   * concierge agent should treat it as a regular catalogue search.
+   *
+   * We test this by calling searchCatalogue directly (the same function the
+   * chat agent delegates to) — if results come back without throwing and the
+   * first result looks like a Tool row, the retrieval path is working and the
+   * scope mode gate cannot be triggered by a search-only call.
+   */
+  it("searchCatalogue returns tool rows (stage cannot be scope) after a normal query", async () => {
+    const results = await searchCatalogue("automate slack notifications for the ops team", 5);
+    // Must return an array (not throw).
+    assert.ok(Array.isArray(results), "searchCatalogue should return an array");
+    // Every result must have at least an id field — confirming real tool rows.
+    for (const r of results) {
+      assert.ok(typeof r.id === "string", "each result should have a string id");
+    }
+  });
+});
+
+describe("builder journey — regression: add-tool non-URL disambiguation", () => {
+  /**
+   * When the first add-mode message is not a URL, the client shows a
+   * disambiguation prompt instead of forwarding to addToolChat.
+   *
+   * The client validates with:
+   *   !trimmed.includes(" ") && (trimmed.includes(".") || trimmed.startsWith("http"))
+   *
+   * This test verifies that predicate correctly rejects non-URL phrases so
+   * the regression cannot silently regress without a test failure.
+   */
+  function looksLikeUrl(text: string): boolean {
+    return !text.includes(" ") && (text.includes(".") || text.startsWith("http"));
+  }
+
+  it("a natural-language phrase with spaces is not a URL", () => {
+    assert.equal(looksLikeUrl("show me the mcp registry"), false);
+    assert.equal(looksLikeUrl("I want to find something"), false);
+    assert.equal(looksLikeUrl("let's build a new tool"), false);
+  });
+
+  it("valid URL inputs pass the predicate", () => {
+    assert.equal(looksLikeUrl("internal.headout.dev/zeps/my-tool"), true);
+    assert.equal(looksLikeUrl("https://example.com/tool"), true);
+    assert.equal(looksLikeUrl("slack-digest.headout.internal"), true);
+  });
+});

@@ -30,6 +30,7 @@ import {
   type KillPayload,
   type ReviewResult,
   type ScaffoldResult,
+  type SendChatOpts,
   type ToolPreview,
 } from "@/lib/api";
 import { useAuthContext } from "@/lib/auth-context";
@@ -80,6 +81,9 @@ type ChatMessage = {
   userQuery?: string;
   addReady?: boolean;
   addDraft?: ToolPreview;
+  /** True when the user typed a non-URL as the first add-mode message. */
+  addDisambiguation?: boolean;
+  addDisambiguationText?: string;
 };
 
 function msgId(): string {
@@ -125,6 +129,8 @@ export function HomeChat() {
   const [activeBrief, setActiveBrief] = useState<BriefPayload | null>(null);
   const [scaffoldResult, setScaffoldResult] = useState<ScaffoldResult | null>(null);
   const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null);
+  /** True while the critique/scope agent is active. Cleared on brief/kill/continuation. */
+  const [inScopeMode, setInScopeMode] = useState(false);
 
   const started = messages.length > 0;
 
@@ -250,7 +256,7 @@ export function HomeChat() {
   }, [runAddChat]);
 
   const runChat = useCallback(
-    async (text: string, history: ChatMessage[]) => {
+    async (text: string, history: ChatMessage[], opts?: SendChatOpts) => {
       setSending(true);
       setError(null);
       try {
@@ -259,7 +265,7 @@ export function HomeChat() {
           .map((m) => ({ role: m.role, content: m.text }));
         turns.push({ role: "user", content: text });
 
-        const result = await sendChat(turns, conversationId);
+        const result = await sendChat(turns, conversationId, opts);
         const newMsg: ChatMessage = {
           id: msgId(),
           role: "assistant",
@@ -306,6 +312,11 @@ export function HomeChat() {
           setJourneyPhase("brief");
         }
 
+        // Critique session resolved — exit scope mode.
+        if (result.stage === "brief" || result.stage === "kill") {
+          setInScopeMode(false);
+        }
+
         // Kill — no extra journey state needed, just show the kill card in the message.
       } catch {
         setError("The catalogue assistant is unavailable right now — try again.");
@@ -346,7 +357,7 @@ export function HomeChat() {
   );
 
   const submitText = useCallback(
-    (text: string) => {
+    (text: string, overrideOpts?: SendChatOpts) => {
       const trimmed = text.trim();
       if (!trimmed || sending) return;
       const userMessage: ChatMessage = {
@@ -355,17 +366,39 @@ export function HomeChat() {
         text: trimmed,
       };
       if (addMode) {
+        // First add-mode message: validate it looks like a URL before calling addToolChat.
+        if (!addUrl) {
+          const looksLikeUrl =
+            !trimmed.includes(" ") &&
+            (trimmed.includes(".") || trimmed.startsWith("http"));
+          if (!looksLikeUrl) {
+            setMessages((prev) => [
+              ...prev,
+              userMessage,
+              {
+                id: msgId(),
+                role: "assistant" as const,
+                text: "That doesn't look like a link — what would you like to do?",
+                addDisambiguation: true,
+                addDisambiguationText: trimmed,
+              },
+            ]);
+            return;
+          }
+        }
         setMessages((prev) => [...prev, userMessage]);
         void runAddChat(trimmed);
       } else {
+        const chatOpts =
+          overrideOpts ?? (inScopeMode ? { mode: "scope" as const } : undefined);
         setMessages((prev) => {
           const next = [...prev, userMessage];
-          void runChat(trimmed, prev);
+          void runChat(trimmed, prev, chatOpts);
           return next;
         });
       }
     },
-    [addMode, runAddChat, runChat, sending],
+    [addMode, addUrl, inScopeMode, runAddChat, runChat, sending],
   );
 
   // Load (or reset) the conversation as the `?c=` param changes, but skip the
@@ -388,6 +421,7 @@ export function HomeChat() {
       setActiveBrief(null);
       setScaffoldResult(null);
       setReviewResult(null);
+      setInScopeMode(false);
       return;
     }
 
@@ -420,12 +454,18 @@ export function HomeChat() {
           setAddUrl("");
           setAddDraft(null);
           setAddTurns([]);
+          setInScopeMode(false);
         } else if (lastAssistant?.stage === "brief" && lastAssistant.briefPayload) {
           setActiveBrief(lastAssistant.briefPayload);
           setJourneyPhase("brief");
           setAddMode(false);
+          setInScopeMode(false);
+        } else if (lastAssistant?.stage === "scope") {
+          setAddMode(false);
+          setInScopeMode(true);
         } else {
           setAddMode(false);
+          setInScopeMode(false);
         }
       })
       .catch(() => {
@@ -671,6 +711,39 @@ export function HomeChat() {
                     </Button>
                   </div>
                 )}
+
+                {message.addDisambiguation && (
+                  <div className="chat-bubble__nomatch-actions">
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => {
+                        setAddMode(false);
+                        setAddUrl("");
+                        setAddDraft(null);
+                        setAddTurns([]);
+                        submitText(message.addDisambiguationText ?? "");
+                      }}
+                    >
+                      🔍 Search for this
+                    </Button>
+                    <ButtonLink href="/registry" variant="secondary" size="sm">
+                      Browse the catalogue
+                    </ButtonLink>
+                    <Button
+                      type="button"
+                      variant="tertiary"
+                      size="sm"
+                      onClick={() =>
+                        setMessages((prev) =>
+                          prev.filter((m) => !m.addDisambiguation),
+                        )
+                      }
+                    >
+                      Paste a link instead
+                    </Button>
+                  </div>
+                )}
               </li>
             ))}
 
@@ -693,7 +766,18 @@ export function HomeChat() {
             <button
               type="button"
               className="home-chat__chip home-chat__chip--scope t-para-sm"
-              onClick={() => submitText("Let's scope the idea — I want to build it")}
+              onClick={() => {
+                const nearMisses = (lastMessage?.tools ?? []).map((t) => ({
+                  name: t.name,
+                  oneLiner: t.oneLiner,
+                }));
+                const query = lastMessage?.userQuery ?? lastMessage?.text ?? "";
+                setInScopeMode(true);
+                submitText("Let's scope the idea — I want to build it", {
+                  mode: "scope",
+                  searchContext: { query, nearMisses },
+                });
+              }}
             >
               🔨 Nothing fits — let&apos;s scope it
             </button>
@@ -753,6 +837,36 @@ export function HomeChat() {
                   >
                     Try searching for it
                   </ButtonLink>
+                </div>
+                <div className="home-chat__scope-fork" style={{ marginTop: "var(--space-3)" }}>
+                  <p className="home-chat__scope-fork-label t-label-sm">What next?</p>
+                  <button
+                    type="button"
+                    className="home-chat__chip t-para-sm"
+                    onClick={() => {
+                      setJourneyPhase(null);
+                      setActiveBrief(null);
+                      setScaffoldResult(null);
+                      setReviewResult(null);
+                      setInScopeMode(false);
+                    }}
+                  >
+                    🔍 Search again
+                  </button>
+                  <button
+                    type="button"
+                    className="home-chat__chip t-para-sm"
+                    onClick={() => {
+                      setJourneyPhase(null);
+                      setActiveBrief(null);
+                      setScaffoldResult(null);
+                      setReviewResult(null);
+                      setInScopeMode(false);
+                      router.push("/registry");
+                    }}
+                  >
+                    📚 Browse the catalogue
+                  </button>
                 </div>
               </div>
             )}
