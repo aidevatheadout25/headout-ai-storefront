@@ -1,0 +1,56 @@
+Fixes: Builder journey punch list (follow-up to #66)
+
+Read replit.md first. #66 landed well — scope isolation, server-side checklist state, and the real tool insertion are all correct. Five things are broken or missing. Fix them in this order; #1 and #2 are flow-breaking.
+
+1. Off-script disambiguation — spec'd, never built (flow-breaking)
+
+The disambiguation stage exists in the FunnelStage type and nowhere else. No agent code ever returns it, HomeChat.tsx never renders it, and add-tool mode still treats the first message as a URL unconditionally (runAddChat: if (!addUrl) { const url = text.trim(); ... }).
+
+Required behavior: when user input doesn't fit the current mode, never force-parse it — return a one-line explanation + chips.
+
+
+Add-tool mode: before calling addToolChat, validate the first message looks like a URL (has a dot + no spaces, or parses with new URL() after prefixing https://). If not, render a disambiguation message: "That doesn't look like a link — what would you like to do?" with chips: Search for this (exits add-mode, sends the text as a normal chat message) / Browse the catalogue (navigates to /registry) / Keep adding — paste the link (stays in add-mode). This can be done entirely client-side.
+Scope mode: if the user's message is clearly a mode-switch ("show me the registry", "search for X instead", "never mind") the scope system prompt must instruct the agent to acknowledge and end the scope session (see #2) rather than treat it as a critique answer. Add this to the scope behavior contract.
+
+
+Acceptance: typing "i want to see the mcp registry" as the first add-tool message produces disambiguation chips — never a URL fetch, never an error toast.
+
+2. Scope mode is a one-way door (flow-breaking)
+
+isScopeMode() returns true if "let's scope it" matches anywhere in history — so once a user enters scoping, every later message in the conversation routes to runScopeChat forever. After the ceremony, "Search again" continuation chips re-enter the critique agent. Journey continuation is broken.
+
+Fix: scope mode must end when the critique session resolves. Track resolution instead of pattern-matching the whole history:
+
+
+Scope mode is active only between the most recent "let's scope it" trigger and the first subsequent assistant turn that produced a draft_brief or recommend_kill payload (or a user message that abandons per #1).
+Simplest robust implementation: have the frontend send an explicit flag (mode: 'scope') with each request while the scoping UI is active, and drop it once a BriefCard/KillCard has rendered or the user takes a continuation chip. The server trusts the flag instead of regex-ing history. Remove isScopeMode's whole-history regex.
+
+
+Acceptance: complete a full Builder journey → click "Search again" → the next message runs a normal catalogue search, not the critique agent.
+
+3. Search context doesn't carry into critique
+
+extractSearchContext() returns nearMisses: [] unconditionally — only the query string survives the fork. The critique agent therefore cannot open with "X covers ~70% of this — is the gap worth a new tool?", which is the signature behavior of the phase.
+
+Fix: when the chat returns a no-match (or weak-match) result, persist the search result (query + the tool cards shown, each with name, one-liner, and why it fell short) on the conversation — either in the conversations row or passed back through the frontend and included in the "let's scope it" request. runScopeChat injects it into the scope system prompt. Populate briefs.searchContext with the same object (it's currently {query, nearMisses: []}).
+
+Acceptance: fork after a search that returned near-misses → the critique agent's opening message references at least one near-miss tool by name and its gap.
+
+4. Shipped tools are named after the problem sentence
+
+submit-review sets title = brief.problem.slice(0, 60) — the catalogue gets tools named "No single view compares experiment results across te…". Embarrassing in the registry and hurts search realism.
+
+Fix: add a title field (2–4 words, tool-style name) to the draft_brief tool schema and the briefs table; the critique agent generates it, the user can edit it in BriefCard; scaffold slugifies it for the repo URL; submit-review uses it as the tool name. Migration: add nullable title column, fall back to the current slice behavior only when null.
+
+Acceptance: a Builder-shipped tool appears in /registry with a name like "Experiment Compare", not a sentence fragment.
+
+5. reviewState stores garbage (one-liner)
+
+In submit-review: Object.fromEntries(events.map((e) => [e.stage, { ok: e.stage }])) — puts the stage string under the ok key. Should be { ok: e.ok, label: e.label }.
+
+Housekeeping
+
+
+Keep all existing tests green (retrieval + builderJourney).
+Add two regression tests: (a) post-ceremony "Search again" performs a catalogue search (asserts stage ≠ scope); (b) non-URL first message in add-mode returns/renders disambiguation, no URL fetch attempted.
+Update replit.md: document the scope-mode lifecycle (explicit flag, entry/exit) and the disambiguation behavior.
