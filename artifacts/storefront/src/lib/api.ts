@@ -29,6 +29,7 @@ export type FunnelStage =
   | "handoff"
   | "register"
   | "scope"
+  | "scope_exit"
   | "brief"
   | "kill"
   | "disambiguation";

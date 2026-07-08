@@ -313,8 +313,11 @@ export function HomeChat() {
         }
 
         // Critique session resolved — exit scope mode.
-        if (result.stage === "brief" || result.stage === "kill") {
+        if (result.stage === "brief" || result.stage === "kill" || result.stage === "scope_exit") {
           setInScopeMode(false);
+          if (result.stage === "scope_exit") {
+            setJourneyPhase(null);
+          }
         }
 
         // Kill — no extra journey state needed, just show the kill card in the message.
@@ -357,7 +360,7 @@ export function HomeChat() {
   );
 
   const submitText = useCallback(
-    (text: string, overrideOpts?: SendChatOpts) => {
+    (text: string, overrideOpts?: SendChatOpts & { forceChat?: boolean }) => {
       const trimmed = text.trim();
       if (!trimmed || sending) return;
       const userMessage: ChatMessage = {
@@ -365,7 +368,7 @@ export function HomeChat() {
         role: "user",
         text: trimmed,
       };
-      if (addMode) {
+      if (addMode && !overrideOpts?.forceChat) {
         // First add-mode message: validate it looks like a URL before calling addToolChat.
         if (!addUrl) {
           const looksLikeUrl =
@@ -390,7 +393,9 @@ export function HomeChat() {
         void runAddChat(trimmed);
       } else {
         const chatOpts =
-          overrideOpts ?? (inScopeMode ? { mode: "scope" as const } : undefined);
+          overrideOpts?.forceChat
+            ? undefined
+            : overrideOpts ?? (inScopeMode ? { mode: "scope" as const } : undefined);
         setMessages((prev) => {
           const next = [...prev, userMessage];
           void runChat(trimmed, prev, chatOpts);
@@ -463,6 +468,13 @@ export function HomeChat() {
         } else if (lastAssistant?.stage === "scope") {
           setAddMode(false);
           setInScopeMode(true);
+        } else if (
+          lastAssistant?.stage === "scope_exit" ||
+          lastAssistant?.stage === "kill"
+        ) {
+          setAddMode(false);
+          setInScopeMode(false);
+          setJourneyPhase(null);
         } else {
           setAddMode(false);
           setInScopeMode(false);
@@ -722,7 +734,7 @@ export function HomeChat() {
                         setAddUrl("");
                         setAddDraft(null);
                         setAddTurns([]);
-                        submitText(message.addDisambiguationText ?? "");
+                        submitText(message.addDisambiguationText ?? "", { forceChat: true });
                       }}
                     >
                       🔍 Search for this

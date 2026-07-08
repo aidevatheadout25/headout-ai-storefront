@@ -76,6 +76,7 @@ export type FunnelStage =
   | "handoff"
   | "register"
   | "scope"
+  | "scope_exit"
   | "brief"
   | "kill"
   | "disambiguation";
@@ -500,7 +501,27 @@ const RECOMMEND_KILL_TOOL: Anthropic.Tool = {
   },
 };
 
-const SCOPE_TOOLS: Anthropic.Tool[] = [DRAFT_BRIEF_TOOL, RECOMMEND_KILL_TOOL];
+const END_SCOPE_TOOL: Anthropic.Tool = {
+  name: "end_scope",
+  description:
+    "Call this when the user wants to leave the scoping session (e.g. 'never mind', 'show me the registry', 'search for X instead', 'forget it'). Provide a short acknowledgement and, if the user's message contained an actionable request, surface it in forwardQuery so the client can act on it.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      reason: {
+        type: "string",
+        description: "One-sentence acknowledgement of the exit (e.g. 'Got it — stepping out of scope mode.').",
+      },
+      forwardQuery: {
+        type: "string",
+        description: "Optional: the actionable query from the user's message to forward to normal search (e.g. 'show me the registry'). Omit if there is no actionable request.",
+      },
+    },
+    required: ["reason"],
+  },
+};
+
+const SCOPE_TOOLS: Anthropic.Tool[] = [DRAFT_BRIEF_TOOL, RECOMMEND_KILL_TOOL, END_SCOPE_TOOL];
 
 function buildScopeSystemPrompt(
   searchContext: { query: string; nearMisses: { name: string; oneLiner: string }[] },
@@ -536,7 +557,7 @@ ${nearMissLines}
 - You have gathered: problem, users, frequency, 2–5 must-dos, 3+ won't-dos, app class, risk level
 
 ━━ OFF-SCRIPT INPUT ━━
-If the user says something that is clearly a mode-switch or off-topic (e.g. "show me the registry", "search for X instead", "never mind", "forget it"), respond with one short sentence acknowledging the request and ending the scope session (e.g. "Got it — stepping out of scope mode."). Do NOT call draft_brief or recommend_kill. The conversation will return to normal search mode.
+If the user says something that is clearly a mode-switch or off-topic (e.g. "show me the registry", "search for X instead", "never mind", "forget it"), call end_scope immediately. Do NOT call draft_brief or recommend_kill. Provide a short acknowledgement in the reason field and surface any actionable request in forwardQuery.
 
 ━━ RULES ━━
 - End with EXACTLY ONE call: either draft_brief or recommend_kill. No other outcome (unless off-script input, per above).
@@ -763,6 +784,15 @@ async function runScopeChat(
           stage: "kill",
           killPayload: kill,
         });
+      }
+
+      if (block.name === "end_scope") {
+        const args = (block.input ?? {}) as Record<string, unknown>;
+        const reason =
+          typeof args.reason === "string" && args.reason
+            ? args.reason
+            : "Got it — stepping out of scope mode.";
+        return buildResult(reason, [], null, null, { stage: "scope_exit" });
       }
 
       toolResults.push({

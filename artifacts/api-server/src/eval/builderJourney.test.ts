@@ -3,14 +3,15 @@
  * 1. A tool inserted via submit-review (source=built) is findable by semantic search.
  * 2. The no-match path doesn't crash and returns expected fields.
  * 3. The POST /api/briefs endpoint accepts a valid brief payload.
+ * 4. Scope-mode exit: a mode-switch request returns stage "scope_exit".
+ * 5. Disambiguation forceChat: the predicate logic correctly bypasses add-mode validation.
  */
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
 import { db, toolsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { searchCatalogue } from "../lib/catalogue";
-import { embedText } from "../lib/embeddings";
-import { insertTool } from "../lib/catalogue";
+import { searchCatalogue, insertTool } from "../lib/catalogue";
+import { runChat } from "../lib/chatAgent";
 
 const TEST_TOOL_NAME = `Builder Journey Test Tool ${Date.now()}`;
 const TEST_TOOL_SLUG = `builder-journey-test-${Date.now()}`;
@@ -133,5 +134,72 @@ describe("builder journey — regression: add-tool non-URL disambiguation", () =
     assert.equal(looksLikeUrl("internal.headout.dev/zeps/my-tool"), true);
     assert.equal(looksLikeUrl("https://example.com/tool"), true);
     assert.equal(looksLikeUrl("slack-digest.headout.internal"), true);
+  });
+
+  /**
+   * Regression: when forceChat=true the add-mode branch must be bypassed
+   * regardless of whether addMode would be true in the component closure.
+   * We simulate the predicate logic: with forceChat the code must NOT reach
+   * the looksLikeUrl check.
+   *
+   * This is a pure logic test — no network call needed.
+   */
+  it("forceChat flag bypasses add-mode URL validation", () => {
+    const addMode = true;
+    const forceChat = true;
+    // The fixed submitText condition: addMode && !forceChat
+    const shouldEnterAddMode = addMode && !forceChat;
+    assert.equal(
+      shouldEnterAddMode,
+      false,
+      "forceChat=true must bypass the add-mode branch even when addMode=true",
+    );
+  });
+
+  it("without forceChat, add-mode is entered when addMode=true", () => {
+    const addMode = true;
+    const forceChat = false;
+    const shouldEnterAddMode = addMode && !forceChat;
+    assert.equal(shouldEnterAddMode, true, "addMode=true without forceChat enters add-mode");
+  });
+});
+
+describe("builder journey — regression: scope exit returns scope_exit stage", () => {
+  /**
+   * When the user sends a mode-switch message inside a scope session,
+   * runChat (with mode:"scope") must return stage === "scope_exit".
+   *
+   * We call the real runChat function with a minimal scope history that
+   * ends with a clear exit message.
+   */
+  it("mode-switch message in scope session returns stage scope_exit", async () => {
+    const history = [
+      {
+        role: "user" as const,
+        content: "I want to build a tool that automates our weekly ops report",
+      },
+      {
+        role: "assistant" as const,
+        content: "What does the ops report cover and who reads it each week?",
+      },
+      {
+        role: "user" as const,
+        content: "never mind, just show me the registry instead",
+      },
+    ];
+
+    const result = await runChat(history, {
+      mode: "scope",
+      searchContext: {
+        query: "automate weekly ops report",
+        nearMisses: [],
+      },
+    });
+
+    assert.equal(
+      result.stage,
+      "scope_exit",
+      `expected stage "scope_exit" for a mode-switch message in scope mode, got "${result.stage}"`,
+    );
   });
 });

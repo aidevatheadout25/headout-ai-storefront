@@ -55,6 +55,10 @@ A single chat front door to find existing internal AI tools (apps, skills, docs,
 
 _Populate as you build — explicit user instructions worth remembering across sessions._
 
+## Scope-mode lifecycle
+
+Entry: the client sets `inScopeMode=true` when the server returns `stage === "scope"` (user forked from the handoff chip). Exit: the server returns `stage === "brief"`, `"kill"`, or `"scope_exit"` (new — triggered by the `end_scope` tool when the user issues a mode-switch or exit request). On exit the client clears `inScopeMode` so the next message runs a normal catalogue search. The `scope_exit` stage is also handled in the conversation-restore path so a reloaded conversation never resurrects scope mode from a completed exit turn.
+
 ## Gotchas
 
 - The design-system stylesheet is linked from `index.html` with a **relative** href (`./design-system/...`) so the `@font-face` relative `url()`s and the production base path resolve correctly — do not change it to a root-relative `/design-system/...`.
