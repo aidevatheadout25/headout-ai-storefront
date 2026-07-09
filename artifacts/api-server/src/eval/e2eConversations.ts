@@ -106,7 +106,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: 4,
-    title: "Zap case",
+    title: "Zep case",
     messages: [
       "I want our daily bookings numbers to auto-post to a Slack channel every morning",
       "Let's scope the idea — I want to build it",
@@ -114,9 +114,9 @@ const SCENARIOS: Scenario[] = [
       "Whole revenue team reads it, every morning",
     ],
     expectation:
-      "True modality is a no-code scheduled Zap/workflow (no interaction, no custom logic).",
+      "True modality is a Zep on Headout's Zeps platform (connector orchestration + a cron trigger, no custom UI).",
     expectStage: "brief",
-    expectModality: "zap",
+    expectModality: "zep",
   },
   {
     id: 5,
@@ -222,7 +222,7 @@ type ScenarioReport = {
   modalityHits: string[];
 };
 
-const MODALITY_TERMS = ["MCP", "skill", "Zap", "engineering team", "platform team"];
+const MODALITY_TERMS = ["MCP", "skill", "Zep", "engineering team", "platform team"];
 
 /** Best-effort label for what tool produced this turn's result. See TurnLog.toolSignal. */
 function inferToolSignal(result: ChatResult, prevStage: FunnelStage | undefined): string {

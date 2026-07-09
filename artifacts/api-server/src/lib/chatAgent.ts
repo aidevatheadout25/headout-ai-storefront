@@ -70,14 +70,18 @@ export type FunnelStage =
 /**
  * The shape a build should take — the reusable core of the critique agent's
  * decision. Replaces the old binary `appClass` (micro|full), which flattened
- * every non-app idea (an MCP server, a Claude skill, a no-code Zap) into
- * "micro" with no way to express what it actually was.
+ * every non-app idea (an MCP server, a Claude skill, a Zep) into "micro" with
+ * no way to express what it actually was.
  *
  *   no_build   — Claude-native or a genuine one-off; pairs with recommend_kill
  *   skill      — Claude skill: text-in, artifact-out, reusable, no hosting
  *   mcp        — machine-callable server exposing data/actions to agents;
  *                no UI, programmatic callers, typically high query volume
- *   zap        — no-code scheduled/triggered workflow, no custom logic
+ *   zep        — a Zep on Headout's Zeps platform: a no-code multi-step
+ *                workflow agent that orchestrates connectors (Slack/GitHub/
+ *                Notion/etc.) and runs on triggers (web/API/Slack/WhatsApp/
+ *                webhook/cron), built by chatting — no code, self-serve.
+ *                The default for workflow/automation-shaped needs.
  *   script     — one-off or dev-side automation, not a persistent service
  *   micro_app  — small UI + backend, one job, small audience
  *   full_app   — multi-user UI + backend + multiple integrations
@@ -88,7 +92,7 @@ export type Modality =
   | "no_build"
   | "skill"
   | "mcp"
-  | "zap"
+  | "zep"
   | "script"
   | "micro_app"
   | "full_app"
@@ -438,15 +442,15 @@ const DRAFT_BRIEF_TOOL: Anthropic.Tool = {
       },
       modality: {
         type: "string",
-        enum: ["skill", "mcp", "zap", "script", "micro_app", "full_app"],
+        enum: ["skill", "mcp", "zep", "script", "micro_app", "full_app"],
         description:
           "The shape this should take — never 'no_build' or 'eng_project' here (those go through recommend_kill / escalate_to_eng instead, never draft_brief). " +
           "skill = Claude skill: text-in, artifact-out, reusable, no hosting. " +
           "mcp = machine-callable server exposing data/actions to agents — no UI, programmatic callers, typically high query volume, no human in the loop. " +
-          "zap = no-code scheduled/triggered workflow, no custom logic, no interaction. " +
+          "zep = a Zep on Headout's Zeps platform: a no-code multi-step workflow agent that orchestrates connectors (Slack/GitHub/Notion/etc.) and runs on triggers (web/API/Slack/WhatsApp/webhook/cron), built by chatting — no code, self-serve. This is the DEFAULT for any workflow/automation need built from connectors + triggers, not just scheduled pushes. " +
           "script = one-off or dev-side automation, not a persistent service. " +
-          "micro_app = small UI + backend, one job, small audience. " +
-          "full_app = multi-user UI + backend + multiple integrations.",
+          "micro_app = small UI + backend, one job, small audience — only pick this over zep if you can say why Zeps can't do it (needs a real custom UI, not just connectors and triggers). " +
+          "full_app = multi-user UI + backend + multiple integrations — same caveat as micro_app.",
       },
       modalityReason: {
         type: "string",
@@ -492,7 +496,7 @@ const RECOMMEND_KILL_TOOL: Anthropic.Tool = {
 const ESCALATE_TOOL: Anthropic.Tool = {
   name: "escalate_to_eng",
   description:
-    "Call this when the idea is too large, too critical, or too load-bearing for any self-serve path (a Claude skill, an MCP server, a Zap, a micro app, or a full app) — e.g. it touches every experience/every X, feeds a live production system, or genuinely needs multiple teams to own it. This is the eng_project modality by definition. Produces a short project pitch instead of a self-serve repo. NEVER call draft_brief for this case — a self-serve repo for something that needs an engineering team is a contradiction.",
+    "Call this when the idea is too large, too critical, or too load-bearing for any self-serve path (a Claude skill, an MCP server, a Zep, a micro app, or a full app) — e.g. it touches every experience/every X, feeds a live production system, or genuinely needs multiple teams to own it. This is the eng_project modality by definition. Produces a short project pitch instead of a self-serve repo. NEVER call draft_brief for this case — a self-serve repo for something that needs an engineering team is a contradiction.",
   input_schema: {
     type: "object",
     properties: {
@@ -565,14 +569,17 @@ ${nearMissLines}
 
 ━━ MODALITY — figure out the actual shape, don't default to "an app" ━━
 Every brief must name a modality and justify it from a concrete signal in the conversation, not a guess. This is the single most important judgment call you make — a wrong modality (e.g. calling an MCP server a "micro app") hides the real shape of the work.
-- Agents/pipelines calling it programmatically, no human in the loop, steady or high query volume, no UI needed → mcp
+
+zep is the FIRST thing to consider for any workflow or automation need — it's Headout's self-serve substrate for exactly this: a no-code multi-step workflow agent built by chatting, orchestrating connectors (Slack/GitHub/Notion/etc.) and running on triggers (web/API/Slack/WhatsApp/webhook/cron). If the need is "when X happens, do Y across these systems" with no bespoke UI required, it's a zep — don't reach for micro_app/full_app by default. Only pick micro_app or full_app when you can state WHY Zeps can't serve it — typically because it needs a real custom UI (e.g. a file-upload + results dashboard) or a persistent multi-user product surface, not just connectors and triggers.
+
+- Connector orchestration + triggers, no custom UI needed, "when X happens do Y" → zep (the default for workflow/automation asks)
+- Agents/pipelines calling it programmatically, no human in the loop, steady or high query volume, no UI at all → mcp
 - Same text-in, artifact-out steps repeated by one person or a small team, no persistent hosting needed → skill
-- A scheduled or triggered push with no custom logic and no interaction → zap
 - A fixed one-off dataset, a migration, dev-side tooling that isn't a persistent service → script (usually pairs with recommend_kill if it's truly one-time)
-- A small UI + backend doing one job for a small audience → micro_app
-- Multiple users, multiple integrations, an actual application surface → full_app
+- A real custom UI (upload, dashboard, multi-step form) is required and Zeps genuinely can't cover it, for a small audience → micro_app
+- Multiple users, multiple integrations, an actual application surface, and Zeps genuinely can't cover it → full_app
 - It touches every X, feeds a live production system, or several teams would need to co-own it → eng_project (call escalate_to_eng, never draft_brief)
-Ask whatever question you need to pin down modality (who/what calls it, how often, human-in-the-loop or not) — this can be one of your six questions, it doesn't need its own budget.
+Ask whatever question you need to pin down modality (who/what calls it, how often, human-in-the-loop or not, does it need a real UI) — this can be one of your six questions, it doesn't need its own budget.
 
 ━━ KILL CRITERIA — call recommend_kill (modality: no_build) if ━━
 - The task happens less than twice a week OR is a genuine one-off
@@ -671,7 +678,7 @@ function buildResult(
 }
 
 /** The modalities draft_brief may legally claim — no_build/eng_project pair with the other two outcome tools, never this one. */
-const VALID_BRIEF_MODALITIES: Modality[] = ["skill", "mcp", "zap", "script", "micro_app", "full_app"];
+const VALID_BRIEF_MODALITIES: Modality[] = ["skill", "mcp", "zep", "script", "micro_app", "full_app"];
 
 /**
  * Builds a BriefPayload from the model's draft_brief args, substituting a

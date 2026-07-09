@@ -20,7 +20,7 @@ const briefSchema = z.object({
   frequency: z.string().default(""),
   mustDo: z.array(z.string()).default([]),
   wontDo: z.array(z.string()).default([]),
-  modality: z.enum(["skill", "mcp", "zap", "script", "micro_app", "full_app"]).default("micro_app"),
+  modality: z.enum(["skill", "mcp", "zep", "script", "micro_app", "full_app"]).default("micro_app"),
   modalityReason: z.string().default(""),
   risk: z.enum(["low", "high"]).default("low"),
   state: z.enum(["draft", "confirmed", "built", "live"]).default("draft"),
@@ -117,11 +117,15 @@ function scaffoldContentsForModality(modality: string): string[] {
         ".github/workflows/ci.yml — lint + test + deploy pipeline",
         "tests/server.test.ts — tool-call contract tests",
       ];
-    case "zap":
+    case "zep":
+      // A zep isn't a repo at all — the client routes zep briefs to the Zeps
+      // builder deeplink instead of calling /scaffold (see BriefCard.tsx).
+      // This case only exists as a defensive fallback if /scaffold is ever
+      // hit for one anyway.
       return [
-        "workflow.json — trigger, schedule, and step configuration",
-        "src/steps/ — one file per workflow step (no custom app logic)",
-        "README.md — what triggers this and what it does",
+        "(no repo — this is a Zep on Headout's Zeps platform, not a self-serve codebase)",
+        "connectors — the Slack/GitHub/Notion/etc. integrations this Zep uses",
+        "triggers — web/API/Slack/WhatsApp/webhook/cron, whatever kicks it off",
       ];
     case "script":
       return [

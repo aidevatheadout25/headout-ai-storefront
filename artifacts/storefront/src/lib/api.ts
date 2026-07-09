@@ -44,7 +44,7 @@ export type Modality =
   | "no_build"
   | "skill"
   | "mcp"
-  | "zap"
+  | "zep"
   | "script"
   | "micro_app"
   | "full_app"

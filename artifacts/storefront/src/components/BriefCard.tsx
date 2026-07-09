@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createBrief, scaffoldRepo, updateBrief, type BriefPayload, type Modality, type ScaffoldResult } from "@/lib/api";
-import { Button } from "@/components/Button";
+import { Button, ButtonLink } from "@/components/Button";
+import { buildZepsBuilderUrl } from "@/lib/zeps";
 
 type Props = {
   brief: BriefPayload;
@@ -119,11 +120,33 @@ export function BriefCard({ brief: initialBrief, onScaffold }: Props) {
     }
   }, [briefId, onScaffold]);
 
+  const isZep = brief.modality === "zep";
+
+  // A zep isn't a repo — it's built conversationally on Zeps. Deeplink into
+  // the Zeps builder with the scoped need prefilled instead of scaffolding.
+  const zepsBuilderUrl = useMemo(() => {
+    if (!isZep) return null;
+    const promptParts = [
+      brief.problem,
+      brief.mustDo.length > 0 ? `Must do: ${brief.mustDo.join("; ")}` : null,
+      brief.wontDo.length > 0 ? `Won't do: ${brief.wontDo.join("; ")}` : null,
+    ].filter((part): part is string => Boolean(part && part.trim()));
+    return buildZepsBuilderUrl({
+      name: brief.title,
+      prompt: promptParts.join("\n\n"),
+      source: "storefront",
+    });
+  }, [isZep, brief.title, brief.problem, brief.mustDo, brief.wontDo]);
+
   return (
     <div className="brief-card">
       <div className="brief-card__header">
         <span className="brief-card__title t-heading-sm">Requirements brief</span>
-        <span className="brief-card__note t-label-sm">Edit any field, then create your repo.</span>
+        <span className="brief-card__note t-label-sm">
+          {isZep
+            ? "Edit any field, then open it in the Zeps builder."
+            : "Edit any field, then create your repo."}
+        </span>
       </div>
 
       <div className="brief-card__body">
@@ -168,7 +191,7 @@ export function BriefCard({ brief: initialBrief, onScaffold }: Props) {
             >
               <option value="skill">Claude skill (text-in, artifact-out, no hosting)</option>
               <option value="mcp">MCP server (machine-callable, no UI)</option>
-              <option value="zap">Zap (no-code scheduled workflow)</option>
+              <option value="zep">Zep (no-code workflow agent on Zeps)</option>
               <option value="script">Script (one-off / dev-side automation)</option>
               <option value="micro_app">Micro app (small UI + backend, one job)</option>
               <option value="full_app">Full app (multi-user, multiple integrations)</option>
@@ -198,13 +221,19 @@ export function BriefCard({ brief: initialBrief, onScaffold }: Props) {
       {error && <p className="brief-card__error t-para-sm">{error}</p>}
 
       <div className="brief-card__footer">
-        <Button
-          type="button"
-          onClick={() => void handleCreateRepo()}
-          disabled={scaffolding || !briefId}
-        >
-          {scaffolding ? "Creating repo…" : "Create my repo"}
-        </Button>
+        {isZep ? (
+          <ButtonLink href={zepsBuilderUrl ?? "#"} variant="primary" external>
+            Open in Zeps builder →
+          </ButtonLink>
+        ) : (
+          <Button
+            type="button"
+            onClick={() => void handleCreateRepo()}
+            disabled={scaffolding || !briefId}
+          >
+            {scaffolding ? "Creating repo…" : "Create my repo"}
+          </Button>
+        )}
       </div>
     </div>
   );
