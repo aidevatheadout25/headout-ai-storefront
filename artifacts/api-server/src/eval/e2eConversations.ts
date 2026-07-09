@@ -45,6 +45,9 @@ const REPORT_PATH = join(__dirname, "e2e-report.md");
 
 // ─── Scenario definitions ───────────────────────────────────────────────────
 
+/** The literal scope-trigger message used by every scenario below that forks into scoping. */
+const SCOPE_TRIGGER_TEXT = "Let's scope the idea — I want to build it";
+
 type Scenario = {
   id: number;
   title: string;
@@ -54,7 +57,7 @@ type Scenario = {
   /** What a correct outcome looks like, for the report header — not enforced,
    *  just printed alongside the actual result so a human can compare. */
   expectation: string;
-  /** If set, flag in the report when the final stage doesn't match. */
+  /** If set, flag in the report when the terminal outcome's stage doesn't match. */
   expectStage?: FunnelStage;
   /** If set, flag when the drafted brief's risk is below this. */
   expectRiskAtLeast?: "high";
@@ -62,6 +65,17 @@ type Scenario = {
    *  post-Phase-3 check (this used to only be checkable by eye against a
    *  flattened micro/full appClass; now it's a direct field comparison). */
   expectModality?: Modality;
+  /**
+   * How the scenario's SCOPE_TRIGGER_TEXT turn is sent. Defaults to "scope"
+   * — the real UI's fork chip only appears on a no-match turn and sends
+   * `mode: "scope"` + searchContext, so that's what most scenarios should
+   * measure. Exactly one scenario should be "typed" (see its definition
+   * below): when the first turn already returns a strong match, the fork
+   * chip never renders in the real UI at all — the only way to reach
+   * scoping is typing intent as plain text, so that scenario deliberately
+   * exercises the typed-intent-detection path instead of the flag.
+   */
+  scopeTriggerMode?: "typed" | "scope";
 };
 
 const SCENARIOS: Scenario[] = [
@@ -92,7 +106,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: 3,
-    title: "Skill case",
+    title: "Skill case (typed-intent path — first turn finds a strong match, so the fork chip never renders; scope trigger is sent as plain text)",
     messages: [
       "Every week I write SEO briefs for new experience pages and it eats half a day",
       "Let's scope the idea — I want to build it",
@@ -103,6 +117,7 @@ const SCENARIOS: Scenario[] = [
       "True modality is a reusable Claude skill (text-in, doc-out, no UI, no hosting).",
     expectStage: "brief",
     expectModality: "skill",
+    scopeTriggerMode: "typed",
   },
   {
     id: 4,
@@ -213,10 +228,21 @@ type TurnLog = {
   toolSignal?: string;
 };
 
+/** The first draft_brief/recommend_kill/escalate_to_eng ever reached in a conversation — the honest outcome, regardless of what came after. */
+type TerminalOutcome = {
+  stage: "brief" | "kill" | "escalate";
+  /** 1-based index into scenario.messages of the user turn that produced this outcome. */
+  turnIndex: number;
+  result: ChatResult;
+};
+
 type ScenarioReport = {
   scenario: Scenario;
   turns: TurnLog[];
+  /** The last turn's result — kept for transcript/debugging (e.g. did the concierge fall back after a brief), NOT for grading the outcome. */
   finalResult: ChatResult | null;
+  /** The honest outcome: the first terminal stage ever reached, with its full payload. This is what scoring/flags should use. */
+  terminalOutcome: TerminalOutcome | null;
   error: string | null;
   scopeQuestionCount: number;
   modalityHits: string[];
@@ -248,17 +274,41 @@ async function runScenario(scenario: Scenario): Promise<ScenarioReport> {
   const history: ChatTurn[] = [];
   const turns: TurnLog[] = [];
   let inScope = false;
+  let prevUserText = "";
   let finalResult: ChatResult | null = null;
+  let terminalOutcome: TerminalOutcome | null = null;
   let error: string | null = null;
 
-  for (const userText of scenario.messages) {
+  for (let i = 0; i < scenario.messages.length; i++) {
+    const userText = scenario.messages[i];
     history.push({ role: "user", content: userText });
     turns.push({ role: "user", text: userText });
 
     const prevStage = finalResult?.stage;
+
+    // Mirror the real UI's fork chip: it only renders (and only sends
+    // mode:"scope" + searchContext) when the previous turn came back with
+    // no catalogue match at all. See Scenario.scopeTriggerMode.
+    const isScopeTrigger = userText === SCOPE_TRIGGER_TEXT;
+    const sendScopeMode =
+      !inScope && isScopeTrigger && (scenario.scopeTriggerMode ?? "scope") === "scope";
+
     const userCtx: ChatUserContext = {
       conversationId: `eval-scenario-${scenario.id}`,
-      ...(inScope ? { mode: "scope" as const } : {}),
+      ...(inScope
+        ? { mode: "scope" as const }
+        : sendScopeMode
+          ? {
+              mode: "scope" as const,
+              searchContext: {
+                query: (prevUserText || userText).slice(0, 120),
+                nearMisses: (finalResult?.tools ?? []).map((t) => ({
+                  name: t.name,
+                  oneLiner: t.oneLiner,
+                })),
+              },
+            }
+          : {}),
     };
 
     let result: ChatResult;
@@ -278,6 +328,14 @@ async function runScenario(scenario: Scenario): Promise<ScenarioReport> {
       toolSignal: inferToolSignal(result, prevStage),
     });
     finalResult = result;
+    prevUserText = userText;
+
+    if (
+      terminalOutcome === null &&
+      (result.stage === "brief" || result.stage === "kill" || result.stage === "escalate")
+    ) {
+      terminalOutcome = { stage: result.stage, turnIndex: i + 1, result };
+    }
 
     // Mirror HomeChat.tsx's inScopeMode threading exactly: once the client
     // observes stage "scope" it keeps passing mode:"scope" on every
@@ -300,7 +358,7 @@ async function runScenario(scenario: Scenario): Promise<ScenarioReport> {
     .toLowerCase();
   const modalityHits = MODALITY_TERMS.filter((term) => allAssistantText.includes(term.toLowerCase()));
 
-  return { scenario, turns, finalResult, error, scopeQuestionCount, modalityHits };
+  return { scenario, turns, finalResult, terminalOutcome, error, scopeQuestionCount, modalityHits };
 }
 
 // ─── Report rendering ────────────────────────────────────────────────────────
@@ -368,34 +426,35 @@ function outcomeModality(result: ChatResult | null): Modality | null {
   );
 }
 
-/** Automated flags per "What the report should make obvious" — computed generically from scenario metadata, not hardcoded per id. */
+/** Automated flags per "What the report should make obvious" — computed generically from scenario metadata, not hardcoded per id. Graded against the honest terminal outcome, not the last scripted turn. */
 function computeFlags(report: ScenarioReport): string[] {
   const flags: string[] = [];
-  const { scenario, finalResult, scopeQuestionCount } = report;
-  const finalStage = finalResult?.stage;
+  const { scenario, terminalOutcome, finalResult, scopeQuestionCount } = report;
+  const outcomeStage = terminalOutcome?.stage;
+  const outcomeResult = terminalOutcome?.result ?? null;
 
-  if (scenario.expectStage && finalStage !== scenario.expectStage) {
+  if (scenario.expectStage && outcomeStage !== scenario.expectStage) {
     flags.push(
-      `⚠️ expected final stage \`${scenario.expectStage}\`, got \`${finalStage ?? "(none — no result)"}\``,
+      `⚠️ expected terminal outcome \`${scenario.expectStage}\`, got \`${outcomeStage ?? "(none reached — conversation never resolved)"}\``,
     );
   }
 
-  if (finalStage === "brief" && finalResult?.briefPayload) {
-    const empties = emptyBriefFields(finalResult.briefPayload);
+  if (outcomeStage === "brief" && outcomeResult?.briefPayload) {
+    const empties = emptyBriefFields(outcomeResult.briefPayload);
     if (empties.length > 0) {
       flags.push(`⚠️ brief has empty required field(s): ${empties.join(", ")}`);
     }
   }
 
-  const modality = outcomeModality(finalResult);
+  const modality = outcomeModality(outcomeResult);
   if (scenario.expectModality && modality !== scenario.expectModality) {
     flags.push(
       `⚠️ expected modality \`${scenario.expectModality}\`, got \`${modality ?? "(none)"}\``,
     );
   }
 
-  if (scenario.expectRiskAtLeast === "high" && finalStage === "brief") {
-    const risk = finalResult?.briefPayload?.risk;
+  if (scenario.expectRiskAtLeast === "high" && outcomeStage === "brief") {
+    const risk = outcomeResult?.briefPayload?.risk;
     if (risk !== "high") {
       flags.push(`⚠️ expected risk \`high\` (sensitive data / access sign-off involved), got \`${risk ?? "(none)"}\``);
     }
@@ -406,7 +465,7 @@ function computeFlags(report: ScenarioReport): string[] {
   }
 
   if (
-    finalStage === "brief" &&
+    outcomeStage === "brief" &&
     report.modalityHits.some((h) => h.toLowerCase() === "engineering team")
   ) {
     flags.push(
@@ -414,19 +473,47 @@ function computeFlags(report: ScenarioReport): string[] {
     );
   }
 
+  // Turns scripted after the terminal outcome exist deliberately in some
+  // scenarios (to probe post-outcome behavior, e.g. bug C) — this isn't
+  // itself wrong, but a fall-back to plain concierge `chat` afterward is a
+  // routing regression worth surfacing on stage/routing grounds alone.
+  if (
+    terminalOutcome &&
+    terminalOutcome.turnIndex < scenario.messages.length &&
+    finalResult?.stage === "chat"
+  ) {
+    flags.push(
+      `⚠️ conversation fell back to concierge \`chat\` stage after reaching \`${terminalOutcome.stage}\` at turn ${terminalOutcome.turnIndex} — check post-outcome turns for a re-routing regression`,
+    );
+  }
+
   return flags;
 }
 
 function renderScenarioSection(report: ScenarioReport): string {
-  const { scenario, turns, finalResult, error } = report;
+  const { scenario, turns, finalResult, terminalOutcome, error } = report;
   const flags = computeFlags(report);
+  const outcomeResult = terminalOutcome?.result ?? null;
 
   const lines: string[] = [];
   lines.push(`## ${scenario.id}. ${scenario.title}`);
   lines.push("");
   lines.push(`**Expectation:** ${scenario.expectation}`);
   lines.push("");
-  lines.push(`**Final stage:** \`${finalResult?.stage ?? "(none)"}\``);
+  lines.push(
+    `**Terminal outcome:** ${
+      terminalOutcome
+        ? `\`${terminalOutcome.stage}\` at turn ${terminalOutcome.turnIndex} of ${scenario.messages.length}`
+        : "(none reached)"
+    }`,
+  );
+  lines.push(
+    `**Final stage (last scripted turn):** \`${finalResult?.stage ?? "(none)"}\`${
+      terminalOutcome && terminalOutcome.turnIndex < scenario.messages.length
+        ? " _(conversation continued past the terminal outcome — see transcript)_"
+        : ""
+    }`,
+  );
   lines.push(`**Scope questions asked:** ${report.scopeQuestionCount}`);
   lines.push(
     `**Modality terms named in assistant text:** ${
@@ -458,24 +545,24 @@ function renderScenarioSection(report: ScenarioReport): string {
   lines.push("</details>");
   lines.push("");
 
-  if (finalResult?.briefPayload) {
-    lines.push("**Raw briefPayload:**");
+  if (outcomeResult?.briefPayload) {
+    lines.push("**Raw briefPayload (from the terminal outcome):**");
     lines.push("");
-    lines.push(renderBriefPayload(finalResult.briefPayload));
-    lines.push("");
-  }
-
-  if (finalResult?.killPayload) {
-    lines.push("**Raw killPayload:**");
-    lines.push("");
-    lines.push(renderKillPayload(finalResult.killPayload));
+    lines.push(renderBriefPayload(outcomeResult.briefPayload));
     lines.push("");
   }
 
-  if (finalResult?.escalatePayload) {
-    lines.push("**Raw escalatePayload:**");
+  if (outcomeResult?.killPayload) {
+    lines.push("**Raw killPayload (from the terminal outcome):**");
     lines.push("");
-    lines.push(renderEscalatePayload(finalResult.escalatePayload));
+    lines.push(renderKillPayload(outcomeResult.killPayload));
+    lines.push("");
+  }
+
+  if (outcomeResult?.escalatePayload) {
+    lines.push("**Raw escalatePayload (from the terminal outcome):**");
+    lines.push("");
+    lines.push(renderEscalatePayload(outcomeResult.escalatePayload));
     lines.push("");
   }
 
@@ -483,15 +570,18 @@ function renderScenarioSection(report: ScenarioReport): string {
 }
 
 function renderSummaryTable(reports: ScenarioReport[]): string {
-  const header = "| # | Scenario | Final stage | modality | risk | # questions | brief empty? | modality named? |";
-  const sep = "|---|---|---|---|---|---|---|---|";
+  const header =
+    "| # | Scenario | terminal outcome | last-turn stage | modality (payload) | risk | # questions | brief empty? | modality named? |";
+  const sep = "|---|---|---|---|---|---|---|---|---|";
   const rows = reports.map((r) => {
-    const brief = r.finalResult?.briefPayload;
+    const outcomeResult = r.terminalOutcome?.result ?? null;
+    const brief = outcomeResult?.briefPayload;
     const emptyFields = emptyBriefFields(brief);
-    const modality = outcomeModality(r.finalResult);
+    const modality = outcomeModality(outcomeResult);
     return [
       r.scenario.id,
       r.scenario.title,
+      r.terminalOutcome ? `\`${r.terminalOutcome.stage}\` @${r.terminalOutcome.turnIndex}` : "(none)",
       `\`${r.finalResult?.stage ?? "(none)"}\``,
       modality ?? "—",
       brief?.risk ?? "—",
