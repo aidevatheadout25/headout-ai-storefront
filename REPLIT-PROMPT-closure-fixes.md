@@ -1,0 +1,38 @@
+# Fixes: two bugs in the previous fix round (follow-up to the builder punch list)
+
+Both bugs are in `artifacts/storefront/src/components/HomeChat.tsx` + the scope-exit path in `artifacts/api-server/src/lib/chatAgent.ts`. Small, surgical changes — do not refactor anything else.
+
+## 1. "Search for this" disambiguation chip does nothing (stale closure)
+
+**Where:** `HomeChat.tsx`, the `addDisambiguation` action block (~line 715).
+
+**Bug:** the onClick runs `setAddMode(false); ... submitText(message.addDisambiguationText)`. React state updates don't apply mid-handler, and `submitText` is a `useCallback` whose closure captured `addMode` from the current render — still `true`. So the resubmitted text re-enters the add-mode branch, fails URL validation again, and re-renders the same disambiguation bubble. The button loops instead of searching.
+
+**Fix:** don't depend on state having flipped. Give `submitText` an explicit override, e.g. extend its opts with `{ forceChat?: boolean }`:
+
+- In `submitText`, branch on `if (addMode && !opts?.forceChat)` instead of `if (addMode)`.
+- The "Search for this" onClick keeps its state resets and calls `submitText(text, { forceChat: true })`.
+
+Audit for the same pattern anywhere else a handler calls a state setter and then `submitText`/`runChat` in the same tick, and apply the same explicit-override approach if found.
+
+**Acceptance:** in add-tool mode, type "i want to see the mcp registry" → disambiguation chips appear → click "Search for this" → a real catalogue search for that text runs. No repeated disambiguation bubble.
+
+## 2. Conversational scope exit announces but never happens
+
+**Where:** scope system prompt + `runScopeChat` in `chatAgent.ts`; scope-mode handling in `HomeChat.tsx`.
+
+**Bug:** the scope prompt instructs the agent to acknowledge mode-switch requests ("Got it — stepping out of scope mode") — but the response still returns `stage: "scope"`, and the client only clears `inScopeMode` on `stage === "brief" || "kill"`. So the agent *says* it exited while the client keeps sending `mode: "scope"` — the next message goes straight back into critique. The one-way door survives for the conversational path.
+
+**Fix:** make the exit an explicit signal, not prose:
+
+- Add an `end_scope` tool to `SCOPE_TOOLS` (input: `{ reason: string }`, description: "Call this when the user wants to leave the scoping session — mode switch, off-topic request, or 'never mind'. Do NOT call draft_brief or recommend_kill in this case."). Update the scope system prompt to instruct calling `end_scope` instead of just phrasing an exit.
+- When `runScopeChat` sees an `end_scope` tool call, return a result with a new stage `"scope_exit"` (add to `FunnelStage`) and a short message acknowledging the switch. If the user's exit message contained an actionable request (e.g. "search for X instead"), include it so the client can act.
+- In `HomeChat.tsx`: on `stage === "scope_exit"`, `setInScopeMode(false)` and clear journey state. Also handle it in the conversation-restore branch (the `lastAssistant?.stage` switch) so a reloaded conversation doesn't resurrect scope mode.
+
+**Acceptance:** enter scoping → say "never mind, show me the registry" → agent acknowledges → the *next* message you type runs a normal catalogue search (assert stage ≠ scope). Reload the conversation mid-exit → still not in scope mode.
+
+## Housekeeping
+
+- Add both acceptance cases as regression tests (frontend behavior can be covered at the API level: a scope-mode history containing a mode-switch message returns `scope_exit`).
+- Keep all existing tests green (`pnpm --filter @workspace/api-server run test`).
+- Update `replit.md` scope-mode lifecycle notes: entry = explicit client flag on the fork chip; exit = brief, kill, `scope_exit`, or continuation chips.

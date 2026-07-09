@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Storefront — Headout Internal Tools</title>
+<style>
+  :root{
+    --bg:#0b0c10;
+    --panel:#15171c;
+    --panel2:#1c1f26;
+    --border:#2a2d36;
+    --accent:#7c5cff;
+    --accent2:#4ade80;
+    --text:#e9eaee;
+    --text-dim:#9a9ea8;
+    --danger:#f97066;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    background:var(--bg);
+    color:var(--text);
+  }
+  header{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:16px 32px;
+    border-bottom:1px solid var(--border);
+    position:sticky;
+    top:0;
+    background:var(--bg);
+    z-index:10;
+  }
+  .logo{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    font-weight:700;
+    font-size:18px;
+  }
+  .logo .dot{
+    width:10px;height:10px;border-radius:3px;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));
+  }
+  nav{display:flex;gap:6px;background:var(--panel2);padding:4px;border-radius:10px;}
+  nav button{
+    background:transparent;border:none;color:var(--text-dim);
+    padding:8px 16px;border-radius:8px;font-size:14px;cursor:pointer;
+    font-weight:500;
+  }
+  nav button.active{background:var(--accent);color:white;}
+  .publish-btn{
+    background:var(--panel2);border:1px solid var(--border);color:var(--text);
+    padding:8px 16px;border-radius:8px;font-size:14px;cursor:pointer;
+  }
+  main{max-width:920px;margin:0 auto;padding:40px 24px 80px;}
+  .view{display:none;}
+  .view.active{display:block;}
+
+  /* ---------- DISCOVER VIEW ---------- */
+  .hero{text-align:center;margin-bottom:28px;}
+  .hero h1{font-size:26px;margin:0 0 8px;}
+  .hero p{color:var(--text-dim);font-size:15px;margin:0;}
+
+  .chat{
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-radius:16px;
+    padding:8px;
+    min-height:420px;
+    display:flex;
+    flex-direction:column;
+  }
+  .chat-log{flex:1;padding:20px;display:flex;flex-direction:column;gap:18px;}
+  .msg{max-width:80%;line-space:1.4;font-size:14.5px;line-height:1.5;}
+  .msg.user{
+    align-self:flex-end;
+    background:var(--accent);
+    color:white;
+    padding:12px 16px;
+    border-radius:14px 14px 4px 14px;
+  }
+  .msg.ai{align-self:flex-start;}
+  .ai-label{font-size:12px;color:var(--accent2);font-weight:600;margin-bottom:6px;letter-spacing:.03em;}
+
+  .match-card{
+    background:var(--panel2);
+    border:1px solid var(--border);
+    border-radius:12px;
+    padding:14px 16px;
+    margin-top:10px;
+  }
+  .match-card .row{display:flex;justify-content:space-between;align-items:center;}
+  .match-card .name{font-weight:600;font-size:15px;}
+  .badge{
+    font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;
+    background:rgba(74,222,128,.12);color:var(--accent2);
+  }
+  .badge.caution{background:rgba(249,112,102,.12);color:var(--danger);}
+  .meta{color:var(--text-dim);font-size:12.5px;margin-top:2px;}
+  .fit{font-size:13.5px;margin-top:10px;}
+  .fit b{color:var(--text);}
+  .fit .gap{color:var(--danger);}
+  .fit .good{color:var(--accent2);}
+  .card-actions{margin-top:10px;display:flex;gap:8px;}
+  .card-actions button{
+    font-size:12.5px;padding:6px 12px;border-radius:7px;border:1px solid var(--border);
+    background:transparent;color:var(--text);cursor:pointer;
+  }
+  .card-actions button.primary{background:var(--accent);border-color:var(--accent);color:white;}
+
+  .fallback-cta{
+    margin-top:14px;padding:14px 16px;border:1px dashed var(--border);border-radius:12px;
+    display:flex;justify-content:space-between;align-items:center;gap:12px;
+  }
+  .fallback-cta span{font-size:13.5px;color:var(--text-dim);}
+  .fallback-cta button{
+    background:var(--accent2);color:#06210f;border:none;font-weight:600;
+    padding:8px 14px;border-radius:8px;font-size:13px;cursor:pointer;white-space:nowrap;
+  }
+
+  .chat-input{
+    display:flex;gap:8px;padding:12px;border-top:1px solid var(--border);
+  }
+  .chat-input input{
+    flex:1;background:var(--panel2);border:1px solid var(--border);border-radius:10px;
+    padding:12px 14px;color:var(--text);font-size:14px;
+  }
+  .chat-input button{
+    background:var(--accent);color:white;border:none;border-radius:10px;padding:0 18px;
+    font-weight:600;cursor:pointer;
+  }
+  .suggestions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;justify-content:center;}
+  .suggestions span{
+    font-size:12.5px;color:var(--text-dim);border:1px solid var(--border);
+    padding:6px 12px;border-radius:20px;cursor:pointer;
+  }
+
+  /* ---------- BROWSE VIEW ---------- */
+  .browse-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:18px;}
+  .browse-head h2{font-size:20px;margin:0;}
+  .filters{display:flex;gap:8px;}
+  .filters select{
+    background:var(--panel2);border:1px solid var(--border);color:var(--text);
+    border-radius:8px;padding:6px 10px;font-size:13px;
+  }
+  .filters .browse-search{
+    background:var(--panel2);border:1px solid var(--border);color:var(--text);
+    border-radius:8px;padding:6px 12px;font-size:13px;width:220px;
+  }
+  .filters .browse-search::placeholder{color:var(--text-dim);}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .tool-card{
+    background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px;
+  }
+  .tool-card .top{display:flex;justify-content:space-between;}
+  .tool-card .name{font-weight:600;font-size:15px;}
+  .tool-card .desc{color:var(--text-dim);font-size:13px;margin-top:6px;line-height:1.45;}
+  .tag{
+    display:inline-block;font-size:11px;color:var(--text-dim);border:1px solid var(--border);
+    padding:2px 8px;border-radius:20px;margin-top:10px;margin-right:6px;
+  }
+  .owner-row{display:flex;align-items:center;gap:6px;margin-top:12px;font-size:12px;color:var(--text-dim);}
+  .avatar{width:18px;height:18px;border-radius:50%;background:var(--accent);}
+
+  /* ---------- BUILD VIEW ---------- */
+  .build-steps{display:flex;flex-direction:column;gap:0;}
+  .step{
+    display:flex;gap:16px;padding:20px 0;border-bottom:1px solid var(--border);
+  }
+  .step:last-child{border-bottom:none;}
+  .step-num{
+    width:32px;height:32px;border-radius:50%;background:var(--panel2);border:1px solid var(--border);
+    display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px;flex-shrink:0;
+  }
+  .step.active .step-num{background:var(--accent);border-color:var(--accent);color:white;}
+  .step h3{margin:0 0 6px;font-size:15.5px;}
+  .step p{margin:0;color:var(--text-dim);font-size:13.5px;line-height:1.5;}
+  .step .tag-row{margin-top:8px;}
+  .step .tag-row span{
+    font-size:11px;background:var(--panel2);border:1px solid var(--border);color:var(--text-dim);
+    padding:3px 9px;border-radius:20px;margin-right:6px;
+  }
+
+  .publish-note{
+    background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px;
+    margin-top:20px;font-size:13.5px;color:var(--text-dim);text-align:center;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><span class="dot"></span> Storefront</div>
+  <nav>
+    <button class="active" data-view="discover">Discover</button>
+    <button data-view="browse">Browse</button>
+  </nav>
+  <button class="publish-btn">+ Publish a tool</button>
+</header>
+
+<main>
+
+  <!-- DISCOVER -->
+  <section class="view active" id="discover">
+    <div class="hero">
+      <h1>What are you trying to get done?</h1>
+      <p>Describe the problem, not the tool. Storefront checks what already exists before you build anything.</p>
+    </div>
+
+    <div class="chat">
+      <div class="chat-log">
+        <div class="msg user">I need to compare ticket pricing across our tour products in different cities — right now I'm doing it manually in a spreadsheet every week.</div>
+
+        <div class="msg ai">
+          <div class="ai-label">STOREFRONT</div>
+          Found 2 things close to this. Neither is a perfect fit — here's where each stands:
+
+          <div class="match-card">
+            <div class="row">
+              <span class="name">Price Pulse</span>
+              <span class="badge">Trusted</span>
+            </div>
+            <div class="meta">Owner: Revenue team · Updated 3 weeks ago · Slack bot</div>
+            <div class="fit">
+              <span class="good">✓ Pulls live pricing across all cities automatically.</span><br>
+              <span class="gap">✗ Only covers 6 of your 11 markets — built for EU tours.</span>
+            </div>
+            <div class="card-actions">
+              <button class="primary">Get access</button>
+              <button>View details</button>
+            </div>
+          </div>
+
+          <div class="match-card">
+            <div class="row">
+              <span class="name">TourCompare (v0)</span>
+              <span class="badge caution">Unmaintained</span>
+            </div>
+            <div class="meta">Owner: ex-Growth intern · Last touched 8 months ago · Google Sheet + Apps Script</div>
+            <div class="fit">
+              <span class="good">✓ Covers all markets, same comparison logic you want.</span><br>
+              <span class="gap">✗ No owner anymore, breaks silently, nobody's fixing it.</span>
+            </div>
+            <div class="card-actions">
+              <button class="primary">Get access</button>
+              <button>View details</button>
+            </div>
+          </div>
+
+          <div class="fallback-cta">
+            <span>Neither actually solves this reliably for you.</span>
+            <button onclick="showView('build')">Start building →</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-input">
+        <input type="text" placeholder="Describe the problem you're trying to solve...">
+        <button>Ask</button>
+      </div>
+    </div>
+
+    <div class="suggestions">
+      <span>"Something already do X?"</span>
+      <span>"Who owns the seat map service?"</span>
+      <span>"Tools our SEO team built"</span>
+    </div>
+  </section>
+
+  <!-- BROWSE -->
+  <section class="view" id="browse">
+    <div class="browse-head">
+      <h2>Browse the catalog</h2>
+      <div class="filters">
+        <input type="text" class="browse-search" placeholder="Filter by name, owner, tag...">
+        <select><option>All types</option><option>Skill</option><option>Agent</option><option>Script</option></select>
+        <select><option>All teams</option><option>Growth</option><option>Revenue</option><option>Ops</option></select>
+      </div>
+    </div>
+    <div class="grid">
+      <div class="tool-card">
+        <div class="top"><span class="name">Price Pulse</span><span class="badge">Trusted</span></div>
+        <div class="desc">Live cross-city ticket price comparison, posts daily digest to Slack.</div>
+        <div><span class="tag">Slack bot</span><span class="tag">Revenue</span></div>
+        <div class="owner-row"><span class="avatar"></span> Revenue team · updated 3w ago</div>
+      </div>
+      <div class="tool-card">
+        <div class="top"><span class="name">Delphi KB Search</span><span class="badge">Trusted</span></div>
+        <div class="desc">Ask Headout-specific product questions (seat maps, inventory, checkout logic).</div>
+        <div><span class="tag">Claude skill</span><span class="tag">Eng</span></div>
+        <div class="owner-row"><span class="avatar"></span> Platform team · updated 1w ago</div>
+      </div>
+      <div class="tool-card">
+        <div class="top"><span class="name">Review Sentiment Tagger</span><span class="badge">Trusted</span></div>
+        <div class="desc">Classifies incoming reviews by sentiment + theme, feeds weekly report.</div>
+        <div><span class="tag">Script</span><span class="tag">CX</span></div>
+        <div class="owner-row"><span class="avatar"></span> CX Ops · updated 2mo ago</div>
+      </div>
+      <div class="tool-card">
+        <div class="top"><span class="name">TourCompare (v0)</span><span class="badge caution">Unmaintained</span></div>
+        <div class="desc">Manual city-by-city tour pricing comparison sheet.</div>
+        <div><span class="tag">Sheet</span><span class="tag">Growth</span></div>
+        <div class="owner-row"><span class="avatar"></span> No active owner · 8mo ago</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- BUILD (not a nav destination — only reachable by forking out of Discover when nothing matches) -->
+  <section class="view" id="build">
+    <div class="hero">
+      <a href="#" onclick="showView('discover');return false;" style="display:inline-block;font-size:13px;color:var(--text-dim);text-decoration:none;margin-bottom:14px;">← Back to Discover</a>
+      <h1>Nothing fit. Let's shape this right.</h1>
+      <p>Same problem you described in Discover — carried over so you don't repeat yourself.</p>
+    </div>
+
+    <div class="build-steps">
+      <div class="step active">
+        <div class="step-num">1</div>
+        <div>
+          <h3>Should this even be built?</h3>
+          <p>Storefront pushes back on scope before you write code — checks if a smaller fix, a config change, or asking Revenue to extend Price Pulse solves it instead.</p>
+          <div class="tag-row"><span>requirements</span><span>critique</span></div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <h3>Standards-baked scaffold</h3>
+          <p>Repo, auth, BigQuery access, CI, security defaults — generated, not copy-pasted from the last person's project.</p>
+          <div class="tag-row"><span>repo</span><span>BQ</span><span>CI/CD</span></div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <h3>Guided build in Claude Code</h3>
+          <p>Step-by-step, written for non-engineers. Pulls in Delphi KB when you need Headout-specific context (e.g. how seat maps work).</p>
+          <div class="tag-row"><span>step-by-step</span><span>Delphi KB</span></div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div>
+          <h3>Ship → auto-review → auto-list</h3>
+          <p>Finished tool gets reviewed, deployed, and listed back into the catalog automatically. No manual DM-ing your team about it.</p>
+          <div class="tag-row"><span>review</span><span>deploy</span><span>list</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="publish-note">Stuck at any step? Escalates to a human on your team — you're never fully blocked.</div>
+  </section>
+
+</main>
+
+<script>
+  const buttons = document.querySelectorAll('nav button');
+  function showView(id){
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    buttons.forEach(b => b.classList.toggle('active', b.dataset.view === id));
+  }
+  buttons.forEach(b => b.addEventListener('click', () => showView(b.dataset.view)));
+
+  const browseSearch = document.querySelector('.browse-search');
+  const toolCards = document.querySelectorAll('#browse .tool-card');
+  browseSearch.addEventListener('input', () => {
+    const q = browseSearch.value.toLowerCase();
+    toolCards.forEach(card => {
+      card.style.display = card.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  });
+</script>
+
+</body>
+</html>
