@@ -10,6 +10,7 @@ import {
 import { Button, ButtonLink } from "@/components/Button";
 import { BriefCard } from "@/components/BriefCard";
 import { ChecklistCard } from "@/components/ChecklistCard";
+import { EscalateCard } from "@/components/EscalateCard";
 import { KillCard } from "@/components/KillCard";
 import { ReviewCard } from "@/components/ReviewCard";
 import { ScaffoldCard } from "@/components/ScaffoldCard";
@@ -26,6 +27,7 @@ import {
   type BriefPayload,
   type BuilderId,
   type ChatTurn,
+  type EscalatePayload,
   type FunnelStage,
   type KillPayload,
   type ReviewResult,
@@ -60,6 +62,7 @@ const JOURNEY_PILL_LABELS: Partial<Record<FunnelStage, string>> = {
   scope: "Scoping",
   brief: "Writing brief",
   kill: "Redirected",
+  escalate: "Needs eng team",
   handoff: "Building",
   register: "Registering",
 };
@@ -78,6 +81,7 @@ type ChatMessage = {
   registration?: { url: string | null } | null;
   briefPayload?: BriefPayload | null;
   killPayload?: KillPayload | null;
+  escalatePayload?: EscalatePayload | null;
   userQuery?: string;
   addReady?: boolean;
   addDraft?: ToolPreview;
@@ -321,6 +325,13 @@ export function HomeChat() {
     runAddChatRef.current = runAddChat;
   }, [runAddChat]);
 
+  // Stable ref so runChat can forward an end_scope forwardQuery through
+  // submitText without a circular dep (submitText already depends on
+  // runChat). Populated by the effect right after submitText is defined.
+  const submitTextRef = useRef<
+    ((text: string, overrideOpts?: SendChatOpts & { forceChat?: boolean }) => void) | null
+  >(null);
+
   const runChat = useCallback(
     async (text: string, history: ChatMessage[], opts?: SendChatOpts) => {
       setSending(true);
@@ -344,6 +355,7 @@ export function HomeChat() {
           registration: result.registration,
           briefPayload: result.briefPayload,
           killPayload: result.killPayload,
+          escalatePayload: result.escalatePayload,
           userQuery: text,
         };
         setMessages((prev) => [...prev, newMsg]);
@@ -386,14 +398,36 @@ export function HomeChat() {
         }
 
         // Critique session resolved — exit scope mode.
-        if (result.stage === "brief" || result.stage === "kill" || result.stage === "scope_exit") {
+        if (
+          result.stage === "brief" ||
+          result.stage === "kill" ||
+          result.stage === "escalate" ||
+          result.stage === "scope_exit"
+        ) {
           setInScopeMode(false);
           if (result.stage === "scope_exit") {
+            // An exit is exactly that — never leave a stale brief/journey
+            // card rendering from before the scope session started.
             setJourneyPhase(null);
+            setActiveBrief(null);
+            setScaffoldResult(null);
+            setReviewResult(null);
+
+            // The critique agent's end_scope call can carry an actionable
+            // request from the user's exit message (e.g. "show me the
+            // registry instead") — forward it as a normal search instead of
+            // just acknowledging the exit and dead-ending. Deferred so it
+            // runs after `sending` is cleared in `finally` below (submitText
+            // no-ops while sending is true).
+            if (result.forwardQuery) {
+              const forwardQuery = result.forwardQuery;
+              setTimeout(() => submitTextRef.current?.(forwardQuery, { forceChat: true }), 0);
+            }
           }
         }
 
-        // Kill — no extra journey state needed, just show the kill card in the message.
+        // Kill / escalate — no extra journey state needed, just show the
+        // matching card in the message (KillCard / EscalateCard).
       } catch {
         setError("The catalogue assistant is unavailable right now — try again.");
       } finally {
@@ -510,6 +544,10 @@ export function HomeChat() {
     [addMode, addUrl, inScopeMode, journeyPhase, runAddChat, runChat, sending],
   );
 
+  useEffect(() => {
+    submitTextRef.current = submitText;
+  }, [submitText]);
+
   // Load (or reset) the conversation as the `?c=` param changes, but skip the
   // one we just created locally so we don't clobber the in-progress thread.
   useEffect(() => {
@@ -553,36 +591,40 @@ export function HomeChat() {
           registration: m.registration,
           briefPayload: m.briefPayload,
           killPayload: m.killPayload,
+          escalatePayload: m.escalatePayload,
           userQuery: m.userQuery ?? undefined,
         }));
         setMessages(mapped);
 
+        // Reset every journey/add-mode variable unconditionally before
+        // applying this conversation's own state below. Previously each
+        // branch below set its own subset, so scaffoldResult/reviewResult
+        // were never cleared by ANY branch — switching from a conversation
+        // that had reached "scaffold"/"review"/"live" to one that never
+        // touched the journey (e.g. a plain search, stage "chat") left the
+        // old repo/scaffold cards rendering on top of the new conversation.
+        // Reset-then-set means no branch can forget to clear something.
+        setAddMode(false);
+        setAddUrl("");
+        setAddDraft(null);
+        setAddTurns([]);
+        setInScopeMode(false);
+        setJourneyPhase(null);
+        setActiveBrief(null);
+        setScaffoldResult(null);
+        setReviewResult(null);
+
         const lastAssistant = [...mapped].reverse().find((m) => m.role === "assistant");
         if (lastAssistant?.stage === "register") {
           setAddMode(true);
-          setAddUrl("");
-          setAddDraft(null);
-          setAddTurns([]);
-          setInScopeMode(false);
         } else if (lastAssistant?.stage === "brief" && lastAssistant.briefPayload) {
           setActiveBrief(lastAssistant.briefPayload);
           setJourneyPhase("brief");
-          setAddMode(false);
-          setInScopeMode(false);
         } else if (lastAssistant?.stage === "scope") {
-          setAddMode(false);
           setInScopeMode(true);
-        } else if (
-          lastAssistant?.stage === "scope_exit" ||
-          lastAssistant?.stage === "kill"
-        ) {
-          setAddMode(false);
-          setInScopeMode(false);
-          setJourneyPhase(null);
-        } else {
-          setAddMode(false);
-          setInScopeMode(false);
         }
+        // scope_exit / kill / escalate / chat / handoff / disambiguation:
+        // the unconditional reset above already leaves everything cleared.
       })
       .catch(() => {
         if (loadedConvRef.current !== c) return;
@@ -653,6 +695,7 @@ export function HomeChat() {
     lastMessage.stage !== "scope" &&
     lastMessage.stage !== "brief" &&
     lastMessage.stage !== "kill" &&
+    lastMessage.stage !== "escalate" &&
     journeyPhase === null &&
     !addMode;
 
@@ -759,6 +802,10 @@ export function HomeChat() {
                 {/* kill card */}
                 {message.stage === "kill" && message.killPayload && (
                   <KillCard kill={message.killPayload} />
+                )}
+
+                {message.stage === "escalate" && message.escalatePayload && (
+                  <EscalateCard escalate={message.escalatePayload} />
                 )}
 
                 {/* Handoff card — deprecated for build flows; only ever rendered on the

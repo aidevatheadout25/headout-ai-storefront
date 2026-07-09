@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createBrief, scaffoldRepo, updateBrief, type BriefPayload, type ScaffoldResult } from "@/lib/api";
+import { createBrief, scaffoldRepo, updateBrief, type BriefPayload, type Modality, type ScaffoldResult } from "@/lib/api";
 import { Button } from "@/components/Button";
 
 type Props = {
@@ -160,16 +160,18 @@ export function BriefCard({ brief: initialBrief, onScaffold }: Props) {
         />
         <div className="brief-card__row">
           <div className="brief-card__field brief-card__field--inline">
-            <label className="brief-card__label t-label-sm">App class</label>
+            <label className="brief-card__label t-label-sm">Modality</label>
             <select
               className="brief-card__select t-para-sm"
-              value={brief.appClass}
-              onChange={(e) =>
-                handleChange("appClass", e.target.value as "micro" | "full")
-              }
+              value={brief.modality}
+              onChange={(e) => handleChange("modality", e.target.value as Modality)}
             >
-              <option value="micro">Micro (script / skill / bot)</option>
-              <option value="full">Full (UI + backend app)</option>
+              <option value="skill">Claude skill (text-in, artifact-out, no hosting)</option>
+              <option value="mcp">MCP server (machine-callable, no UI)</option>
+              <option value="zap">Zap (no-code scheduled workflow)</option>
+              <option value="script">Script (one-off / dev-side automation)</option>
+              <option value="micro_app">Micro app (small UI + backend, one job)</option>
+              <option value="full_app">Full app (multi-user, multiple integrations)</option>
             </select>
           </div>
           <div className="brief-card__field brief-card__field--inline">
@@ -181,11 +183,16 @@ export function BriefCard({ brief: initialBrief, onScaffold }: Props) {
                 handleChange("risk", e.target.value as "low" | "high")
               }
             >
-              <option value="low">Low (internal, small audience)</option>
-              <option value="high">High (customer-facing / financial)</option>
+              <option value="low">Low (internal, non-sensitive data)</option>
+              <option value="high">High (PII, financial, regulated, or customer-facing)</option>
             </select>
           </div>
         </div>
+        <FieldInput
+          label="Why this modality?"
+          value={brief.modalityReason}
+          onChange={(v) => handleChange("modalityReason", v)}
+        />
       </div>
 
       {error && <p className="brief-card__error t-para-sm">{error}</p>}

@@ -32,7 +32,23 @@ export type FunnelStage =
   | "scope_exit"
   | "brief"
   | "kill"
+  | "escalate"
   | "disambiguation";
+
+/**
+ * The shape a build should take — see chatAgent.ts's Modality type (the
+ * server-side source of truth; this is a plain mirror, this repo has no
+ * shared type package between the two).
+ */
+export type Modality =
+  | "no_build"
+  | "skill"
+  | "mcp"
+  | "zap"
+  | "script"
+  | "micro_app"
+  | "full_app"
+  | "eng_project";
 
 export type BriefPayload = {
   conversationId?: string;
@@ -43,14 +59,25 @@ export type BriefPayload = {
   frequency: string;
   mustDo: string[];
   wontDo: string[];
-  appClass: "micro" | "full";
+  modality: Modality;
+  modalityReason: string;
   risk: "low" | "high";
 };
 
 export type KillPayload = {
+  modality: "no_build";
   reason: string;
   alternative: string;
   alternativeUrl?: string;
+};
+
+/** Produced by escalate_to_eng: a short project pitch instead of a self-serve repo. */
+export type EscalatePayload = {
+  modality: "eng_project";
+  problem: string;
+  whyLoadBearing: string;
+  suggestedOwningTeams: string;
+  roughShape: string;
 };
 
 export type ChatResult = {
@@ -66,6 +93,12 @@ export type ChatResult = {
   briefPayload: BriefPayload | null;
   /** Set when stage === "kill": the kill recommendation from the critique agent. */
   killPayload: KillPayload | null;
+  /** Set when stage === "escalate": the project pitch from the critique agent. */
+  escalatePayload: EscalatePayload | null;
+  /** Set when stage === "scope_exit" and the user's exit message had an
+   *  actionable request (e.g. "show me the registry instead") — forward it
+   *  as a new search rather than dead-ending on the acknowledgement. */
+  forwardQuery: string | null;
   conversationId: string;
 };
 
@@ -89,6 +122,7 @@ export type SavedMessage = {
   registration: { url: string | null } | null;
   briefPayload: BriefPayload | null;
   killPayload: KillPayload | null;
+  escalatePayload: EscalatePayload | null;
   userQuery: string | null;
   createdAt: string;
 };
