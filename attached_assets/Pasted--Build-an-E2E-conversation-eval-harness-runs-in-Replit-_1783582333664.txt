@@ -1,0 +1,53 @@
+# Build an E2E conversation eval harness (runs in Replit, produces a report)
+
+## Why
+
+We've been manually paste-testing multi-turn conversations one turn at a time. Replace that with a scripted harness that runs whole conversations through the real chat pipeline and dumps a structured report, so fixes come from data, not turn-by-turn guessing. The harness must run where the env exists (Replit: DB + Anthropic keys) — you author it here and typecheck; I run it in Replit.
+
+## What it does
+
+A script (put it in `artifacts/api-server/src/eval/e2eConversations.ts`, runnable via the existing `tsx` setup) that:
+
+1. Defines ~12 **scenario scripts**, each a fixed ordered list of user messages (the agent's questions vary, so we send a fixed user sequence and capture whatever outcome results — we care about the final state, not matching each question).
+2. Runs each script through the real `runChat` loop (same entry the API uses), threading conversation state exactly as the app does, including the `mode: "scope"` flag once a scope handoff occurs.
+3. For each scenario, captures and logs:
+   - the full transcript (each user + assistant turn, and any tool call name: `draft_brief` / `recommend_kill` / `end_scope` / `search_catalogue` / `start_registration`)
+   - **final stage**
+   - **the raw `briefPayload`** — every field (title, problem, users, frequency, mustDo, wontDo, appClass, risk) — so we can see if any are empty
+   - `killPayload` if present (reason, alternative)
+   - **number of assistant questions asked before an outcome** (count of assistant turns that end in a question mark before draft_brief/kill)
+   - whether the assistant text ever contains "MCP", "skill", "Zap", "engineering team", "platform team"
+4. Writes a markdown report to `artifacts/api-server/src/eval/e2e-report.md`: one section per scenario with the captured fields, plus a summary table at top (scenario | final stage | appClass | risk | # questions | brief empty? | modality named?).
+
+## Scenario scripts (user-message sequences)
+
+Use these exact sequences. Where a scope handoff is expected, include "Let's scope the idea — I want to build it" as the turn that enters scope, then the answers.
+
+1. **Reuse (should find existing):** ["Something to track A/B experiment results"]
+2. **MCP case:** ["Our support agents keep needing supplier contract terms but there's no clean way for a tool to pull them", "Let's scope the idea — I want to build it", "They're AI agents resolving tickets automatically, no human in the loop, hundreds of suppliers queried constantly", "Mostly machine-readable PDFs and structured data", "A few agent pipelines but thousands of queries a day", "Both structured fields and raw clause text", "Legal and Procurement own them and must sign off on exposed fields"]
+3. **Skill case:** ["Every week I write SEO briefs for new experience pages and it eats half a day", "Let's scope the idea — I want to build it", "It's just me and two others, but the format and research steps are the same every time", "Output is a doc we paste into the CMS"]
+4. **Zap case:** ["I want our daily bookings numbers to auto-post to a Slack channel every morning", "Let's scope the idea — I want to build it", "Just a scheduled summary, no interaction needed", "Whole revenue team reads it, every morning"]
+5. **No-build / Claude-native (should kill):** ["I need to summarize this quarter's NPS verbatim comments into themes", "Let's scope the idea — I want to build it", "It's a one-time analysis for the quarterly review"]
+6. **One-off script (should kill/redirect):** ["I need to bulk-rename 500 image files in our asset bucket", "Let's scope the idea — I want to build it", "One time, just this migration"]
+7. **Full app (known-good):** ["HR wants to upload a sheet of role requirements and get back candidate profiles with emails", "Let's scope the idea — I want to build it", "HR recruiters, 3-4 of them, a few times a week", "A human reviews before any email is sent", "Internal HR only"]
+8. **Too big / eng-team:** ["I want a system that dynamically reprices every experience based on live demand", "Let's scope the idea — I want to build it", "It would touch every experience and feed the live pricing engine", "Pricing and data science teams"]
+9. **Vague intent:** ["I want to build something new", "A tool that helps ops track supplier response times", "Ops team, daily"]
+10. **Registration:** ["I built a refund classifier and want to list it"]
+11. **Browse:** ["Show me all the MCPs we have"]
+12. **Off-mission:** ["Write me a poem about Headout"]
+
+## What the report should make obvious
+
+- Empty `briefPayload` fields (the bug we just saw) — flag any brief with blank required fields.
+- `appClass` flattening — scenarios 2 (MCP), 3 (skill), 4 (Zap) all forced into micro/full with no way to express their true modality.
+- Risk mismatches — scenario 2 handles sensitive Legal/Procurement data → should be High; flag if Low.
+- Over-questioning — flag any scope session with >6 assistant questions.
+- Outcome-taxonomy gaps — scenario 8 says "eng team" in text but still ends in a `draft_brief` with a repo (contradiction); scenarios 5/6 should be `recommend_kill` not brief.
+
+## Validation
+
+Typecheck only — do NOT run it here (no DB/Anthropic env). It reuses the real Anthropic client, so it only runs in Replit. Commit it; I'll run `tsx artifacts/api-server/src/eval/e2eConversations.ts` in Replit and share `e2e-report.md`. Keep the harness read-only against the catalogue where possible; if a scenario would insert a built tool, stop before the real `insertTool` (we don't want the eval polluting the catalogue) — capture the intended payload instead of committing it.
+
+## Out of scope
+
+Don't fix any of the bugs yet — this harness only *measures*. Once I share the report, we'll fix from it in one pass.
