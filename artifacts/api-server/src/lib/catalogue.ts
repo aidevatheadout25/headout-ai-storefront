@@ -117,6 +117,17 @@ export function toolEmbeddingText(input: {
 export const MIN_MATCH_SIMILARITY = 0.38;
 
 /**
+ * Test-only seam, mirroring the one in verifyCapability.ts. In production this
+ * object is untouched (its property is null) and searchCatalogue runs the real
+ * embed + pgvector query. In tests, set `_testOverrides.searchImpl` to a stub
+ * before calling runChat so routing (strong match / near-miss / no match) is
+ * deterministic instead of depending on live embeddings.
+ */
+export const _testOverrides: {
+  searchImpl: ((query: string, k: number) => Promise<ApiTool[]>) | null;
+} = { searchImpl: null };
+
+/**
  * Semantic search: embed the query, rank rows by cosine similarity in pgvector.
  * This is the single tool the chat agent can call.
  */
@@ -124,6 +135,10 @@ export async function searchCatalogue(
   query: string,
   k = 6,
 ): Promise<ApiTool[]> {
+  if (_testOverrides.searchImpl) {
+    return _testOverrides.searchImpl(query, k);
+  }
+
   const trimmed = query.trim();
   if (!trimmed) return [];
 

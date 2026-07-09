@@ -103,7 +103,7 @@ export type ChatResult = {
 
 const SYSTEM_PROMPT = `You are the AI PM advisor for Headout's internal AI Storefront — the platform where Headout teams discover, use, and register internal AI tools.
 
-Your job is search and routing: find something that already exists, or route the person to the right next step when nothing does. You are not the one who scopes a build — that's a separate specialist's job (see below). Be warm, direct, and honest.
+Your job is search and routing: find something that already exists, or plainly acknowledge when nothing does. You do not scope new builds yourself (see below). Be warm, direct, and honest.
 
 ━━ REGISTRATION — CHECK THIS FIRST ━━
 Before anything else, check if the user is signalling they already built something and want it listed.
@@ -120,7 +120,7 @@ For any capability or problem, call search_catalogue before saying anything else
 If strong matches come back: name each one (exact name from the results) with one sentence on why it fits — the UI renders a card for every tool you name. Ask if any of these cover their need.
 
 2. NOTHING FITS → HAND OFF, DON'T INTERVIEW.
-If nothing fits, say so in one or two plain sentences. You do not run a scoping interview — you never ask about outcome, frequency, audience, or feasibility, and there is no record_recommendation tool or approval step for you to call. That entire job belongs to a separate scoping specialist the system routes to automatically once it's clear the person wants something built. Your only job here is to acknowledge the gap plainly; do not attempt to recommend a builder, a path, or a "don't build this" verdict yourself.
+If nothing fits, say so in one plain sentence, e.g. "Nothing in the catalogue covers this — let's scope it properly." You do not run a scoping interview — you never ask about outcome, frequency, audience, or feasibility, and there is no record_recommendation tool or approval step for you to call. Do not attempt to recommend a builder, a path, or a "don't build this" verdict yourself, and do not narrate how the handoff works or who picks it up next — just acknowledge the gap and stop.
 
 If the ask is too vague to search on at all (e.g. "I want to build something new" with no description of what), ask exactly one question — what are they trying to build — and stop there. Once they answer, search on that answer before doing anything else.
 
@@ -128,7 +128,7 @@ If the ask is too vague to search on at all (e.g. "I want to build something new
 Before asserting any negative capability claim about Claude or ChatGPT ("X can't do Y"), call verify_capability(platform, capability) first. If the result is supported=true, treat it as confirmed — don't assert a limitation that doesn't exist. If the result is unknown, say you're not certain and suggest the user verify before assuming a limitation.
 
 ━━ PLATFORM TEAM ━━
-Only ever mention the platform team on Slack for API keys, credentials, or access provisioning. Never for hosting, infra, architecture, or general build advice — that's the scoping specialist's territory, not yours.
+Only ever mention the platform team on Slack for API keys, credentials, or access provisioning. Never for hosting, infra, architecture, or general build advice — that's not something to explain or route yourself.
 
 ━━ BROWSING THE CATALOGUE ━━
 When a user wants to explore rather than search — "show me all data tools", "what has the ops team built?", "list all Claude skills" — call browse_catalogue with the appropriate type and/or team filters. Present results the same way as search: name each tool with one sentence on what it does. The UI renders a card for every tool you name.
@@ -458,8 +458,8 @@ Near-misses from the catalogue:
 ${nearMissLines}
 
 ━━ YOUR APPROACH ━━
-1. Ask ONE focused question at a time — maximum 6 questions total across the session.
-2. Challenge grounded in the near-misses: ask if the existing tools could solve this with a workflow change.
+1. OPEN WITH A CHALLENGE, not a data-gathering question. Your very first message must push back on the idea itself — kill it outright, propose reshaping it into something smaller, or point at a near-miss and ask why it doesn't already cover this. Only move to gathering requirements once the idea survives that pushback.
+2. From there, ask ONE focused question at a time — maximum 6 questions total across the whole session. This is a sharp challenge, not gate-by-gate requirements gathering.
 3. After two justified pushbacks from the user ("no, that doesn't work because X"), concede and proceed.
 4. Be direct. Warm but honest. No sycophancy. If it's a one-off task, say so plainly.
 
@@ -613,12 +613,22 @@ export type ChatUserContext = {
 
 const SCOPE_MAX_TURNS = 12;
 
+/**
+ * Test-only seam: records the searchContext every runScopeChat call was
+ * entered with, so tests can assert what travelled with a handoff without
+ * depending on LLM phrasing. Untouched (null) in production.
+ */
+export const _testOverrides: {
+  lastScopeSearchContext: { query: string; nearMisses: { name: string; oneLiner: string }[] } | null;
+} = { lastScopeSearchContext: null };
+
 /** Run the critique/scope loop when the user chose "Let's scope it." */
 async function runScopeChat(
   history: ChatTurn[],
   userContext?: ChatUserContext,
 ): Promise<ChatResult> {
   const searchContext = userContext?.searchContext ?? extractSearchContext(history);
+  _testOverrides.lastScopeSearchContext = searchContext;
   const systemPrompt = buildScopeSystemPrompt(searchContext);
 
   const messages: Anthropic.MessageParam[] = history.map((turn) => ({
@@ -793,6 +803,7 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
 
   const found = new Map<string, ApiTool>();
   let registration: { url: string | null } | null = null;
+  let hasSearched = false;
   let lastSearchQuery = "";
   let lastSearchNearMisses: { name: string; oneLiner: string }[] = [];
 
@@ -1015,6 +1026,7 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
         (t) => (t.similarity ?? 0) >= MIN_MATCH_SIMILARITY,
       );
       for (const tool of strong) found.set(tool.id, tool);
+      hasSearched = true;
       lastSearchQuery = query;
       lastSearchNearMisses = results
         .slice(0, 3)
@@ -1037,11 +1049,14 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
       });
     }
 
-    // Build-shaped ask, searched, nothing fits — hand off to the critique
-    // agent directly instead of looping back into the concierge. This is the
-    // one no-LLM-text handoff: the critique agent's first question is the
-    // reply the user sees.
-    if (buildShaped && turn === 0 && found.size === 0) {
+    // Build-shaped ask, searched, no strong match (zero results or only
+    // near-misses) — hand off to the critique agent directly instead of
+    // looping back into the concierge. This is the one no-LLM-text handoff:
+    // the critique agent's first question is the reply the user sees. Not
+    // gated to turn === 0: a reformulated re-search on a later turn (the
+    // concierge's own "try once more with different phrasing" behaviour)
+    // must hand off too, not just the very first search.
+    if (buildShaped && hasSearched && found.size === 0) {
       return runScopeChat(history, {
         ...userContext,
         searchContext: {
