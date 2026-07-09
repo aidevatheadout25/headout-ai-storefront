@@ -1,0 +1,52 @@
+# Unify the build flow — one scoping owner, no link spam
+
+**The bug, from a real transcript:** a user typed "I am trying to build something new" and got the *legacy* concierge handoff flow — a duplicate scoping interview (audience, frequency) ending in a Zeps/Replit/Claude-Code link dump — instead of the Builder journey (critique → brief → scaffold). Worse, the "Nothing existing fits, so here's how to build it" card with all six links rendered after **every** agent message, including mid-interview questions, and the "recommended path first" ordering reshuffled on each turn.
+
+Root cause: two parallel scoping flows exist. The new critique agent only triggers via the fork chip's explicit `mode: "scope"` flag or the launcher chip's exact synthetic message. Any *typed* build intent falls through to the old concierge behavior (its own interview + `record_recommendation` → handoff links, force-called after 3 user turns).
+
+Scope discipline: exactly the changes below. No refactors, no other fixes.
+
+## 1. Typed build intent routes to scope mode
+
+Add build-intent detection alongside the existing `REGISTRATION_PATTERNS` mechanism in `chatAgent.ts` — patterns like: "I want to build", "I'm trying to build", "I am building", "help me build", "I want to create a tool/app", "scope an idea". Two cases:
+
+- **First-turn build intent with a describable idea** ("I want to build X"): run the catalogue search first (the exists-check must still happen — that's the product's core rule). If adequate matches exist, show them as usual. If not, respond with one short line ("Nothing in the catalogue does this — let's scope it properly") and **enter scope mode directly**, carrying the query + near-misses as search context. Signal the client (e.g. return `stage: "scope"` with a flag like `scopeEntered: true`) so it sets `inScopeMode = true` and subsequent messages send `mode: "scope"`.
+- **Vague build intent** ("I am trying to build something new", no idea described): ask what they're trying to build (this already happens), and when they answer with the idea, apply the same search-first-then-scope routing above — NOT the legacy interview.
+
+## 2. Kill the legacy scoping interview
+
+The concierge's system prompt currently instructs it to interview build ideas (frequency, audience) and call `record_recommendation`. That is now the critique agent's job. Update the concierge prompt: on no-match, it either (a) offers the scope fork for build-shaped requests, or (b) suggests requesting on Slack for non-build requests. It must NOT run multi-turn scoping interviews or call `record_recommendation` repeatedly. Remove or gate the forced `record_recommendation` after 3 user turns for build-intent conversations — that's what spams the card.
+
+`record_recommendation` / the handoff links remain valid ONLY as a single, final resolution — e.g. when the critique agent's `recommend_kill` alternative is "this is a Zeps workflow, not an app" or the user explicitly declines scoping and just wants pointers.
+
+## 3. Handoff card renders once, at resolution only
+
+Frontend (`HomeChat.tsx`): the "Nothing existing fits, so here's how to build it" card must never render on a message that is a question / mid-conversation turn. Render it only when the turn is a final recommendation (stage `handoff` should now only occur at resolution per item 2). If history contains multiple handoff messages (old conversations), render the card only on the latest.
+
+## 4. Stable, explained ordering
+
+When the handoff card does render: fix the option order (recommended path first, then the rest in a constant order — not reshuffled per turn), and add one line under the recommended option saying *why* ("Recommended because: daily use + needs a UI → real app"). The agent already produces this reasoning in prose; surface it on the card instead of leaving the links unexplained.
+
+## 5. Self-serve principle — stop punting to the platform team
+
+**Product rule:** the whole point of this app is that users build things themselves without depending on the platform team. The transcript shows the agent doing the opposite: "If you'd rather not build the infrastructure yourself, reach out to the platform team on Slack — they may be able to advise on hosting or shared API key management."
+
+Encode this in both agent prompts (concierge + critique):
+
+- The platform team may be mentioned for **exactly one thing: API keys, credentials, and access provisioning** (e.g. "you'll need an Apify key — the platform team manages shared API credentials"). Never for hosting advice, infrastructure, architecture, "they can help you build", or general guidance.
+- Every other need must resolve to a self-serve path: Zeps for workflows, a Claude skill, Replit, Claude Code, or the scaffold. If the idea is genuinely too big for self-serve (full-platform class), the honest answer is "this needs an engineering team and a project — here's how to pitch it", not "ask the platform team".
+- "Request it on Slack" stays available on the resolution card as the explicit *I-don't-want-to-build-it* opt-out — but the agent doesn't steer people there.
+
+Add a regression check: the critique conversation for an infrastructure-heavy idea (like the HR sourcing transcript) mentions the platform team only in the context of API keys, or not at all.
+
+## 6. Regression tests
+
+- "I want to build a tool that does <specific thing not in catalogue>" → search runs, then `stage: "scope"` (not handoff) within 2 turns.
+- A scope-mode conversation never returns `stage: "handoff"` mid-interview.
+- Existing tests green (`pnpm --filter @workspace/api-server run test`).
+
+## Acceptance walkthrough
+
+Replay the failing transcript: "I am trying to build something new" → agent asks what → describe the HR sourcing idea → catalogue searched, nothing fits → **scope mode entered** (mode pill flips to Scoping) → critique interview → brief card with "Create my repo". No link-dump card at any point before resolution. The Zeps/Slack links appear at most once, in a kill recommendation or explicit user opt-out, with stable ordering and a stated reason.
+
+Update `replit.md`: build intent routing (search-first → scope), the single-resolution rule for handoff links.
