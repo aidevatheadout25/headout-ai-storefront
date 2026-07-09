@@ -122,6 +122,8 @@ If strong matches come back: name each one (exact name from the results) with on
 2. NOTHING FITS → HAND OFF, DON'T INTERVIEW.
 If nothing fits, say so in one plain sentence, e.g. "Nothing in the catalogue covers this — let's scope it properly." You do not run a scoping interview — you never ask about outcome, frequency, audience, or feasibility, and there is no record_recommendation tool or approval step for you to call. Do not attempt to recommend a builder, a path, or a "don't build this" verdict yourself, and do not narrate how the handoff works or who picks it up next — just acknowledge the gap and stop.
 
+Scoping a build is NOT a separate team's job, not a different product, and not something that happens "elsewhere" — it happens right here, in this same chat, once the person confirms they want to build. Never say (or imply) any version of: "I'm not the right place for that," "take this to the team who can build it," "I don't scope," "there's nothing more I can do here," or "someone else handles that." If you catch yourself about to say the person needs to go somewhere else to scope a build, stop — say the one-line acknowledgement above instead and nothing more.
+
 If the ask is too vague to search on at all (e.g. "I want to build something new" with no description of what), ask exactly one question — what are they trying to build — and stop there. Once they answer, search on that answer before doing anything else.
 
 ━━ CAPABILITY CLAIMS ━━
@@ -485,13 +487,23 @@ If the user says something that is clearly a mode-switch or off-topic (e.g. "sho
 - Only mention the platform team on Slack for API keys, credentials, or access provisioning — never for hosting, infra, architecture, or general build advice. If the idea is genuinely too big for any self-serve path (Zeps, a Claude skill, Replit, Claude Code), say plainly that it needs an engineering team and a project pitch — don't point at the platform team instead.`;
 }
 
+/**
+ * The last user message that isn't the "let's scope it" meta-trigger — i.e.
+ * the actual problem description to search/scope on, not the chip text that
+ * requested scoping. Used so a click/typed "let's scope it" doesn't itself
+ * become the search query.
+ */
+function findMeaningfulUserMessage(history: ChatTurn[]): ChatTurn | undefined {
+  return [...history]
+    .reverse()
+    .find((t) => t.role === "user" && !/let['']?s?\s+scope/i.test(t.content));
+}
+
 /** Extract the search context from the chat history (last user query, no near-misses). */
 function extractSearchContext(
   history: ChatTurn[],
 ): { query: string; nearMisses: { name: string; oneLiner: string }[] } {
-  const lastUserMsg = [...history]
-    .reverse()
-    .find((t) => t.role === "user" && !/let['']?s?\s+scope/i.test(t.content));
+  const lastUserMsg = findMeaningfulUserMessage(history);
   return { query: lastUserMsg?.content.slice(0, 120) ?? "", nearMisses: [] };
 }
 
@@ -769,6 +781,50 @@ async function runScopeChat(
   );
 }
 
+/** Deterministic presentation of a reuse match — no LLM call, so there's nothing to non-deterministically skip. */
+function renderStrongMatchMessage(matches: ApiTool[]): string {
+  if (matches.length === 1) {
+    const m = matches[0];
+    return `**${m.name}** already does this — ${m.oneLiner} Does that cover what you need, or is there a gap it doesn't handle?`;
+  }
+  const lines = matches.map((t) => `- **${t.name}** — ${t.oneLiner}`).join("\n");
+  return `A few things in the catalogue already cover this:\n${lines}\n\nDo any of these work, or is there a gap they don't handle?`;
+}
+
+/**
+ * Deterministic routing for a build-shaped ask (typed build intent, the
+ * clarifier follow-up, or the "let's scope it" chip/text trigger).
+ *
+ * Phase 1 fix: this used to run through the concierge's own agentic tool
+ * loop with tool_choice forced to search_catalogue only on turn 0. That made
+ * "hand off to scope" depend on the LLM's tool call actually landing the way
+ * the code expected — fragile, and impossible to reason about as a contract.
+ * Now the search is a direct code call, and the branch (reuse vs. handoff) is
+ * decided in code too. The concierge LLM is never involved in this decision.
+ */
+async function routeBuildShapedAsk(
+  history: ChatTurn[],
+  lastUserMessage: string,
+  userContext: ChatUserContext | undefined,
+): Promise<ChatResult> {
+  const meaningful = findMeaningfulUserMessage(history);
+  const query = (meaningful?.content ?? lastUserMessage).trim();
+  const results = await searchCatalogue(query, 6);
+  const strong = results.filter((t) => (t.similarity ?? 0) >= MIN_MATCH_SIMILARITY);
+
+  if (strong.length === 0) {
+    return runScopeChat(history, {
+      ...userContext,
+      searchContext: {
+        query: query.slice(0, 120),
+        nearMisses: results.slice(0, 3).map((t) => ({ name: t.name, oneLiner: t.oneLiner })),
+      },
+    });
+  }
+
+  return buildResult(renderStrongMatchMessage(strong), strong, null, { stage: "chat" });
+}
+
 export async function runChat(history: ChatTurn[], userContext?: ChatUserContext): Promise<ChatResult> {
   // ── Scope / critique mode — trust the explicit flag from the client ────────
   if (userContext?.mode === "scope") {
@@ -790,11 +846,19 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
   }
 
   // Build-shaped ask (typed intent, or the answer to the clarifier above) —
-  // search first, then hand off straight to the critique agent on no-match.
-  // The concierge never runs its own scoping interview.
+  // routed entirely in code (see routeBuildShapedAsk): search first, then
+  // either return a reuse match or hand off straight to the critique agent.
+  // The concierge LLM is never in the loop for this decision — see Phase 1
+  // in the consolidated agent fix for why (the old tool-forced-on-turn-0
+  // approach made the handoff depend on the LLM's tool call landing exactly
+  // as expected, which wasn't reliable).
   const buildShaped =
     !forceRegisterOnFirstTurn &&
     (isBuildIntent(lastUserMessage) || followsBuildClarifier(history));
+
+  if (buildShaped) {
+    return routeBuildShapedAsk(history, lastUserMessage, userContext);
+  }
 
   const messages: Anthropic.MessageParam[] = history.map((turn) => ({
     role: turn.role,
@@ -803,17 +867,12 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
 
   const found = new Map<string, ApiTool>();
   let registration: { url: string | null } | null = null;
-  let hasSearched = false;
-  let lastSearchQuery = "";
-  let lastSearchNearMisses: { name: string; oneLiner: string }[] = [];
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const toolChoice: Anthropic.MessageCreateParams["tool_choice"] =
       turn === 0 && forceRegisterOnFirstTurn
         ? { type: "tool", name: "start_registration" }
-        : turn === 0 && buildShaped
-          ? { type: "tool", name: "search_catalogue" }
-          : { type: "auto" };
+        : { type: "auto" };
 
     const response = await anthropic.messages.create({
       model: MODEL,
@@ -1026,11 +1085,6 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
         (t) => (t.similarity ?? 0) >= MIN_MATCH_SIMILARITY,
       );
       for (const tool of strong) found.set(tool.id, tool);
-      hasSearched = true;
-      lastSearchQuery = query;
-      lastSearchNearMisses = results
-        .slice(0, 3)
-        .map((t) => ({ name: t.name, oneLiner: t.oneLiner }));
       toolResults.push({
         type: "tool_result",
         tool_use_id: block.id,
@@ -1046,23 +1100,6 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
               }))
             : { results: [], note: "No tool met the relevance threshold for this query." },
         ),
-      });
-    }
-
-    // Build-shaped ask, searched, no strong match (zero results or only
-    // near-misses) — hand off to the critique agent directly instead of
-    // looping back into the concierge. This is the one no-LLM-text handoff:
-    // the critique agent's first question is the reply the user sees. Not
-    // gated to turn === 0: a reformulated re-search on a later turn (the
-    // concierge's own "try once more with different phrasing" behaviour)
-    // must hand off too, not just the very first search.
-    if (buildShaped && hasSearched && found.size === 0) {
-      return runScopeChat(history, {
-        ...userContext,
-        searchContext: {
-          query: lastSearchQuery || lastUserMessage.slice(0, 120),
-          nearMisses: lastSearchNearMisses,
-        },
       });
     }
 
