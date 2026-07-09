@@ -306,6 +306,13 @@ export function HomeChat() {
           }
         }
 
+        // The server auto-entered scope mode from typed build intent (not the
+        // fork chip) — keep sending subsequent messages with mode:"scope" so
+        // the critique agent stays in control past this first exchange.
+        if (result.stage === "scope") {
+          setInScopeMode(true);
+        }
+
         // When the critique agent produces a brief, enter the builder journey.
         if (result.stage === "brief" && result.briefPayload) {
           setActiveBrief(result.briefPayload);
@@ -657,8 +664,10 @@ export function HomeChat() {
                   <KillCard kill={message.killPayload} />
                 )}
 
-                {/* Handoff / no-match with scope fork chip */}
+                {/* Handoff card — deprecated for build flows; only ever rendered on the
+                    last message of a legacy/restored conversation, never mid-flow. */}
                 {message.stage === "handoff" &&
+                  message.id === lastMessage?.id &&
                   (() => {
                     const prompt = message.buildPrompt || message.userQuery || message.text;
                     const manual = isManualPath(message.recommendedBuilder);

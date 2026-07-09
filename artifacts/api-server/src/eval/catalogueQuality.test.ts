@@ -172,24 +172,15 @@ describe(
 );
 
 /**
- * Build-gate funnel: building is only ever recommended AFTER search +
- * confirmation + scoping. These pin the staged behaviour so the concierge can
- * never regress to offering a one-click "build" before it has searched and
- * scoped the need.
+ * Concierge = search + route. The critique agent (runScopeChat) is the single
+ * owner of scoping — the concierge never runs its own gate interview and
+ * never hands off to a builder itself. These pin the deterministic routing:
+ * stage, not LLM phrasing, is what's asserted throughout.
  */
 describe(
-  "concierge build-gate funnel",
+  "concierge search + route",
   { skip: AI_READY ? false : "OpenAI AI integration env not set" },
   () => {
-    const ALLOWED_BUILDERS = [
-      "manual",
-      "claude-skill",
-      "replit",
-      "claude-code",
-      "zeps",
-      "real-app",
-    ];
-
     let runChat: typeof import("../lib/chatAgent").runChat;
 
     before(async () => {
@@ -205,16 +196,17 @@ describe(
         },
       ]);
       // Even though the user said "build", the existing tool must surface first
-      // and there must be no build hand-off on this turn.
+      // and the conversation must not be routed into scope mode.
       assert.notEqual(
         res.stage,
-        "handoff",
-        `a 'build me X' with an existing match must not jump to the build hand-off — message: ${res.message}`,
+        "scope",
+        `a 'build me X' with an existing match must not enter scope mode — message: ${res.message}`,
       );
+      assert.notEqual(res.stage, "handoff", "the deprecated handoff stage must never appear");
       assert.equal(
         res.recommendedBuilder,
         null,
-        "no builder should be recommended before scoping",
+        "the concierge never sets a recommended builder — that's the critique agent's job",
       );
       assert.ok(
         res.tools.some((t) => t.name === "Review Radar"),
@@ -224,84 +216,7 @@ describe(
       );
     });
 
-    test("an off-catalogue ask does not hand off to a builder on the first turn", async () => {
-      const res = await runChat([
-        {
-          role: "user",
-          content:
-            "I want to build an internal tool to plan and run my team's quarterly offsite events",
-        },
-      ]);
-      // Nothing exists, but the very first turn must scope (or confirm no match),
-      // never render the build hand-off — there is no one-click build path.
-      assert.notEqual(
-        res.stage,
-        "handoff",
-        `the first turn of an off-catalogue ask must not hand off before scoping — message: ${res.message}`,
-      );
-      assert.equal(res.recommendedBuilder, null);
-    });
-
-    test("the build hand-off only appears after the scoping exchange", async () => {
-      // A conversation where all four gates are satisfied:
-      // (1) reuse-check confirmed nothing fits, (2) concrete scenario given,
-      // (3) feasibility per system confirmed (both have APIs), (4) audience stated.
-      // The next reply should reach the hand-off.
-      const res = await runChat([
-        {
-          role: "user",
-          content:
-            "I want to build an internal tool to plan and run my team's quarterly offsite events",
-        },
-        {
-          role: "assistant",
-          content:
-            "Nothing in the catalogue does that yet. What's one concrete scenario it must handle?",
-        },
-        {
-          role: "user",
-          content:
-            "Our ops lead needs to book a venue and collect RSVPs from about 30 teammates for the offsite.",
-        },
-        {
-          role: "assistant",
-          content:
-            "Got it. You mentioned Google Calendar and Slack — for each one, is there an API or connector available, or is it manual / export-only?",
-        },
-        {
-          role: "user",
-          content:
-            "Both have APIs — we use the Google Calendar API already and have a Slack bot token.",
-        },
-        {
-          role: "assistant",
-          content: "And who will use it, and how often?",
-        },
-        {
-          role: "user",
-          content: "Just our ops lead, a few times a quarter.",
-        },
-      ]);
-      assert.equal(
-        res.stage,
-        "handoff",
-        `after all four gate answers the concierge should hand off — message: ${res.message}`,
-      );
-      assert.ok(
-        res.recommendedBuilder &&
-          ALLOWED_BUILDERS.includes(res.recommendedBuilder),
-        `hand-off must name one of the allowed builders, got: ${res.recommendedBuilder}`,
-      );
-      assert.equal(
-        res.tools.length,
-        0,
-        "the hand-off turn should not recommend catalogue tools",
-      );
-    });
-
     test("reuse-check runs before scoping — existing match is offered before any build question", async () => {
-      // The user asks for something that exists in the catalogue AND says "build me X".
-      // Gate 1 (reuse-check) must fire and present the existing tool before any scoping question.
       const res = await runChat([
         {
           role: "user",
@@ -311,10 +226,10 @@ describe(
       ]);
       assert.notEqual(
         res.stage,
-        "handoff",
-        `a reuse-check turn must not jump to handoff — message: ${res.message}`,
+        "scope",
+        `a reuse-check turn with an existing match must not enter scope mode — message: ${res.message}`,
       );
-      assert.equal(res.recommendedBuilder, null, "no builder before reuse confirmation");
+      assert.equal(res.recommendedBuilder, null);
       assert.ok(
         res.tools.some((t) => t.name === "Competitor Price Watch"),
         `expected "Competitor Price Watch" to be offered in the reuse-check, got: [${res.tools
@@ -323,168 +238,135 @@ describe(
       );
     });
 
-    test("mechanism restatement gets a pushback, not a handoff", async () => {
-      // Gate 2: if the user answers the scenario question with a mechanism restatement,
-      // the concierge must push back exactly once asking for a real trigger+actor+outcome.
+    // (a) A typed build ask for something not in the catalogue reaches scope
+    // mode directly — no four-gate interview, no handoff card.
+    test("(a) 'build a tool for X not in the catalogue' reaches stage 'scope' on the first reply", async () => {
       const res = await runChat([
         {
           role: "user",
           content:
-            "I need a tool that aggregates live availability data from all our experience partners",
-        },
-        {
-          role: "assistant",
-          content:
-            "Nothing in the catalogue does that yet. What's one concrete scenario it must handle — a specific moment with a trigger, an actor, and a desired outcome?",
-        },
-        {
-          role: "user",
-          content:
-            "It pulls availability status from everywhere and shows it in one place.",
-        },
-      ]);
-      // The concierge must NOT hand off on a restatement — it should push back once.
-      assert.notEqual(
-        res.stage,
-        "handoff",
-        `a mechanism restatement must not trigger handoff — message: ${res.message}`,
-      );
-      assert.equal(
-        res.recommendedBuilder,
-        null,
-        "no builder should be recommended on a mechanism restatement",
-      );
-      // The response should ask for a real scenario (trigger, actor, outcome).
-      const lower = res.message.toLowerCase();
-      const asksForScenario =
-        lower.includes("trigger") ||
-        lower.includes("actor") ||
-        lower.includes("outcome") ||
-        lower.includes("specific moment") ||
-        lower.includes("concrete") ||
-        lower.includes("who") ||
-        lower.includes("when");
-      assert.ok(
-        asksForScenario,
-        `expected the concierge to push back asking for a real scenario, got: ${res.message}`,
-      );
-    });
-
-    test("manual-only system produces a manual-first recommendation, not a full build", async () => {
-      // Gate 3: when a key system is manual-only/no-API, the cheapest path is manual/partial.
-      const res = await runChat([
-        {
-          role: "user",
-          content:
-            "I want an internal app that tracks which tour guides are certified for each experience type",
-        },
-        {
-          role: "assistant",
-          content:
-            "Nothing in the catalogue does that yet. What's one concrete scenario it must handle?",
-        },
-        {
-          role: "user",
-          content:
-            "When a new guide joins, the ops lead needs to check which experiences they're certified for and assign them to the right tours.",
-        },
-        {
-          role: "assistant",
-          content:
-            "Got it. Where is the certification data stored — is there an API or connector, or is it manual/export-only?",
-        },
-        {
-          role: "user",
-          content:
-            "It's all in a spreadsheet right now — no API, all manual updates.",
-        },
-        {
-          role: "assistant",
-          content: "And who will use this, and how often?",
-        },
-        {
-          role: "user",
-          content: "Just me, the ops lead. Probably a few times a month.",
+            "I want to build an internal tool to plan and run my team's quarterly offsite events",
         },
       ]);
       assert.equal(
         res.stage,
-        "handoff",
-        `after scoping with a manual-only system the concierge should hand off — message: ${res.message}`,
+        "scope",
+        `an off-catalogue build ask should route straight to the critique agent — got stage "${res.stage}", message: ${res.message}`,
       );
-      assert.equal(
-        res.recommendedBuilder,
-        "manual",
-        `a manual-only system must produce a manual-first recommendation, got: ${res.recommendedBuilder} — message: ${res.message}`,
-      );
-      // Message must explicitly say NOT to build the full app yet.
-      const lower = res.message.toLowerCase();
-      const saysDontBuild =
-        lower.includes("not") ||
-        lower.includes("without building") ||
-        lower.includes("manual") ||
-        lower.includes("spreadsheet") ||
-        lower.includes("tracker") ||
-        lower.includes("don't build") ||
-        lower.includes("no need to build");
-      assert.ok(
-        saysDontBuild,
-        `manual-first message should tell the user not to build the full app yet, got: ${res.message}`,
-      );
+      assert.notEqual(res.stage, "handoff", "the deprecated handoff stage must never appear");
+      assert.equal(res.recommendedBuilder, null);
     });
 
-    test("audience conflict triggers a reconciling question before handoff", async () => {
-      // Gate 4: problem stated "the team" but the user later says "just me" — the concierge
-      // must ask one reconciling question instead of silently proceeding.
+    // (b) The two-turn vague case: a build statement with nothing to search on
+    // gets one deterministic clarifying question, and the follow-up — which
+    // doesn't itself match any build-intent pattern — must still route to
+    // scope because the prior assistant turn was the clarifier.
+    test("(b) vague build statement clarifies once, then the follow-up reaches scope", async () => {
+      const turn1History = [
+        { role: "user" as const, content: "I am trying to build something new" },
+      ];
+      const turn1 = await runChat(turn1History);
+      assert.equal(
+        turn1.stage,
+        "chat",
+        `a vague build statement should get a plain clarifying question, not enter scope yet — message: ${turn1.message}`,
+      );
+      assert.ok(turn1.message.length > 0, "the clarifier must not be empty");
+
+      const turn2History = [
+        ...turn1History,
+        { role: "assistant" as const, content: turn1.message },
+        {
+          role: "user" as const,
+          content:
+            "I want to upload a spreadsheet of candidates, scrape their LinkedIn profiles, and pull their emails automatically.",
+        },
+      ];
+      const turn2 = await runChat(turn2History);
+      assert.equal(
+        turn2.stage,
+        "scope",
+        `the answer to the build clarifier should route to scope even without matching a build-intent pattern itself — message: ${turn2.message}`,
+      );
+      assert.notEqual(turn2.stage, "handoff");
+    });
+
+    // (c) Once in scope mode, a further user turn (mode: "scope", as the
+    // client sends on every subsequent scope message) must still be handled
+    // by the critique agent — proving scope mode persists past the first
+    // exchange. This is the API-level half of the client-wiring fix; the
+    // client sets inScopeMode from a live stage:"scope" response so it keeps
+    // sending mode:"scope" on later turns (see HomeChat.tsx).
+    test("(c) a third turn in an active scope conversation is still handled by the critique agent", async () => {
+      const res = await runChat(
+        [
+          {
+            role: "user",
+            content:
+              "I want to build a tool that automates our weekly ops report",
+          },
+          {
+            role: "assistant",
+            content: "What does the ops report cover, and who reads it each week?",
+          },
+          {
+            role: "user",
+            content:
+              "It pulls numbers from three dashboards every Monday and goes to the whole ops team.",
+          },
+          {
+            role: "assistant",
+            content: "Is there an API for each dashboard, or is it manual/export-only?",
+          },
+          {
+            role: "user",
+            content: "Two have APIs, one is a manual export.",
+          },
+        ],
+        {
+          mode: "scope",
+          searchContext: { query: "automate weekly ops report", nearMisses: [] },
+        },
+      );
+      assert.ok(
+        ["scope", "brief", "kill"].includes(res.stage),
+        `a continued scope conversation must stay with the critique agent — got stage "${res.stage}", message: ${res.message}`,
+      );
+      assert.notEqual(res.stage, "handoff", "the deprecated handoff stage must never appear");
+    });
+
+    // (d) An infra-heavy idea must not get generic "ask the platform team"
+    // advice — platform team may only come up for API keys/credentials, or
+    // not at all.
+    test("(d) an infra-heavy HR sourcing idea mentions the platform team only for API keys, or not at all", async () => {
       const res = await runChat([
         {
           role: "user",
           content:
-            "Our team needs a tool to automatically draft replies to guest complaints from our CRM",
-        },
-        {
-          role: "assistant",
-          content:
-            "Nothing in the catalogue does that exactly. What's one concrete scenario it must handle?",
-        },
-        {
-          role: "user",
-          content:
-            "A support agent gets a 1-star review, pastes the complaint into the tool, and gets a draft reply they can edit and send.",
-        },
-        {
-          role: "assistant",
-          content: "Is there an API for your CRM, or is the data manually copy-pasted?",
-        },
-        {
-          role: "user",
-          content: "The agent would paste the complaint text — no CRM API needed.",
-        },
-        {
-          role: "assistant",
-          content: "And who will use it, and how often?",
-        },
-        {
-          role: "user",
-          content: "Honestly just me for now — I want to test it first.",
+            "I want to build a tool where I upload an Excel sheet of candidates, it scrapes their LinkedIn profiles via Apify, pulls their emails through RocketReach, and writes everything into a Google Sheet.",
         },
       ]);
-      // The concierge must notice the conflict (team → just me) and either ask a
-      // reconciling question OR proceed to a handoff with a cheap path fit for one person.
-      // Either way, if it does hand off, it must not recommend "real-app" or a high-scale path.
-      if (res.stage === "handoff") {
+      assert.equal(
+        res.stage,
+        "scope",
+        `an off-catalogue infra-heavy build ask should route straight to the critique agent — got stage "${res.stage}", message: ${res.message}`,
+      );
+      const lower = res.message.toLowerCase();
+      if (lower.includes("platform team")) {
+        const nearApiKeyContext =
+          lower.includes("api key") ||
+          lower.includes("credential") ||
+          lower.includes("access") ||
+          lower.includes("provision");
         assert.ok(
-          res.recommendedBuilder !== "real-app",
-          `a single-person low-frequency use must not be recommended a full production platform, got: ${res.recommendedBuilder}`,
-        );
-      } else {
-        // It asked a reconciling question — that is also acceptable.
-        assert.equal(
-          res.recommendedBuilder,
-          null,
-          "if not handing off, no builder should be set",
+          nearApiKeyContext,
+          `platform team must only be mentioned for API keys/credentials/access — message: ${res.message}`,
         );
       }
+      assert.ok(
+        !lower.includes("hosting") && !lower.includes("infra") && !lower.includes("architecture"),
+        `the critique agent must not give hosting/infra/architecture advice — message: ${res.message}`,
+      );
     });
 
     test("clear registration intent routes to register stage, not handoff or Slack-only", async () => {
@@ -570,72 +452,6 @@ describe(
       assert.ok(
         !isSlackOnly,
         `a bare URL must not produce a Slack-only reply — message: ${res.message}`,
-      );
-    });
-
-    test("confirmed-feasible UI need produces a builder recommendation referencing the scenario", async () => {
-      // When feasibility is confirmed and a UI is genuinely needed, the recommendation
-      // must reference the concrete scenario and the confirmed system — not a generic pitch.
-      const res = await runChat([
-        {
-          role: "user",
-          content:
-            "I want a small internal app where support leads can see all open refund requests in one view",
-        },
-        {
-          role: "assistant",
-          content:
-            "Nothing in the catalogue does that yet. What's one concrete scenario it must handle?",
-        },
-        {
-          role: "user",
-          content:
-            "A support lead opens the dashboard each morning, sees all pending refunds, and can approve or escalate each one.",
-        },
-        {
-          role: "assistant",
-          content:
-            "Does the refund system have an API your app can call, or is data manually exported?",
-        },
-        {
-          role: "user",
-          content: "Yes, we have a REST API for the refund system — full access.",
-        },
-        {
-          role: "assistant",
-          content: "And who will use it, and how often?",
-        },
-        {
-          role: "user",
-          content: "About five support leads, every morning.",
-        },
-      ]);
-      assert.equal(
-        res.stage,
-        "handoff",
-        `after confirmed-feasible scoping the concierge should hand off — message: ${res.message}`,
-      );
-      assert.ok(
-        res.recommendedBuilder && ALLOWED_BUILDERS.includes(res.recommendedBuilder),
-        `hand-off must name one of the allowed builders, got: ${res.recommendedBuilder}`,
-      );
-      assert.notEqual(
-        res.recommendedBuilder,
-        "manual",
-        "a confirmed-feasible UI need must not recommend the manual path",
-      );
-      // The message should reference the concrete scenario or systems (not a generic pitch).
-      const lower = res.message.toLowerCase();
-      const isGrounded =
-        lower.includes("refund") ||
-        lower.includes("dashboard") ||
-        lower.includes("support") ||
-        lower.includes("approve") ||
-        lower.includes("api") ||
-        lower.includes("morning");
-      assert.ok(
-        isGrounded,
-        `recommendation must reference the concrete scenario/systems, got: ${res.message}`,
       );
     });
   },

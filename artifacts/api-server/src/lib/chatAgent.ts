@@ -37,24 +37,6 @@ export type BuilderId =
   | "zeps"
   | "real-app";
 
-const BUILDER_IDS: BuilderId[] = [
-  "manual",
-  "claude-skill",
-  "replit",
-  "claude-code",
-  "zeps",
-  "real-app",
-];
-
-const BUILDER_LABELS: Record<BuilderId, string> = {
-  manual: "a manual-first approach (no build yet)",
-  "claude-skill": "a Claude skill",
-  replit: "Replit",
-  "claude-code": "Claude Code",
-  zeps: "Zeps",
-  "real-app": "a full production platform",
-};
-
 /**
  * Where the build-gate funnel has landed for this reply:
  * - `chat`: a normal answer, clarifying question, match presentation, or one of
@@ -121,7 +103,7 @@ export type ChatResult = {
 
 const SYSTEM_PROMPT = `You are the AI PM advisor for Headout's internal AI Storefront — the platform where Headout teams discover, use, and register internal AI tools.
 
-Your job is not just to search a catalogue. It is to help teammates make the right decision: find something that already exists, avoid a build that isn't needed, or scope a build correctly when one genuinely makes sense. Think like a product manager who has seen too many premature builds. Be warm, direct, and honest — including when the honest answer is "you don't need to build anything."
+Your job is search and routing: find something that already exists, or route the person to the right next step when nothing does. You are not the one who scopes a build — that's a separate specialist's job (see below). Be warm, direct, and honest.
 
 ━━ REGISTRATION — CHECK THIS FIRST ━━
 Before anything else, check if the user is signalling they already built something and want it listed.
@@ -135,54 +117,18 @@ If any match → call start_registration immediately. Don't search first. Don't 
 1. SEARCH THE CATALOGUE FIRST.
 For any capability or problem, call search_catalogue before saying anything else. Rephrase vague asks into a concise capability description. If results are weak, try once more with different phrasing.
 
-If strong matches come back: name each one (exact name from the results) with one sentence on why it fits — the UI renders a card for every tool you name. Ask if any of these cover their need. Don't move toward a build conversation while a plausible match is unconfirmed.
+If strong matches come back: name each one (exact name from the results) with one sentence on why it fits — the UI renders a card for every tool you name. Ask if any of these cover their need.
 
-2. UNDERSTAND THE REAL NEED.
-Once the user confirms nothing in the catalogue fits, your job shifts. Before scoping any build, you need to silently weigh four things — but surface them to the user one at a time, never bundled:
+2. NOTHING FITS → HAND OFF, DON'T INTERVIEW.
+If nothing fits, say so in one or two plain sentences. You do not run a scoping interview — you never ask about outcome, frequency, audience, or feasibility, and there is no record_recommendation tool or approval step for you to call. That entire job belongs to a separate scoping specialist the system routes to automatically once it's clear the person wants something built. Your only job here is to acknowledge the gap plainly; do not attempt to recommend a builder, a path, or a "don't build this" verdict yourself.
 
-- What outcome do they need? (Not "what tool do they want" — what would success look like?)
-- How often does this happen? (Once a month vs. every day changes everything.)
-- Who needs it? (Just them vs. a team vs. the whole company.)
-- What's the cost of not having it? (Saves 5 minutes vs. blocks critical work.)
+If the ask is too vague to search on at all (e.g. "I want to build something new" with no description of what), ask exactly one question — what are they trying to build — and stop there. Once they answer, search on that answer before doing anything else.
 
-Read what they've already told you — skip any bullet already answered by context. Of what's left, ask only the single question whose answer would most change your recommendation, then stop and wait for their reply before asking the next one. If you catch yourself drafting a message that lists several of these as a multi-part question, cut it down to the one that matters most and hold the rest for a later turn.
+━━ CAPABILITY CLAIMS ━━
+Before asserting any negative capability claim about Claude or ChatGPT ("X can't do Y"), call verify_capability(platform, capability) first. If the result is supported=true, treat it as confirmed — don't assert a limitation that doesn't exist. If the result is unknown, say you're not certain and suggest the user verify before assuming a limitation.
 
-If the frequency is low or the audience is one person, lean toward saying they don't need to build. Suggest a manual workflow, a reusable Claude prompt, or a Slack reminder instead. Say this kindly but plainly — it's genuinely helpful.
-
-3. CHECK WHAT ALREADY EXISTS.
-Before recommending any build, check whether the task is already solvable without one:
-
-- Can Claude.ai or Claude Code handle this natively? Claude can write and run code, generate real files (Word, Excel, PDFs, CSVs, PowerPoint), browse the web, process documents, and call APIs when given access. It is not just a chatbot.
-- Is there a standard API, library, or off-the-shelf tool (Zapier, Make, a Google Apps Script, a Python library) that already does this without a custom build?
-- Would a well-crafted prompt in Claude be the whole solution?
-
-FILE FORMAT RULE — memorise this, never override it: If the user wants output as a Word document, Excel file, PDF, CSV, PowerPoint, or any other standard file format, the answer is always "use Claude.ai directly — no build needed." Claude generates and lets you download these files natively. Never recommend a Replit app, Zeps workflow, or any custom build just to produce a file in a standard format.
-
-Before asserting any negative capability claim about Claude or ChatGPT ("X can't do Y"), call verify_capability(platform, capability) first. If the result is supported=true, treat it as confirmed and route accordingly — don't recommend building around a platform limitation that doesn't exist. If the result is unknown, say you're not certain and suggest the user verify before building around that assumption.
-
-If the task is natively solved by Claude or an existing tool: say so clearly. Recommend that path. Don't recommend a build.
-
-4. VALIDATE THE BUILD DECISION.
-If, after all the above, a build genuinely makes sense, ask the single most important question left open. Usually it's one of:
-
-- Does it need a UI, or is this a background/automated task?
-- Are the integrations API-accessible, or is the data manual/export-only?
-- Is this personal tooling or something the whole team needs?
-
-The answer to that one question is usually enough to pick the right path. Don't interview them — one question, then recommend.
-
-5. RECOMMEND.
-Call record_recommendation exactly once when you have enough to make a clear call. Pick the leanest path that actually solves the problem:
-
-• No build / manual-first — low frequency, one person, inaccessible integrations, or the problem is already solved by Claude or an existing tool. Say plainly why a build would be premature and what to do instead.
-• Claude skill — repeatable text-in / text-out with no UI needed. Also the right call when Claude natively handles the task and the user just needs a reliable, shareable prompt.
-• Replit app — a small UI is genuinely needed, integrations are API-accessible, small audience.
-• Zeps — a no-code conversational agent or multi-step automation workflow.
-• Real platform build — production-grade: many users, reliability requirements, or high-stakes data.
-
-When you make the recommendation, be specific. Name the path AND explain the reasoning in terms of what they told you: the use case, the audience, what's accessible. If there are relevant frameworks, APIs, or services that would make the build faster (e.g. a specific Headout MCP, a standard library, an existing integration), mention them. That specificity is what makes the advice actually useful.
-
-Always mention the platform team on Slack as a resource.
+━━ PLATFORM TEAM ━━
+Only ever mention the platform team on Slack for API keys, credentials, or access provisioning. Never for hosting, infra, architecture, or general build advice — that's the scoping specialist's territory, not yours.
 
 ━━ BROWSING THE CATALOGUE ━━
 When a user wants to explore rather than search — "show me all data tools", "what has the ops team built?", "list all Claude skills" — call browse_catalogue with the appropriate type and/or team filters. Present results the same way as search: name each tool with one sentence on what it does. The UI renders a card for every tool you name.
@@ -232,34 +178,6 @@ const SEARCH_TOOL: Anthropic.Tool = {
       },
     },
     required: ["query"],
-  },
-};
-
-const HANDOFF_TOOL: Anthropic.Tool = {
-  name: "record_recommendation",
-  description:
-    "Record the final recommendation once all four gates are resolved: (1) reuse-check — user confirmed nothing existing fits, (2) concrete scenario with trigger+actor+outcome collected, (3) feasibility per named system captured (API confirmed or manual-only noted), (4) audience reconciled. REQUIRED for every outcome — including 'do not build yet' / manual-first paths. This is how the UI surfaces the recommendation; without this call the recommendation is invisible. Never call before all four gates are resolved.",
-  input_schema: {
-    type: "object",
-    properties: {
-      builder: {
-        type: "string",
-        enum: BUILDER_IDS,
-        description:
-          "The cheapest path that actually works: manual > claude-skill > replit > claude-code > zeps > real-app. NEVER default to Zeps or Replit — pick by fit and feasibility.",
-      },
-      reason: {
-        type: "string",
-        description:
-          "One short sentence on why this path fits — must reference the user's concrete scenario AND the feasible systems AND the reconciled audience.",
-      },
-      prompt: {
-        type: "string",
-        description:
-          "A concise build brief synthesised from the scoping answers, used to pre-fill the builder (or empty string for the manual path).",
-      },
-    },
-    required: ["builder", "reason", "prompt"],
   },
 };
 
@@ -432,7 +350,6 @@ const ALL_TOOLS: Anthropic.Tool[] = [
   FLAG_TOOL,
   ACCESS_TOOL,
   UPDATE_TOOL_DEF,
-  HANDOFF_TOOL,
   VERIFY_CAPABILITY_TOOL,
 ];
 
@@ -564,7 +481,8 @@ If the user says something that is clearly a mode-switch or off-topic (e.g. "sho
 - Cap the session at 12 turns. If you hit the cap without enough info, make your best call.
 - Never produce a brief as chat text — always use the draft_brief tool.
 - Never invent information the user didn't provide.
-- No markdown headers. Short paragraphs. One question mark per message.`;
+- No markdown headers. Short paragraphs. One question mark per message.
+- Only mention the platform team on Slack for API keys, credentials, or access provisioning — never for hosting, infra, architecture, or general build advice. If the idea is genuinely too big for any self-serve path (Zeps, a Claude skill, Replit, Claude Code), say plainly that it needs an engineering team and a project pitch — don't point at the platform team instead.`;
 }
 
 /** Extract the search context from the chat history (last user query, no near-misses). */
@@ -585,20 +503,6 @@ function pickRecommended(found: Map<string, ApiTool>, message: string): ApiTool[
   return named;
 }
 
-type Handoff = { builder: BuilderId; reason: string; prompt: string };
-
-function parseHandoff(rawArgs: unknown): Handoff {
-  const parsed = (typeof rawArgs === "object" && rawArgs !== null ? rawArgs : {}) as Record<string, unknown>;
-  const builder = BUILDER_IDS.includes(parsed["builder"] as BuilderId)
-    ? (parsed["builder"] as BuilderId)
-    : "manual";
-  return {
-    builder,
-    reason: typeof parsed["reason"] === "string" ? parsed["reason"] : "",
-    prompt: typeof parsed["prompt"] === "string" ? parsed["prompt"] : "",
-  };
-}
-
 function parseRegistration(rawArgs: unknown): { url: string | null } {
   const parsed = (typeof rawArgs === "object" && rawArgs !== null ? rawArgs : {}) as Record<string, unknown>;
   const url =
@@ -611,7 +515,6 @@ function parseRegistration(rawArgs: unknown): { url: string | null } {
 function buildResult(
   message: string,
   tools: ApiTool[],
-  handoff: Handoff | null,
   registration: { url: string | null } | null = null,
   extra: {
     stage?: FunnelStage;
@@ -619,16 +522,14 @@ function buildResult(
     killPayload?: KillPayload | null;
   } = {},
 ): ChatResult {
-  const stage: FunnelStage =
-    extra.stage ??
-    (registration ? "register" : handoff ? "handoff" : "chat");
+  const stage: FunnelStage = extra.stage ?? (registration ? "register" : "chat");
   return {
     message,
     tools,
     noMatch: tools.length === 0,
     stage,
-    recommendedBuilder: handoff?.builder ?? null,
-    buildPrompt: handoff?.prompt ?? null,
+    recommendedBuilder: null,
+    buildPrompt: null,
     registration,
     briefPayload: extra.briefPayload ?? null,
     killPayload: extra.killPayload ?? null,
@@ -653,6 +554,51 @@ const REGISTRATION_PATTERNS: RegExp[] = [
 
 function isRegistrationIntent(text: string): boolean {
   return REGISTRATION_PATTERNS.some((re) => re.test(text));
+}
+
+/**
+ * Patterns that signal the user wants to build something new, with enough
+ * content to search on. Matched on the last user message to route straight
+ * to a search-first-then-scope handoff instead of the concierge's own
+ * scoping interview (there isn't one anymore — the critique agent owns it).
+ */
+const BUILD_INTENT_PATTERNS: RegExp[] = [
+  /\bbuild\s+(?:me\b|a\b|an\b|my\b|our\b|some\b|something\b)/i,
+  /\bwant(?:ing)?\s+to\s+build\b/i,
+  /\btrying\s+to\s+build\b/i,
+  /\bscope\s+(?:an|the|my)\s+idea\b/i,
+  /\bnew\s+internal\s+tool\b/i,
+];
+
+/**
+ * Fully generic build statements with no description of what's being built
+ * (e.g. "I want to build something new"). These get one deterministic
+ * clarifying question instead of a search — there's nothing to search on yet.
+ */
+const VAGUE_BUILD_PATTERNS: RegExp[] = [
+  /^i(?:'m| am)\s+trying\s+to\s+build\s+something(?:\s+new)?\.?$/i,
+  /^i\s+want\s+to\s+build\s+something(?:\s+new)?\.?$/i,
+  /^i\s+want\s+to\s+build\s+(?:a|an)\s+(?:new\s+)?tool\.?$/i,
+  /^build\s+something\s+new\.?$/i,
+];
+
+/** Deterministic clarifier for a vague build statement — see VAGUE_BUILD_PATTERNS. */
+const BUILD_CLARIFIER_MESSAGE =
+  "What are you building? Give me a short description of the problem and I'll check whether something already covers it.";
+
+function isBuildIntent(text: string): boolean {
+  return BUILD_INTENT_PATTERNS.some((re) => re.test(text));
+}
+
+function isVagueBuildIntent(text: string): boolean {
+  return VAGUE_BUILD_PATTERNS.some((re) => re.test(text.trim()));
+}
+
+/** True when the turn right before the last user message was the deterministic build clarifier. */
+function followsBuildClarifier(history: ChatTurn[]): boolean {
+  if (history.length < 2) return false;
+  const prior = history[history.length - 2];
+  return prior.role === "assistant" && prior.content.trim() === BUILD_CLARIFIER_MESSAGE;
 }
 
 export type ChatUserContext = {
@@ -697,7 +643,6 @@ async function runScopeChat(
         "Something went wrong with the critique session — let's try again.",
         [],
         null,
-        null,
         { stage: "scope" },
       );
     }
@@ -712,7 +657,7 @@ async function runScopeChat(
       const textBlock = response.content.find(
         (b): b is Anthropic.TextBlock => b.type === "text",
       );
-      return buildResult(textBlock?.text ?? "", [], null, null, { stage: "scope" });
+      return buildResult(textBlock?.text ?? "", [], null, { stage: "scope" });
     }
 
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
@@ -756,7 +701,7 @@ async function runScopeChat(
           textBlock?.text ||
           "I've put together a requirements brief based on our conversation. Review and edit it, then click Create my repo when you're ready.";
 
-        return buildResult(message, [], null, null, {
+        return buildResult(message, [], null, {
           stage: "brief",
           briefPayload: brief,
         });
@@ -780,7 +725,7 @@ async function runScopeChat(
         const message =
           textBlock?.text || `${kill.reason} Instead: ${kill.alternative}`;
 
-        return buildResult(message, [], null, null, {
+        return buildResult(message, [], null, {
           stage: "kill",
           killPayload: kill,
         });
@@ -792,7 +737,7 @@ async function runScopeChat(
           typeof args.reason === "string" && args.reason
             ? args.reason
             : "Got it — stepping out of scope mode.";
-        return buildResult(reason, [], null, null, { stage: "scope_exit" });
+        return buildResult(reason, [], null, { stage: "scope_exit" });
       }
 
       toolResults.push({
@@ -810,7 +755,6 @@ async function runScopeChat(
     "We've been through quite a few questions. Let me put together a brief based on what you've told me.",
     [],
     null,
-    null,
     { stage: "scope" },
   );
 }
@@ -821,24 +765,44 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
     return runScopeChat(history, userContext);
   }
 
+  const lastUserMessage =
+    [...history].reverse().find((t) => t.role === "user")?.content ?? "";
+  const forceRegisterOnFirstTurn = isRegistrationIntent(lastUserMessage);
+
+  // Vague build statement with nothing to search on yet — ask the one
+  // deterministic clarifying question and stop. No LLM call needed.
+  if (
+    !forceRegisterOnFirstTurn &&
+    isVagueBuildIntent(lastUserMessage) &&
+    !followsBuildClarifier(history)
+  ) {
+    return buildResult(BUILD_CLARIFIER_MESSAGE, [], null, { stage: "chat" });
+  }
+
+  // Build-shaped ask (typed intent, or the answer to the clarifier above) —
+  // search first, then hand off straight to the critique agent on no-match.
+  // The concierge never runs its own scoping interview.
+  const buildShaped =
+    !forceRegisterOnFirstTurn &&
+    (isBuildIntent(lastUserMessage) || followsBuildClarifier(history));
+
   const messages: Anthropic.MessageParam[] = history.map((turn) => ({
     role: turn.role,
     content: turn.content,
   }));
 
-  const lastUserMessage =
-    [...history].reverse().find((t) => t.role === "user")?.content ?? "";
-  const forceRegisterOnFirstTurn = isRegistrationIntent(lastUserMessage);
-
   const found = new Map<string, ApiTool>();
-  let handoff: Handoff | null = null;
   let registration: { url: string | null } | null = null;
+  let lastSearchQuery = "";
+  let lastSearchNearMisses: { name: string; oneLiner: string }[] = [];
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const toolChoice: Anthropic.MessageCreateParams["tool_choice"] =
       turn === 0 && forceRegisterOnFirstTurn
         ? { type: "tool", name: "start_registration" }
-        : { type: "auto" };
+        : turn === 0 && buildShaped
+          ? { type: "tool", name: "search_catalogue" }
+          : { type: "auto" };
 
     const response = await anthropic.messages.create({
       model: MODEL,
@@ -860,43 +824,8 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
         (b): b is Anthropic.TextBlock => b.type === "text",
       );
       const message = textBlock?.text ?? "";
-
-      if (handoff === null && registration === null && found.size === 0) {
-        const userTurns = messages.filter((m) => m.role === "user").length;
-        if (userTurns >= 3) {
-          try {
-            const forced = await anthropic.messages.create({
-              model: MODEL,
-              max_tokens: 8192,
-              system:
-                SYSTEM_PROMPT +
-                "\n\nAll scoping information has been gathered. You MUST now call record_recommendation to register your recommendation — including if your recommendation is the manual/no-build path. The UI cannot surface the recommendation without this call.",
-              tools: [HANDOFF_TOOL],
-              tool_choice: { type: "tool", name: "record_recommendation" },
-              messages: [
-                ...messages,
-                {
-                  role: "user" as const,
-                  content:
-                    "Please record your recommendation now.",
-                },
-              ],
-            });
-            const forcedToolBlock = forced.content.find(
-              (b): b is Anthropic.ToolUseBlock =>
-                b.type === "tool_use" && b.name === "record_recommendation",
-            );
-            if (forcedToolBlock) {
-              handoff = parseHandoff(forcedToolBlock.input);
-            }
-          } catch {
-            // Forced finalization failed — fall through with text-only result.
-          }
-        }
-      }
-
-      const recommended = handoff || registration ? [] : pickRecommended(found, message);
-      return buildResult(message, recommended, handoff, registration);
+      const recommended = registration ? [] : pickRecommended(found, message);
+      return buildResult(message, recommended, registration);
     }
 
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
@@ -912,22 +841,6 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
             note: registration.url
               ? "Registration started with the provided URL. Write one warm sentence telling the user you've captured the link and will kick off registration right here in this conversation — no need to go anywhere else."
               : "Registration flow started. Write one warm sentence telling the user that registration happens right here in this conversation — they can paste their tool's link and it will be added to the catalogue.",
-          }),
-        });
-        continue;
-      }
-
-      if (block.name === "record_recommendation") {
-        handoff = parseHandoff(block.input);
-        const isManual = handoff.builder === "manual";
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: block.id,
-          content: JSON.stringify({
-            ok: true,
-            note: isManual
-              ? "Recommendation recorded (manual-first path). Write one warm closing sentence telling the user NOT to build the full app yet, name the manual-first approach and why, reference their concrete scenario and the systems without confirmed APIs, and mention the platform team on Slack."
-              : "Recommendation recorded. Write one warm closing sentence naming this builder and why, referencing the user's concrete scenario and the confirmed systems, and mention the platform team on Slack as an alternative.",
           }),
         });
         continue;
@@ -1102,6 +1015,10 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
         (t) => (t.similarity ?? 0) >= MIN_MATCH_SIMILARITY,
       );
       for (const tool of strong) found.set(tool.id, tool);
+      lastSearchQuery = query;
+      lastSearchNearMisses = results
+        .slice(0, 3)
+        .map((t) => ({ name: t.name, oneLiner: t.oneLiner }));
       toolResults.push({
         type: "tool_result",
         tool_use_id: block.id,
@@ -1120,6 +1037,20 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
       });
     }
 
+    // Build-shaped ask, searched, nothing fits — hand off to the critique
+    // agent directly instead of looping back into the concierge. This is the
+    // one no-LLM-text handoff: the critique agent's first question is the
+    // reply the user sees.
+    if (buildShaped && turn === 0 && found.size === 0) {
+      return runScopeChat(history, {
+        ...userContext,
+        searchContext: {
+          query: lastSearchQuery || lastUserMessage.slice(0, 120),
+          nearMisses: lastSearchNearMisses,
+        },
+      });
+    }
+
     messages.push({ role: "user", content: toolResults });
   }
 
@@ -1128,20 +1059,7 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
     return buildResult(
       "Sure — paste your tool's link here and I'll add it to the catalogue.",
       [],
-      null,
       registration,
-    );
-  }
-  if (handoff) {
-    const isManual = handoff.builder === "manual";
-    return buildResult(
-      isManual
-        ? `I'd recommend starting without building yet${handoff.reason ? ` — ${handoff.reason}` : ""}. You can also request it from the platform team on Slack.`
-        : `Based on what you've described, I'd build this with ${
-            BUILDER_LABELS[handoff.builder]
-          }${handoff.reason ? ` — ${handoff.reason}` : ""}. You can also request it from the platform team on Slack.`,
-      [],
-      handoff,
     );
   }
   const fallback = [...found.values()].slice(0, 3);
