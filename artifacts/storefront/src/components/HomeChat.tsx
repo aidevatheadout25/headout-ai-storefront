@@ -84,7 +84,73 @@ type ChatMessage = {
   /** True when the user typed a non-URL as the first add-mode message. */
   addDisambiguation?: boolean;
   addDisambiguationText?: string;
+  /** True when the user typed something off-journey while a build phase was active. */
+  journeyDisambiguation?: boolean;
+  journeyDisambiguationText?: string;
 };
+
+// ── Journey input guard ─────────────────────────────────────────────────────
+// Phases where the journey owns the conversation — typed input must be
+// handled in journey context (see submitText) instead of falling through to
+// the concierge, which has no build context and denies the request. "brief"
+// (still editing the draft) and "live" (explicit next-step chips already
+// shown) are deliberately excluded.
+const JOURNEY_GUARD_PHASES: ReadonlySet<JourneyPhase> = new Set([
+  "scaffold",
+  "checklist",
+  "review",
+]);
+
+function isJourneyGuardPhase(phase: JourneyPhase): boolean {
+  return JOURNEY_GUARD_PHASES.has(phase);
+}
+
+type JourneyIntent = "action" | "off-journey" | "question";
+
+/** A request to advance or check the build itself — "ship it", "is it ready to publish", "run the review". */
+const JOURNEY_ACTION_PATTERNS: RegExp[] = [
+  /\b(publish|launch it|ship it|go live)\b/i,
+  /\b(good|ready) to (publish|ship|go live)\b/i,
+  /\b(run|kick off|start)\s+(the\s+)?review\b/i,
+  /\bsubmit\b.*\breview\b/i,
+  /\breview\s+it\b/i,
+  /\bis it (good|ready)\b/i,
+];
+
+/** A new search, a different tool, or leaving the build entirely. */
+const JOURNEY_OFF_PATTERNS: RegExp[] = [
+  /\b(search|look) for\b/i,
+  /\bfind (a|another)\b/i,
+  /\bregister (a |another )?(different )?tool\b/i,
+  /\b(add|register) (my|another) (other )?tool\b/i,
+  /\bshow me the (registry|catalogue|catalog)\b/i,
+  /\b(never ?mind|forget it|start over)\b/i,
+  /\b(a |another )?different (tool|idea|thing)\b/i,
+  /\bnew (search|tool|idea)\b/i,
+];
+
+/** Classifies typed input while a build journey phase is active. Exported shape is deterministic — no LLM involved. */
+function classifyJourneyIntent(text: string): JourneyIntent {
+  if (JOURNEY_ACTION_PATTERNS.some((re) => re.test(text))) return "action";
+  if (JOURNEY_OFF_PATTERNS.some((re) => re.test(text))) return "off-journey";
+  return "question";
+}
+
+/** Canned, phase-aware reply for an action request ("publish it", "is it ready?"). Never denies the capability. */
+function journeyActionResponse(phase: JourneyPhase): string {
+  if (phase === "review") {
+    return "The review's already running — CI, secrets scan, auth rules, security policy, and a deploy smoke test. I'll flag it here the moment it passes and ships live.";
+  }
+  return "Finish the checklist below first, then I'll run the review — that's the safety check before it goes live.";
+}
+
+/** Canned, phase-aware reply for a general question about the build ("what's in the repo", "what does review check"). */
+function journeyQuestionResponse(phase: JourneyPhase): string {
+  if (phase === "review") {
+    return "The review's running now — it checks CI, secrets, auth rules, security policy, and does a deploy smoke test. I'll let you know here the moment it's done, and it ships live automatically if it passes.";
+  }
+  return "Your repo's scaffolded — work through the checklist below, then I'll run the review automatically and ship it live once it passes.";
+}
 
 function msgId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -375,6 +441,37 @@ export function HomeChat() {
         role: "user",
         text: trimmed,
       };
+      if (isJourneyGuardPhase(journeyPhase) && !overrideOpts?.forceChat) {
+        // Never route typed input to the concierge while a build phase owns
+        // the conversation — it has no build context and denies the request
+        // (e.g. "is it good to publish?" → "I can't review code"). Handle it
+        // here instead, in journey context.
+        const intent = classifyJourneyIntent(trimmed);
+        if (intent === "off-journey") {
+          setMessages((prev) => [
+            ...prev,
+            userMessage,
+            {
+              id: msgId(),
+              role: "assistant",
+              text: "You're mid-build right now — want to leave this and do that instead?",
+              journeyDisambiguation: true,
+              journeyDisambiguationText: trimmed,
+            },
+          ]);
+          return;
+        }
+        const replyText =
+          intent === "action"
+            ? journeyActionResponse(journeyPhase)
+            : journeyQuestionResponse(journeyPhase);
+        setMessages((prev) => [
+          ...prev,
+          userMessage,
+          { id: msgId(), role: "assistant", text: replyText },
+        ]);
+        return;
+      }
       if (addMode && !overrideOpts?.forceChat) {
         // First add-mode message: validate it looks like a URL before calling addToolChat.
         if (!addUrl) {
@@ -410,7 +507,7 @@ export function HomeChat() {
         });
       }
     },
-    [addMode, addUrl, inScopeMode, runAddChat, runChat, sending],
+    [addMode, addUrl, inScopeMode, journeyPhase, runAddChat, runChat, sending],
   );
 
   // Load (or reset) the conversation as the `?c=` param changes, but skip the
@@ -762,6 +859,37 @@ export function HomeChat() {
                       }
                     >
                       Paste a link instead
+                    </Button>
+                  </div>
+                )}
+
+                {message.journeyDisambiguation && (
+                  <div className="chat-bubble__nomatch-actions">
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => {
+                        setJourneyPhase(null);
+                        setActiveBrief(null);
+                        setScaffoldResult(null);
+                        setReviewResult(null);
+                        setInScopeMode(false);
+                        submitText(message.journeyDisambiguationText ?? "", { forceChat: true });
+                      }}
+                    >
+                      🔍 Do that instead
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="tertiary"
+                      size="sm"
+                      onClick={() =>
+                        setMessages((prev) =>
+                          prev.filter((m) => !m.journeyDisambiguation),
+                        )
+                      }
+                    >
+                      Keep building
                     </Button>
                   </div>
                 )}
