@@ -51,6 +51,9 @@ export type BuilderId =
  *   the editable BriefCard with a "Create my repo" button.
  * - `kill`: the critique agent called recommend_kill; the UI shows a kill card
  *   with an actionable alternative instead of a brief.
+ * - `escalate`: the critique agent called escalate_to_eng; the UI shows a
+ *   project-pitch card instead of a self-serve repo — this idea is too large
+ *   or load-bearing for any self-serve path.
  * - `disambiguation`: off-script input detected mid-flow; the UI shows chips.
  */
 export type FunnelStage =
@@ -61,7 +64,35 @@ export type FunnelStage =
   | "scope_exit"
   | "brief"
   | "kill"
+  | "escalate"
   | "disambiguation";
+
+/**
+ * The shape a build should take — the reusable core of the critique agent's
+ * decision. Replaces the old binary `appClass` (micro|full), which flattened
+ * every non-app idea (an MCP server, a Claude skill, a no-code Zap) into
+ * "micro" with no way to express what it actually was.
+ *
+ *   no_build   — Claude-native or a genuine one-off; pairs with recommend_kill
+ *   skill      — Claude skill: text-in, artifact-out, reusable, no hosting
+ *   mcp        — machine-callable server exposing data/actions to agents;
+ *                no UI, programmatic callers, typically high query volume
+ *   zap        — no-code scheduled/triggered workflow, no custom logic
+ *   script     — one-off or dev-side automation, not a persistent service
+ *   micro_app  — small UI + backend, one job, small audience
+ *   full_app   — multi-user UI + backend + multiple integrations
+ *   eng_project — too large/critical/load-bearing for any self-serve path;
+ *                pairs with escalate_to_eng, never with draft_brief
+ */
+export type Modality =
+  | "no_build"
+  | "skill"
+  | "mcp"
+  | "zap"
+  | "script"
+  | "micro_app"
+  | "full_app"
+  | "eng_project";
 
 export type BriefPayload = {
   conversationId?: string;
@@ -72,14 +103,29 @@ export type BriefPayload = {
   frequency: string;
   mustDo: string[];
   wontDo: string[];
-  appClass: "micro" | "full";
+  /** Never "no_build" or "eng_project" here — those pair with kill/escalate, not a brief. */
+  modality: Modality;
+  /** Why this modality and not another — the signal that decided it. */
+  modalityReason: string;
   risk: "low" | "high";
 };
 
 export type KillPayload = {
+  /** Always "no_build" — a kill call is by definition a no_build modality. */
+  modality: "no_build";
   reason: string;
   alternative: string;
   alternativeUrl?: string;
+};
+
+/** Produced by escalate_to_eng: a short project pitch instead of a self-serve repo. */
+export type EscalatePayload = {
+  /** Always "eng_project" — an escalate call is by definition an eng_project modality. */
+  modality: "eng_project";
+  problem: string;
+  whyLoadBearing: string;
+  suggestedOwningTeams: string;
+  roughShape: string;
 };
 
 export type ChatResult = {
@@ -99,6 +145,12 @@ export type ChatResult = {
   briefPayload: BriefPayload | null;
   /** Set when stage === 'kill': reason + alternative from the critique agent. */
   killPayload: KillPayload | null;
+  /** Set when stage === 'escalate': the project pitch from the critique agent. */
+  escalatePayload: EscalatePayload | null;
+  /** Set when stage === 'scope_exit' and the user's exit message carried an
+   *  actionable request (e.g. "show me the registry instead") — the client
+   *  should forward this as a new search instead of just acknowledging the exit. */
+  forwardQuery: string | null;
 };
 
 const SYSTEM_PROMPT = `You are the AI PM advisor for Headout's internal AI Storefront — the platform where Headout teams discover, use, and register internal AI tools.
@@ -381,31 +433,45 @@ const DRAFT_BRIEF_TOOL: Anthropic.Tool = {
         items: { type: "string" },
         description: "3+ explicit out-of-scope items to keep scope tight.",
       },
-      appClass: {
+      modality: {
         type: "string",
-        enum: ["micro", "full"],
-        description: "micro = simple script/skill/bot; full = proper UI + backend app.",
+        enum: ["skill", "mcp", "zap", "script", "micro_app", "full_app"],
+        description:
+          "The shape this should take — never 'no_build' or 'eng_project' here (those go through recommend_kill / escalate_to_eng instead, never draft_brief). " +
+          "skill = Claude skill: text-in, artifact-out, reusable, no hosting. " +
+          "mcp = machine-callable server exposing data/actions to agents — no UI, programmatic callers, typically high query volume, no human in the loop. " +
+          "zap = no-code scheduled/triggered workflow, no custom logic, no interaction. " +
+          "script = one-off or dev-side automation, not a persistent service. " +
+          "micro_app = small UI + backend, one job, small audience. " +
+          "full_app = multi-user UI + backend + multiple integrations.",
+      },
+      modalityReason: {
+        type: "string",
+        description: "One sentence: why this modality and not another — cite the specific signal (who/what calls it, volume, interactivity, data sensitivity).",
       },
       risk: {
         type: "string",
         enum: ["low", "high"],
-        description: "low = internal tool, small audience; high = customer-facing or financial data.",
+        description:
+          "high if the tool touches PII, financial data, or regulated/compliance-owned data (e.g. Legal, Procurement, Finance sign-off required), or is genuinely customer-facing. " +
+          "low = purely internal, non-sensitive data, small blast radius if it breaks. " +
+          "Never label an internal-only tool 'customer-facing' — check the actual audience before choosing high for that reason.",
       },
     },
-    required: ["title", "problem", "users", "frequency", "mustDo", "wontDo", "appClass", "risk"],
+    required: ["title", "problem", "users", "frequency", "mustDo", "wontDo", "modality", "modalityReason", "risk"],
   },
 };
 
 const RECOMMEND_KILL_TOOL: Anthropic.Tool = {
   name: "recommend_kill",
   description:
-    "Call this when the idea should NOT be built: one-off task, already solvable natively by Claude, too risky, or clearly out of scope. Provide a concrete actionable alternative the user can do RIGHT NOW instead.",
+    "Call this when the idea should NOT be built: one-off task, already solvable natively by Claude, too risky, or clearly out of scope. This is the no_build modality by definition. Provide a concrete actionable alternative the user can do RIGHT NOW instead.",
   input_schema: {
     type: "object",
     properties: {
       reason: {
         type: "string",
-        description: "Plain-language explanation of why a build is not the right call.",
+        description: "Plain-language explanation of why a build is not the right call (this doubles as the no_build justification).",
       },
       alternative: {
         type: "string",
@@ -417,6 +483,31 @@ const RECOMMEND_KILL_TOOL: Anthropic.Tool = {
       },
     },
     required: ["reason", "alternative"],
+  },
+};
+
+const ESCALATE_TOOL: Anthropic.Tool = {
+  name: "escalate_to_eng",
+  description:
+    "Call this when the idea is too large, too critical, or too load-bearing for any self-serve path (a Claude skill, an MCP server, a Zap, a micro app, or a full app) — e.g. it touches every experience/every X, feeds a live production system, or genuinely needs multiple teams to own it. This is the eng_project modality by definition. Produces a short project pitch instead of a self-serve repo. NEVER call draft_brief for this case — a self-serve repo for something that needs an engineering team is a contradiction.",
+  input_schema: {
+    type: "object",
+    properties: {
+      problem: { type: "string", description: "One sentence: what problem does this solve?" },
+      whyLoadBearing: {
+        type: "string",
+        description: "Why this needs an engineering team, not a self-serve build — be specific (scale, criticality, blast radius, who else depends on it).",
+      },
+      suggestedOwningTeams: {
+        type: "string",
+        description: "Which team(s) should own this (e.g. 'Pricing and Data Science').",
+      },
+      roughShape: {
+        type: "string",
+        description: "A rough one- or two-sentence shape of what it would look like, for the project pitch — not a full spec.",
+      },
+    },
+    required: ["problem", "whyLoadBearing", "suggestedOwningTeams", "roughShape"],
   },
 };
 
@@ -440,7 +531,10 @@ const END_SCOPE_TOOL: Anthropic.Tool = {
   },
 };
 
-const SCOPE_TOOLS: Anthropic.Tool[] = [DRAFT_BRIEF_TOOL, RECOMMEND_KILL_TOOL, END_SCOPE_TOOL];
+/** The three terminal (conclusive) outcomes — always available. end_scope is a fourth, off-script exit, kept separate (see TERMINAL_SCOPE_TOOLS vs SCOPE_TOOLS). */
+const TERMINAL_SCOPE_TOOLS: Anthropic.Tool[] = [DRAFT_BRIEF_TOOL, RECOMMEND_KILL_TOOL, ESCALATE_TOOL];
+
+const SCOPE_TOOLS: Anthropic.Tool[] = [...TERMINAL_SCOPE_TOOLS, END_SCOPE_TOOL];
 
 function buildScopeSystemPrompt(
   searchContext: { query: string; nearMisses: { name: string; oneLiner: string }[] },
@@ -452,7 +546,7 @@ function buildScopeSystemPrompt(
           .join("\n")
       : "  (none — no close catalogue matches)";
 
-  return `You are a sharp Headout AI PM running a requirements critique session. The user searched the catalogue and found nothing adequate. Your job is to challenge the build idea, then either produce a tight requirements brief OR recommend not building it at all.
+  return `You are a sharp Headout AI PM running a requirements critique session. The user searched the catalogue and found nothing adequate. Your job is to challenge the build idea, then land on exactly one of three outcomes: a tight requirements brief, a recommendation not to build it at all, or — if it's genuinely too big for self-serve — a project pitch for an engineering team.
 
 ━━ SEARCH CONTEXT (do NOT ask the user to repeat this) ━━
 Original query: "${searchContext.query}"
@@ -461,30 +555,51 @@ ${nearMissLines}
 
 ━━ YOUR APPROACH ━━
 1. OPEN WITH A CHALLENGE, not a data-gathering question. Your very first message must push back on the idea itself — kill it outright, propose reshaping it into something smaller, or point at a near-miss and ask why it doesn't already cover this. Only move to gathering requirements once the idea survives that pushback.
-2. From there, ask ONE focused question at a time — maximum 6 questions total across the whole session. This is a sharp challenge, not gate-by-gate requirements gathering.
+2. From there, ask ONE focused question at a time — maximum 6 questions total across the whole session. This is a sharp challenge, not gate-by-gate requirements gathering. The cap is enforced for you: once you've asked 6, your next turn only offers draft_brief, recommend_kill, or escalate_to_eng — no more questions will be possible, so use the six wisely and don't burn one re-asking something already covered.
 3. After two justified pushbacks from the user ("no, that doesn't work because X"), concede and proceed.
 4. Be direct. Warm but honest. No sycophancy. If it's a one-off task, say so plainly.
+5. HANDLE NON-ANSWERS. If the user's reply doesn't actually address what you asked (they change topic, answer a different question, or say "not sure" / "doesn't matter"), do NOT ask the same question again. Make a reasonable, explicitly-stated assumption ("I'll assume weekly use since you didn't say") and move on to the next thing you need. Never ask the same question more than twice total, and prefer never repeating one at all.
 
-━━ KILL CRITERIA — call recommend_kill if ━━
+━━ MODALITY — figure out the actual shape, don't default to "an app" ━━
+Every brief must name a modality and justify it from a concrete signal in the conversation, not a guess. This is the single most important judgment call you make — a wrong modality (e.g. calling an MCP server a "micro app") hides the real shape of the work.
+- Agents/pipelines calling it programmatically, no human in the loop, steady or high query volume, no UI needed → mcp
+- Same text-in, artifact-out steps repeated by one person or a small team, no persistent hosting needed → skill
+- A scheduled or triggered push with no custom logic and no interaction → zap
+- A fixed one-off dataset, a migration, dev-side tooling that isn't a persistent service → script (usually pairs with recommend_kill if it's truly one-time)
+- A small UI + backend doing one job for a small audience → micro_app
+- Multiple users, multiple integrations, an actual application surface → full_app
+- It touches every X, feeds a live production system, or several teams would need to co-own it → eng_project (call escalate_to_eng, never draft_brief)
+Ask whatever question you need to pin down modality (who/what calls it, how often, human-in-the-loop or not) — this can be one of your six questions, it doesn't need its own budget.
+
+━━ KILL CRITERIA — call recommend_kill (modality: no_build) if ━━
 - The task happens less than twice a week OR is a genuine one-off
 - Claude.ai natively solves this with a good prompt (no build needed)
 - The user only wants a file output (Word, Excel, PDF, CSV) — Claude does this natively
 - The audience is one person and the frequency is low
 
+━━ ESCALATE CRITERIA — call escalate_to_eng (modality: eng_project) if ━━
+- It would touch every experience, every tool, or every record of some kind — broad, systemic reach, not a bounded slice
+- It feeds or modifies a live production system (e.g. the pricing engine, the booking pipeline) rather than sitting alongside it
+- Multiple teams would need to co-own it, or it's the kind of thing that needs a project pitch and a real engineering timeline, not a repo you can self-serve in a checklist
+- If you find yourself about to say "this needs an engineering team" in plain text, that is the signal to call escalate_to_eng instead of saying it and stopping — never leave this as prose with no tool call, and never call draft_brief for it (a self-serve repo for something that needs an eng team is a contradiction)
+
 ━━ BRIEF CRITERIA — call draft_brief if ━━
-- The task is repeated, affects more than one person, AND is NOT solvable by Claude natively
-- You have gathered: problem, users, frequency, 2–5 must-dos, 3+ won't-dos, app class, risk level
+- The task is repeated, affects more than one person or system, AND is NOT solvable by Claude natively AND is NOT an eng_project
+- You have gathered: problem, users, frequency, 2–5 must-dos, 3+ won't-dos, modality + modalityReason, risk level
+
+━━ RISK ━━
+Risk is about blast radius and data sensitivity, not team size. Elevate to high whenever the tool touches PII, financial data, or data owned by a compliance-relevant team (Legal, Procurement, Finance) that requires their sign-off to expose — even if the tool itself is 100% internal-facing. Only call something "customer-facing" if the actual end users are customers, not Headout staff — an internal tool that happens to be important is not customer-facing.
 
 ━━ OFF-SCRIPT INPUT ━━
-If the user says something that is clearly a mode-switch or off-topic (e.g. "show me the registry", "search for X instead", "never mind", "forget it"), call end_scope immediately. Do NOT call draft_brief or recommend_kill. Provide a short acknowledgement in the reason field and surface any actionable request in forwardQuery.
+If the user says something that is clearly a mode-switch or off-topic (e.g. "show me the registry", "search for X instead", "never mind", "forget it"), call end_scope immediately. Do NOT call draft_brief, recommend_kill, or escalate_to_eng. Provide a short acknowledgement in the reason field and surface any actionable request in forwardQuery.
 
 ━━ RULES ━━
-- End with EXACTLY ONE call: either draft_brief or recommend_kill. No other outcome (unless off-script input, per above).
-- Cap the session at 12 turns. If you hit the cap without enough info, make your best call.
-- Never produce a brief as chat text — always use the draft_brief tool.
+- End with EXACTLY ONE call: draft_brief, recommend_kill, or escalate_to_eng. No other outcome (unless off-script input, per above).
+- Cap the session at 12 turns. If you hit the cap without enough info, make your best call — never leave the session hanging with no tool call.
+- Never produce a brief, a kill verdict, or a project pitch as chat text — always use the matching tool.
 - Never invent information the user didn't provide.
 - No markdown headers. Short paragraphs. One question mark per message.
-- Only mention the platform team on Slack for API keys, credentials, or access provisioning — never for hosting, infra, architecture, or general build advice. If the idea is genuinely too big for any self-serve path (Zeps, a Claude skill, Replit, Claude Code), say plainly that it needs an engineering team and a project pitch — don't point at the platform team instead.`;
+- Only mention the platform team on Slack for API keys, credentials, or access provisioning — never for hosting, infra, architecture, or general build advice.`;
 }
 
 /**
@@ -532,6 +647,8 @@ function buildResult(
     stage?: FunnelStage;
     briefPayload?: BriefPayload | null;
     killPayload?: KillPayload | null;
+    escalatePayload?: EscalatePayload | null;
+    forwardQuery?: string | null;
   } = {},
 ): ChatResult {
   const stage: FunnelStage = extra.stage ?? (registration ? "register" : "chat");
@@ -545,6 +662,68 @@ function buildResult(
     registration,
     briefPayload: extra.briefPayload ?? null,
     killPayload: extra.killPayload ?? null,
+    escalatePayload: extra.escalatePayload ?? null,
+    forwardQuery: extra.forwardQuery ?? null,
+  };
+}
+
+/** The modalities draft_brief may legally claim — no_build/eng_project pair with the other two outcome tools, never this one. */
+const VALID_BRIEF_MODALITIES: Modality[] = ["skill", "mcp", "zap", "script", "micro_app", "full_app"];
+
+/**
+ * Builds a BriefPayload from the model's draft_brief args, substituting a
+ * clearly-marked default for any field that came back blank instead of
+ * leaving it empty. draft_brief's JSON schema requires every field to be
+ * *present*, not *non-empty* — a schema-compliant call can still hand back
+ * "" or [] for a field the model didn't actually have an answer for. This is
+ * the code-level backstop for "never draft an empty brief."
+ */
+function fillBriefDefaults(
+  args: Record<string, unknown>,
+  userContext: ChatUserContext | undefined,
+  searchContext: { query: string; nearMisses: { name: string; oneLiner: string }[] },
+): BriefPayload {
+  const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+  const arr = (v: unknown): string[] =>
+    Array.isArray(v)
+      ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+      : [];
+
+  const title = str(args.title) || undefined;
+  const problem =
+    str(args.problem) ||
+    (searchContext.query
+      ? `Not specified by the user — inferred from the original ask: "${searchContext.query}"`
+      : "Not specified — the problem wasn't stated explicitly in the conversation.");
+  const users = str(args.users) || "Not specified — assume the team that raised this need.";
+  const frequency = str(args.frequency) || "Not specified — assume regular (at least weekly) use.";
+  const mustDo = arr(args.mustDo);
+  const wontDo = arr(args.wontDo);
+
+  const modalityRaw = str(args.modality);
+  const modality: Modality = VALID_BRIEF_MODALITIES.includes(modalityRaw as Modality)
+    ? (modalityRaw as Modality)
+    : "micro_app";
+  const modalityReason =
+    str(args.modalityReason) ||
+    (VALID_BRIEF_MODALITIES.includes(modalityRaw as Modality)
+      ? "Modality was named but not justified by the agent."
+      : "Defaulted to micro_app — insufficient signal in the conversation to classify modality confidently.");
+
+  const risk: "low" | "high" = args.risk === "high" ? "high" : "low";
+
+  return {
+    conversationId: userContext?.conversationId,
+    searchContext,
+    title,
+    problem,
+    users,
+    frequency,
+    mustDo: mustDo.length > 0 ? mustDo : ["Not specified — core functionality as described in the conversation."],
+    wontDo: wontDo.length > 0 ? wontDo : ["Not specified — no explicit exclusions were discussed."],
+    modality,
+    modalityReason,
+    risk,
   };
 }
 
@@ -626,6 +805,21 @@ export type ChatUserContext = {
 const SCOPE_MAX_TURNS = 12;
 
 /**
+ * Hard cap on assistant questions across the whole scope session, enforced in
+ * code — not just prompt language. Counted from `history`, not an in-memory
+ * counter, since each user message is a fresh runScopeChat call. Once this
+ * many questions have already been asked, the NEXT call forces a terminal
+ * tool call (draft_brief / recommend_kill / escalate_to_eng) instead of
+ * letting the model ask a 7th question.
+ */
+const MAX_SCOPE_QUESTIONS = 6;
+
+/** True when an assistant turn was a genuine question (ends in "?"), for the question-cap count. */
+function isQuestionTurn(turn: ChatTurn): boolean {
+  return turn.role === "assistant" && turn.content.trim().endsWith("?");
+}
+
+/**
  * Test-only seam: records the searchContext every runScopeChat call was
  * entered with, so tests can assert what travelled with a handoff without
  * depending on LLM phrasing. Untouched (null) in production.
@@ -648,15 +842,26 @@ async function runScopeChat(
     content: turn.content,
   }));
 
+  const questionsAskedSoFar = history.filter(isQuestionTurn).length;
+  const atQuestionCap = questionsAskedSoFar >= MAX_SCOPE_QUESTIONS;
+
   for (let turn = 0; turn < SCOPE_MAX_TURNS; turn++) {
+    // Once the cap is hit, force a conclusive call — no more free-form
+    // questions, and end_scope isn't offered here since the cap forcing a
+    // conclusion takes priority over an off-script exit on this exact turn.
+    const tools = atQuestionCap ? TERMINAL_SCOPE_TOOLS : SCOPE_TOOLS;
+    const toolChoice: Anthropic.MessageCreateParams["tool_choice"] = atQuestionCap
+      ? { type: "any" }
+      : { type: "auto" };
+
     let response: Awaited<ReturnType<typeof anthropic.messages.create>>;
     try {
       response = await anthropic.messages.create({
         model: MODEL,
         max_tokens: 4096,
         system: systemPrompt,
-        tools: SCOPE_TOOLS,
-        tool_choice: { type: "auto" },
+        tools,
+        tool_choice: toolChoice,
         messages,
         temperature: 0,
       });
@@ -687,34 +892,7 @@ async function runScopeChat(
     for (const block of toolUseBlocks) {
       if (block.name === "draft_brief") {
         const args = (block.input ?? {}) as Record<string, unknown>;
-        let brief: BriefPayload;
-        try {
-          brief = {
-            conversationId: userContext?.conversationId,
-            searchContext,
-            title: typeof args.title === "string" && args.title ? args.title : undefined,
-            problem: typeof args.problem === "string" ? args.problem : "",
-            users: typeof args.users === "string" ? args.users : "",
-            frequency: typeof args.frequency === "string" ? args.frequency : "",
-            mustDo: Array.isArray(args.mustDo) ? (args.mustDo as string[]) : [],
-            wontDo: Array.isArray(args.wontDo) ? (args.wontDo as string[]) : [],
-            appClass: args.appClass === "full" ? "full" : "micro",
-            risk: args.risk === "high" ? "high" : "low",
-          };
-        } catch {
-          // Retry once with forced brief
-          brief = {
-            conversationId: userContext?.conversationId,
-            searchContext,
-            problem: "Build a tool to address the described need",
-            users: "Internal team",
-            frequency: "Regularly",
-            mustDo: ["Core functionality"],
-            wontDo: ["External integrations", "Mobile support", "Real-time collaboration"],
-            appClass: "micro",
-            risk: "low",
-          };
-        }
+        const brief: BriefPayload = fillBriefDefaults(args, userContext, searchContext);
 
         const textBlock = response.content.find(
           (b): b is Anthropic.TextBlock => b.type === "text",
@@ -732,10 +910,13 @@ async function runScopeChat(
       if (block.name === "recommend_kill") {
         const args = (block.input ?? {}) as Record<string, unknown>;
         const kill: KillPayload = {
+          modality: "no_build",
           reason:
-            typeof args.reason === "string" ? args.reason : "This doesn't need a build.",
+            typeof args.reason === "string" && args.reason
+              ? args.reason
+              : "This doesn't need a build.",
           alternative:
-            typeof args.alternative === "string"
+            typeof args.alternative === "string" && args.alternative
               ? args.alternative
               : "Use Claude.ai directly.",
           alternativeUrl:
@@ -753,13 +934,51 @@ async function runScopeChat(
         });
       }
 
+      if (block.name === "escalate_to_eng") {
+        const args = (block.input ?? {}) as Record<string, unknown>;
+        const escalate: EscalatePayload = {
+          modality: "eng_project",
+          problem:
+            typeof args.problem === "string" && args.problem
+              ? args.problem
+              : searchContext.query || "Not specified — inferred from the conversation.",
+          whyLoadBearing:
+            typeof args.whyLoadBearing === "string" && args.whyLoadBearing
+              ? args.whyLoadBearing
+              : "Too broad or critical for a self-serve build — needs an engineering team's judgment.",
+          suggestedOwningTeams:
+            typeof args.suggestedOwningTeams === "string" && args.suggestedOwningTeams
+              ? args.suggestedOwningTeams
+              : "Not specified — the owning team wasn't identified in this conversation.",
+          roughShape:
+            typeof args.roughShape === "string" && args.roughShape
+              ? args.roughShape
+              : "Not specified — needs an engineering scoping pass.",
+        };
+        const textBlock = response.content.find(
+          (b): b is Anthropic.TextBlock => b.type === "text",
+        );
+        const message =
+          textBlock?.text ||
+          `This needs an engineering team, not a self-serve build. ${escalate.whyLoadBearing}`;
+
+        return buildResult(message, [], null, {
+          stage: "escalate",
+          escalatePayload: escalate,
+        });
+      }
+
       if (block.name === "end_scope") {
         const args = (block.input ?? {}) as Record<string, unknown>;
         const reason =
           typeof args.reason === "string" && args.reason
             ? args.reason
             : "Got it — stepping out of scope mode.";
-        return buildResult(reason, [], null, { stage: "scope_exit" });
+        const forwardQuery =
+          typeof args.forwardQuery === "string" && args.forwardQuery.trim()
+            ? args.forwardQuery.trim()
+            : null;
+        return buildResult(reason, [], null, { stage: "scope_exit", forwardQuery });
       }
 
       toolResults.push({
@@ -772,12 +991,15 @@ async function runScopeChat(
     messages.push({ role: "user", content: toolResults });
   }
 
-  // Hit the turn cap — force a brief
+  // Hit SCOPE_MAX_TURNS (the tool-round-trip safety valve, separate from the
+  // question cap above) without a terminal call — force a filled brief
+  // rather than leaving the session hanging with no outcome. fillBriefDefaults
+  // marks every field as unspecified since the model gave us nothing here.
   return buildResult(
     "We've been through quite a few questions. Let me put together a brief based on what you've told me.",
     [],
     null,
-    { stage: "scope" },
+    { stage: "brief", briefPayload: fillBriefDefaults({}, userContext, searchContext) },
   );
 }
 

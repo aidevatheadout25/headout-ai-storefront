@@ -33,8 +33,10 @@ import {
   type ChatResult,
   type ChatTurn,
   type ChatUserContext,
+  type EscalatePayload,
   type FunnelStage,
   type KillPayload,
+  type Modality,
 } from "../lib/chatAgent";
 import { seedCatalogueIfEmpty } from "../lib/seed";
 
@@ -56,9 +58,10 @@ type Scenario = {
   expectStage?: FunnelStage;
   /** If set, flag when the drafted brief's risk is below this. */
   expectRiskAtLeast?: "high";
-  /** The modality this scenario is actually asking for (MCP / skill / Zap),
-   *  to check against appClass flattening (micro/full only). */
-  trueModality?: string;
+  /** If set, flag when the outcome's modality doesn't match — the real,
+   *  post-Phase-3 check (this used to only be checkable by eye against a
+   *  flattened micro/full appClass; now it's a direct field comparison). */
+  expectModality?: Modality;
 };
 
 const SCENARIOS: Scenario[] = [
@@ -85,7 +88,7 @@ const SCENARIOS: Scenario[] = [
       "True modality is an MCP server (machine-to-machine, high query volume, no UI). Exposes sensitive Legal/Procurement-owned data → risk should be high.",
     expectStage: "brief",
     expectRiskAtLeast: "high",
-    trueModality: "MCP",
+    expectModality: "mcp",
   },
   {
     id: 3,
@@ -99,7 +102,7 @@ const SCENARIOS: Scenario[] = [
     expectation:
       "True modality is a reusable Claude skill (text-in, doc-out, no UI, no hosting).",
     expectStage: "brief",
-    trueModality: "Claude skill",
+    expectModality: "skill",
   },
   {
     id: 4,
@@ -113,7 +116,7 @@ const SCENARIOS: Scenario[] = [
     expectation:
       "True modality is a no-code scheduled Zap/workflow (no interaction, no custom logic).",
     expectStage: "brief",
-    trueModality: "Zap",
+    expectModality: "zap",
   },
   {
     id: 5,
@@ -147,8 +150,9 @@ const SCENARIOS: Scenario[] = [
       "A human reviews before any email is sent",
       "Internal HR only",
     ],
-    expectation: "Genuine repeated multi-user need — should draft a brief, appClass full.",
+    expectation: "Genuine repeated multi-user need — should draft a brief, modality full_app.",
     expectStage: "brief",
+    expectModality: "full_app",
   },
   {
     id: 8,
@@ -160,7 +164,9 @@ const SCENARIOS: Scenario[] = [
       "Pricing and data science teams",
     ],
     expectation:
-      "Should be flagged as needing an engineering team + project pitch, NOT end in draft_brief with a self-serve repo — that would be a taxonomy contradiction.",
+      "Should escalate_to_eng (modality eng_project) with a project pitch — NOT end in draft_brief with a self-serve repo, which would be a taxonomy contradiction.",
+    expectStage: "escalate",
+    expectModality: "eng_project",
   },
   {
     id: 9,
@@ -223,6 +229,7 @@ function inferToolSignal(result: ChatResult, prevStage: FunnelStage | undefined)
   if (result.registration) return "start_registration";
   if (result.stage === "brief") return "draft_brief";
   if (result.stage === "kill") return "recommend_kill";
+  if (result.stage === "escalate") return "escalate_to_eng";
   if (result.stage === "scope_exit") return "end_scope";
   if (result.stage === "scope") {
     return prevStage === "scope"
@@ -307,6 +314,7 @@ function emptyBriefFields(brief: BriefPayload | null | undefined): string[] {
   if (!brief.frequency?.trim()) empties.push("frequency");
   if (!brief.mustDo || brief.mustDo.length === 0) empties.push("mustDo");
   if (!brief.wontDo || brief.wontDo.length === 0) empties.push("wontDo");
+  if (!brief.modalityReason?.trim()) empties.push("modalityReason");
   return empties;
 }
 
@@ -318,7 +326,8 @@ function renderBriefPayload(brief: BriefPayload): string {
     `- **frequency**: ${brief.frequency || "_(empty)_"}`,
     `- **mustDo**: ${brief.mustDo.length > 0 ? brief.mustDo.map((m) => `\n  - ${m}`).join("") : "_(empty)_"}`,
     `- **wontDo**: ${brief.wontDo.length > 0 ? brief.wontDo.map((m) => `\n  - ${m}`).join("") : "_(empty)_"}`,
-    `- **appClass**: ${brief.appClass}`,
+    `- **modality**: ${brief.modality}`,
+    `- **modalityReason**: ${brief.modalityReason || "_(empty)_"}`,
     `- **risk**: ${brief.risk}`,
     `- **searchContext.query**: ${brief.searchContext?.query || "_(empty)_"}`,
     `- **searchContext.nearMisses**: ${
@@ -332,10 +341,31 @@ function renderBriefPayload(brief: BriefPayload): string {
 
 function renderKillPayload(kill: KillPayload): string {
   return [
+    `- **modality**: ${kill.modality}`,
     `- **reason**: ${kill.reason || "_(empty)_"}`,
     `- **alternative**: ${kill.alternative || "_(empty)_"}`,
     `- **alternativeUrl**: ${kill.alternativeUrl ?? "_(none)_"}`,
   ].join("\n");
+}
+
+function renderEscalatePayload(escalate: EscalatePayload): string {
+  return [
+    `- **modality**: ${escalate.modality}`,
+    `- **problem**: ${escalate.problem || "_(empty)_"}`,
+    `- **whyLoadBearing**: ${escalate.whyLoadBearing || "_(empty)_"}`,
+    `- **suggestedOwningTeams**: ${escalate.suggestedOwningTeams || "_(empty)_"}`,
+    `- **roughShape**: ${escalate.roughShape || "_(empty)_"}`,
+  ].join("\n");
+}
+
+/** The outcome's modality regardless of which of the three outcome payloads carries it. */
+function outcomeModality(result: ChatResult | null): Modality | null {
+  return (
+    result?.briefPayload?.modality ??
+    result?.killPayload?.modality ??
+    result?.escalatePayload?.modality ??
+    null
+  );
 }
 
 /** Automated flags per "What the report should make obvious" — computed generically from scenario metadata, not hardcoded per id. */
@@ -357,9 +387,10 @@ function computeFlags(report: ScenarioReport): string[] {
     }
   }
 
-  if (scenario.trueModality) {
+  const modality = outcomeModality(finalResult);
+  if (scenario.expectModality && modality !== scenario.expectModality) {
     flags.push(
-      `ℹ️ true modality is **${scenario.trueModality}** — appClass can only express micro/full, check whether that flattening lost information (see appClass below)`,
+      `⚠️ expected modality \`${scenario.expectModality}\`, got \`${modality ?? "(none)"}\``,
     );
   }
 
@@ -379,7 +410,7 @@ function computeFlags(report: ScenarioReport): string[] {
     report.modalityHits.some((h) => h.toLowerCase() === "engineering team")
   ) {
     flags.push(
-      `⚠️ outcome-taxonomy contradiction: assistant text names "engineering team" but still ended in draft_brief (a self-serve repo) — should have been a kill/redirect, not a brief`,
+      `⚠️ outcome-taxonomy contradiction: assistant text names "engineering team" but still ended in draft_brief (a self-serve repo) — should have escalated instead`,
     );
   }
 
@@ -441,20 +472,28 @@ function renderScenarioSection(report: ScenarioReport): string {
     lines.push("");
   }
 
+  if (finalResult?.escalatePayload) {
+    lines.push("**Raw escalatePayload:**");
+    lines.push("");
+    lines.push(renderEscalatePayload(finalResult.escalatePayload));
+    lines.push("");
+  }
+
   return lines.join("\n");
 }
 
 function renderSummaryTable(reports: ScenarioReport[]): string {
-  const header = "| # | Scenario | Final stage | appClass | risk | # questions | brief empty? | modality named? |";
+  const header = "| # | Scenario | Final stage | modality | risk | # questions | brief empty? | modality named? |";
   const sep = "|---|---|---|---|---|---|---|---|";
   const rows = reports.map((r) => {
     const brief = r.finalResult?.briefPayload;
     const emptyFields = emptyBriefFields(brief);
+    const modality = outcomeModality(r.finalResult);
     return [
       r.scenario.id,
       r.scenario.title,
       `\`${r.finalResult?.stage ?? "(none)"}\``,
-      brief?.appClass ?? "—",
+      modality ?? "—",
       brief?.risk ?? "—",
       r.scopeQuestionCount,
       brief ? (emptyFields.length > 0 ? `⚠️ ${emptyFields.join(", ")}` : "no") : "—",

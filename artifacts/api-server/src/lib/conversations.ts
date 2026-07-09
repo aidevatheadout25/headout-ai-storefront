@@ -7,7 +7,7 @@ import {
 } from "@workspace/db";
 import { and, asc, desc, eq } from "drizzle-orm";
 import type { ApiTool } from "./catalogue";
-import type { BriefPayload, BuilderId, FunnelStage, KillPayload } from "./chatAgent";
+import type { BriefPayload, BuilderId, EscalatePayload, FunnelStage, KillPayload } from "./chatAgent";
 
 export type ConversationSummary = {
   id: string;
@@ -29,6 +29,7 @@ export type SavedMessage = {
   registration: { url: string | null } | null;
   briefPayload: BriefPayload | null;
   killPayload: KillPayload | null;
+  escalatePayload: EscalatePayload | null;
   userQuery: string | null;
   createdAt: string;
 };
@@ -55,15 +56,18 @@ function toMessage(row: MessageRow): SavedMessage {
             ? "brief"
             : rawStage === "kill"
               ? "kill"
-              : rawStage === "disambiguation"
-                ? "disambiguation"
-                : "chat";
+              : rawStage === "escalate"
+                ? "escalate"
+                : rawStage === "disambiguation"
+                  ? "disambiguation"
+                  : "chat";
 
-  // brief/kill payloads are stored as a wrapper object in the tools jsonb column
-  // to avoid needing a schema migration.
+  // brief/kill/escalate payloads are stored as a wrapper object in the tools
+  // jsonb column to avoid needing a schema migration.
   const toolsRaw = row.tools as unknown;
   let briefPayload: BriefPayload | null = null;
   let killPayload: KillPayload | null = null;
+  let escalatePayload: EscalatePayload | null = null;
   let tools: ApiTool[] | null = null;
 
   if (toolsRaw && typeof toolsRaw === "object" && !Array.isArray(toolsRaw)) {
@@ -72,6 +76,8 @@ function toMessage(row: MessageRow): SavedMessage {
       briefPayload = payload._briefPayload as BriefPayload;
     } else if (stage === "kill" && payload._killPayload) {
       killPayload = payload._killPayload as KillPayload;
+    } else if (stage === "escalate" && payload._escalatePayload) {
+      escalatePayload = payload._escalatePayload as EscalatePayload;
     }
   } else {
     tools = (toolsRaw as ApiTool[] | null) ?? null;
@@ -89,6 +95,7 @@ function toMessage(row: MessageRow): SavedMessage {
     registration: stage === "register" ? { url: row.buildPrompt ?? null } : null,
     briefPayload,
     killPayload,
+    escalatePayload,
     userQuery: row.userQuery,
     createdAt: row.createdAt.toISOString(),
   };
@@ -198,6 +205,7 @@ export async function appendTurn(
     registration: { url: string | null } | null;
     briefPayload?: BriefPayload | null;
     killPayload?: KillPayload | null;
+    escalatePayload?: EscalatePayload | null;
   },
 ): Promise<void> {
   // For register stage, persist the captured URL via build_prompt.
@@ -206,12 +214,14 @@ export async function appendTurn(
       ? (turn.registration?.url ?? null)
       : turn.buildPrompt;
 
-  // Store brief/kill payloads in the tools jsonb column as a wrapper.
+  // Store brief/kill/escalate payloads in the tools jsonb column as a wrapper.
   let toolsToStore: unknown = turn.tools;
   if (turn.stage === "brief" && turn.briefPayload) {
     toolsToStore = { _briefPayload: turn.briefPayload };
   } else if (turn.stage === "kill" && turn.killPayload) {
     toolsToStore = { _killPayload: turn.killPayload };
+  } else if (turn.stage === "escalate" && turn.escalatePayload) {
+    toolsToStore = { _escalatePayload: turn.escalatePayload };
   }
 
   await db.insert(messagesTable).values([

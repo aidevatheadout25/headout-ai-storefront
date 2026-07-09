@@ -98,6 +98,7 @@ router.post("/chat", async (req: Request, res: Response) => {
       registration: result.registration,
       briefPayload: result.briefPayload,
       killPayload: result.killPayload,
+      escalatePayload: result.escalatePayload,
     });
 
     return res.json({ ...result, conversationId });

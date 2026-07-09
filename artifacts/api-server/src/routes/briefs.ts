@@ -20,7 +20,8 @@ const briefSchema = z.object({
   frequency: z.string().default(""),
   mustDo: z.array(z.string()).default([]),
   wontDo: z.array(z.string()).default([]),
-  appClass: z.enum(["micro", "full"]).default("micro"),
+  modality: z.enum(["skill", "mcp", "zap", "script", "micro_app", "full_app"]).default("micro_app"),
+  modalityReason: z.string().default(""),
   risk: z.enum(["low", "high"]).default("low"),
   state: z.enum(["draft", "confirmed", "built", "live"]).default("draft"),
 });
@@ -46,7 +47,8 @@ router.post("/briefs", async (req: Request, res: Response) => {
         frequency: data.frequency,
         mustDo: data.mustDo,
         wontDo: data.wontDo,
-        appClass: data.appClass,
+        modality: data.modality,
+        modalityReason: data.modalityReason,
         risk: data.risk,
         state: data.state,
       })
@@ -73,7 +75,8 @@ router.patch("/briefs/:id", async (req: Request, res: Response) => {
     if (data.frequency !== undefined) values.frequency = data.frequency;
     if (data.mustDo !== undefined) values.mustDo = data.mustDo;
     if (data.wontDo !== undefined) values.wontDo = data.wontDo;
-    if (data.appClass !== undefined) values.appClass = data.appClass;
+    if (data.modality !== undefined) values.modality = data.modality;
+    if (data.modalityReason !== undefined) values.modalityReason = data.modalityReason;
     if (data.risk !== undefined) values.risk = data.risk;
     if (data.state !== undefined) values.state = data.state;
     if (data.searchContext !== undefined) values.searchContext = data.searchContext as Record<string, unknown>;
@@ -91,6 +94,61 @@ router.patch("/briefs/:id", async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Simulated scaffold contents by modality — a skill isn't a server, an MCP
+ * isn't a scheduled workflow. Honest to the shape the brief actually chose,
+ * even though the repo itself is still simulated (see the top-level comment
+ * on `/scaffold` — the real GitHub-App scaffold is separately tracked).
+ */
+function scaffoldContentsForModality(modality: string): string[] {
+  switch (modality) {
+    case "skill":
+      return [
+        "SKILL.md — invocation name, description, and usage instructions",
+        "scripts/run.ts — the skill's core text-in / artifact-out logic",
+        "examples/ — sample inputs and expected outputs",
+        "README.md — how to install this skill",
+      ];
+    case "mcp":
+      return [
+        "README.md — overview, setup, and usage",
+        "src/server.ts — MCP server entry point, tool/resource registration",
+        "src/tools/ — one file per exposed tool or resource",
+        ".github/workflows/ci.yml — lint + test + deploy pipeline",
+        "tests/server.test.ts — tool-call contract tests",
+      ];
+    case "zap":
+      return [
+        "workflow.json — trigger, schedule, and step configuration",
+        "src/steps/ — one file per workflow step (no custom app logic)",
+        "README.md — what triggers this and what it does",
+      ];
+    case "script":
+      return [
+        "README.md — what this does and how to run it, once",
+        "run.ts — the one-off automation logic",
+      ];
+    case "full_app":
+      return [
+        "README.md — overview, setup, and usage",
+        "src/app/ — UI routes and components",
+        "src/api/ — backend handlers and integrations",
+        "src/integrations/ — one file per external system this connects to",
+        ".github/workflows/ci.yml — lint + test + deploy pipeline",
+        "tests/ — unit + integration tests",
+      ];
+    case "micro_app":
+    default:
+      return [
+        "README.md — overview, setup, and usage",
+        "src/index.ts — entry point wired to Headout MCP",
+        "src/handler.ts — core logic from the brief",
+        ".github/workflows/ci.yml — lint + test + deploy pipeline",
+        "tests/handler.test.ts — unit tests for main handler",
+      ];
+  }
+}
+
 /** POST /api/scaffold — simulate repo creation from a confirmed brief. */
 router.post("/scaffold", async (req: Request, res: Response) => {
   const briefId = typeof req.body?.briefId === "string" ? req.body.briefId : null;
@@ -107,13 +165,7 @@ router.post("/scaffold", async (req: Request, res: Response) => {
   const slug = slugify(brief.title || brief.problem || "new-tool");
   const repoUrl = `https://github.com/headout-internal/${slug}`;
 
-  const contents = [
-    "README.md — overview, setup, and usage",
-    "src/index.ts — entry point wired to Headout MCP",
-    "src/handler.ts — core logic from the brief",
-    ".github/workflows/ci.yml — lint + test + deploy pipeline",
-    "tests/handler.test.ts — unit tests for main handler",
-  ];
+  const contents = scaffoldContentsForModality(brief.modality ?? "micro_app");
 
   await new Promise((r) => setTimeout(r, 1500));
 
@@ -228,7 +280,7 @@ router.post(
         title,
         oneLiner: mustDo[0] || description.slice(0, 80),
         description,
-        tags: ["builder", slug, brief.appClass ?? "micro"],
+        tags: ["builder", slug, brief.modality ?? "micro_app"],
         team: "Platform",
         url: build.repoUrl,
         ownerName: "",
