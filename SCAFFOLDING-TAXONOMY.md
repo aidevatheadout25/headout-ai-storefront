@@ -1,6 +1,6 @@
 # Storefront Scaffolding — Taxonomy & Scaffold Catalogue
 
-**Status:** Proposal — for platform team review and approval
+**Status:** Proposal — updated from ExperienceOS / scaffolding sync (2026-07-13) and **grounded against the real `headout/experienceos` repo (read 2026-07-13, see §5a)**; backend language is now the key open decision (a working TS/Express incumbent exists — §5a, §11)
 **Owner:** Anish Adamane (Storefront workstream)
 **Date:** 2026-07-13
 
@@ -8,22 +8,24 @@
 
 ## 1. What this document is
 
-Storefront is the front door for internal tools at Headout. When someone asks it for a tool, it first checks whether the tool already exists, then whether it should be built at all — and if the answer is "build it as an app," Storefront hands the requester a **scaffolded GitHub repo** they build on with Claude Code. Most requesters are non-technical.
+Storefront is the front door for internal tools at Headout. When someone asks it for a tool, it first checks whether the tool already exists, then whether it should be built at all — and if the answer is "build it as an app," Storefront scaffolds a **feature module inside a shared internal-tools monorepo** (not a greenfield per-tool repo). The requester builds on it with Claude Code. Most requesters are non-technical.
 
 This document defines that scaffolding system end to end:
 
 1. **Gate 0** — which requests never become apps, and where they route instead (§4)
 2. **The fixed standards** baked into every scaffold, and why (§5)
 3. **The 10-question checklist** that turns a request into a specific scaffold (§6)
-4. **The catalogue** — 11 scaffold presets: *if a user wants to build X, they get repo Y, because Z* (§7)
-5. **The generator** that produces these repos (§8)
-6. **The graduation policy** for tools that outgrow self-serve (§9)
+4. **The catalogue** — 11 scaffold presets: *if a user wants to build X, they get feature module Y, because Z* (§7)
+5. **The monorepo + generator** that produce these modules (§8)
+6. **Component gaps** — what to do when the design system doesn't have the piece yet (§9)
+7. **The graduation policy** for tools that outgrow self-serve (§10)
 
-**What we are asking the platform team to approve** (details in §10):
+**What we are asking the platform team to approve** (details in §11):
 
-- The fixed standards in §5 (Guardian always; FastAPI whenever there is a backend; Eevee design system; Railway)
+- The fixed standards in §5 (Guardian always; **React + Vite** frontend; **ExperienceOS design system** + ESLint rules; Railway; FastAPI *pending* backend confirmation with Janinder)
+- The **single monorepo / feature-module** architecture (§8) over one-repo-per-tool
 - The 11 preset compositions in §7
-- Three items that need platform involvement to exist: a Guardian session-validation dependency for FastAPI (net-new), an `oak` MCP token provisioned to the scaffolder, and a provisioning flow for Railway projects + BigQuery read-only service accounts
+- Items that need platform involvement: Guardian session-validation for the chosen backend, ExperienceOS package access + ESLint rules in `packages/`, Railway + BigQuery RO provisioning, and the component-request track (§9)
 
 ---
 
@@ -41,7 +43,7 @@ Teams will keep building — the demand is proven. Scaffolds make the paved road
 
 ---
 
-## 3. How a request becomes a repo
+## 3. How a request becomes a feature module
 
 ```
 User describes what they need (conversation with Storefront)
@@ -56,17 +58,20 @@ GATE 0 — is this even an app?  ──────────────►  
 PRESET + FLAGS selected  (one of the 11 in §7)
         │
         ▼
-GENERATOR composes the repo  (headout/app-scaffold, §8)
-  → pushes new repo to github.com/headout/<name>
-  → init.sh: renames placeholders, installs HeadoutAgentsConfig
-    (common + frontend bundles), registers repo for shared agent config
+GENERATOR scaffolds a feature module into the shared monorepo (§8)
+  → apps/<name>/ (or features/<name>/) with its own route
+  → route gated by Guardian roles for the requesting user/group
+  → shared packages/ (design system, ESLint, utils) already wired
+  → HeadoutAgentsConfig + ExperienceOS skills/rules installed once at monorepo root
         │
         ▼
-User builds on it with Claude Code  →  review gate  →  Railway deploy
+User builds on it with Claude Code  →  review gate  →  single monorepo Railway deploy
         │
         ▼
 Tool auto-listed back into the Storefront catalogue
 ```
+
+**Why not one repo per tool:** one build/deploy pipeline, OD support out of the box, shared design-system + ESLint enforcement, and Guardian role wiring per route instead of per-repo auth reinvention. ExperienceOS and Bob are candidates to consolidate into this monorepo (discussed with Janinder); Orbit and other internal tools can follow the same pattern.
 
 ---
 
@@ -82,7 +87,7 @@ Most requests should **not** become apps. The scope agent routes these before an
 | Data/actions another *agent* needs to call, no human UI | **MCP registration** | Unless it needs its own service — then preset 8 |
 | A BI/reporting view over warehouse data with standard slicing | **Retool / Looker / Hex** | The BI tooling decision is owned by the data team; we don't fork it |
 | Mostly covered by an existing tool | **Extend the existing tool** | Storefront's discovery step checks the catalogue + Delphi first — this is the check the three reconciliation tools never had |
-| Durable multi-service orchestration, human-in-the-loop waits over days, replay guarantees | **Engineering project** (pitch, not repo) | Temporal/K8s-grade work is beyond self-serve; see §9 |
+| Durable multi-service orchestration, human-in-the-loop waits over days, replay guarantees | **Engineering project** (pitch, not repo) | Temporal/K8s-grade work is beyond self-serve; see §10 |
 
 Only what survives this gate reaches the checklist.
 
@@ -94,12 +99,44 @@ These are the same regardless of which preset is chosen. Each exists for a reaso
 
 | Standard | What, concretely | Why |
 |---|---|---|
-| **Auth = Guardian** | Web UIs: `@headout/headauth` (the org's published Ory auth package — session bootstrap, login redirect, session-lockout handling, 401 interceptor). APIs: a FastAPI dependency that validates the Ory session against Guardian `whoami`. **The FastAPI piece is net-new** — no Python/FastAPI Guardian integration exists in the org today (existing Python integrations are Django-only). | Every self-built tool we audited skipped auth because it was effort. Pre-wiring it makes the secure path the zero-effort path. One auth system also means one access-review surface for the platform team. |
-| **Backend = FastAPI, always** | `python-fastapi-template` patterns: Pydantic v2, async SQLAlchemy/Alembic where a DB exists, `uv`, Ruff+mypy, Datadog APM, structured Coralogix JSON logging — all already in the template. | One backend language across all scaffolded tools means Claude Code (and any engineer who helps) debugs one stack. Kotlin/Spring Boot and Go remain the standards for engineering-built product/platform services — the scaffold docs point there rather than duplicating them (§9). |
-| **UI = Headout design system** | `@headout/eevee` (components) + `pixie` (tokens) + `onix` (icons), with the design-system skill bundled into the repo at `.claude/skills/` (tokens, fonts, iconography — plus an addendum scoping out consumer-marketing voice for internal tools). Component work uses the `oak` MCP server; its token is provisioned once to the scaffolder, not per user. | Tools look like Headout tools with zero design effort from the builder, and design-system adoption comes free instead of being a migration later. |
-| **Deploy = Railway** | `railway.toml` per repo; one or two services (frontend/backend); `docker-compose.yml` for local dev of whatever services the preset selected. | Already the Storefront platform decision; single deploy story for every scaffolded tool. |
-| **Observability** | Coralogix JSON logging + `/health` + optional `/metrics` (Prometheus), error format standardized. | "It broke and nobody can see why" is the predictable failure mode of self-serve tools; this is the minimum that makes platform support possible. |
-| **Agent config** | `init.sh` installs `HeadoutAgentsConfig` (common + frontend bundles: commit/PR/planning/debug skills, frontend rules) and registers the repo for ongoing sync. `AGENTS.md` embeds the **Building-a-scaled-app** methodology (PRD → prototype → system design → chunked implementation) plus this preset's conventions and the graduation triggers. | The builder's Claude Code session starts with org standards and a build process, not a blank slate. Configs stay in sync as org standards evolve instead of freezing at scaffold time. |
+| **Auth = Guardian** | Web UIs: `@headout/headauth` (session bootstrap, login redirect, session-lockout, 401 interceptor). APIs: a backend dependency that validates the Ory session against Guardian `whoami`. **Routes in the monorepo are protected via Guardian roles tied to the requesting user/group** — not a separate auth story per tool. The FastAPI (or chosen-backend) Guardian dependency is **net-new** if we stay on FastAPI — existing Python integrations are Django-only. | Every self-built tool we audited skipped auth because it was effort. Pre-wiring it makes the secure path the zero-effort path. One auth system also means one access-review surface. |
+| **Frontend = React + Vite (not Next.js)** | SPA: React 18 + TypeScript + Vite. **Verified stack in ExperienceOS:** `react-router-dom` v7, **TanStack Query** (server state) + **TanStack Form** (forms), TanStack Virtual, Recharts, `next-themes`, Storybook. No App Router / SSR for self-serve internal tools. | Confirmed in the ExperienceOS repo, not just the sync: internal tools only need static assets behind a login. Next.js is SSR-heavy overhead they don't need. Vite is the simpler paved road. (Next.js remains a *graduation* option for eng-owned product surfaces — see §10 — not the self-serve default.) |
+| **UI = `@headout/umbreon`** (the ExperienceOS design system) | Published package, Radix-based, thematic light/dark via `DesignSystemProvider`; ~60 components built for data-intensive UIs — layout shells (`TablePage`/`DetailPage`/`ListPage`/`WizardPage`/`AppShell`), primitives (`Stack`/`Flex`/`Grid`/`Container`), `Table`/`VirtualList`/`ColumnConfigurator`, `Form`/`Select`/`FileUpload`, filters, accordions. **Full verified inventory + per-component specs in §5a.** Agentic-friendly: real `create-component-ho` / `generate-ui` skills + a DS retrieval index produce ~90% usable UI from PRD+ERD. | One internal-tools look; design-system adoption comes free; Claude Code generates against a known, documented component vocabulary instead of inventing layouts. |
+| **Code standards = ExperienceOS ESLint rules** | The **real, enforced** rule set (`scripts/eslint-design-system-rules.mjs`, verified §5a): `design/no-raw-form-elements`, `design/no-raw-table-elements`, `design/prefer-layout-primitives` (`<Flex direction="column">`→`Stack`; `Flex`/`Grid`/`Stack` over raw `div`), `design/no-tailwind-color-palette` (semantic tokens only), `design/prefer-text-and-tokens` / `design/prefer-text-props`, `design/no-tanstack-react-form-direct` (go through the `Form` primitive), and `local/no-new-legacy-ui-imports` (legacy-UI freeze). | Catches non-compliance before review. Semantic component names are self-documenting in PRs vs. reading class strings. |
+| **Backend = OPEN — TS/Express incumbent vs FastAPI** | **Correction from the real repo (§5a):** ExperienceOS does *not* run FastAPI — it runs an **Express (TypeScript) BFF** with a working Guardian/Ory client + api-proxy middleware, same as `Guardian-App-Starter-Kit`. So the real Janinder decision is **adopt the incumbent Express/TS BFF (one language front-to-back, Guardian already built) vs introduce Python/FastAPI (`python-fastapi-template`) and rebuild the Guardian dependency net-new.** Also open: Postgres vs Mongo defaults, cron needs, BigQuery. Presets in §7 are still written FastAPI-style *pending this call* — flag, don't treat as locked. | One backend language keeps Claude Code on one stack. The TS/Express side already satisfies that AND has Guardian working today; FastAPI would be a fresh build. |
+| **Data shape rule (confirmed direction)** | **Postgres** for repeatable structured/relational data; **MongoDB** for unstructured / non-repeatable / per-record-variable payloads. Checklist Q4 picks the preset (§6–§7). | Matches ExperienceOS sync guidance; same gate as preset 3 vs 5. |
+| **Deploy = Railway (one pipeline)** | One monorepo build + deploy; OD support comes with the shared pipeline. `docker-compose.yml` for local multi-service dev. | Already the Storefront platform decision; one deploy story instead of N Railway projects per micro-tool. |
+| **Observability** | Coralogix JSON logging + `/health` + optional `/metrics` (Prometheus), error format standardized. | Minimum that makes platform support possible for self-serve tools. |
+| **Agent config** | Monorepo root installs `HeadoutAgentsConfig` (common + frontend bundles) once; feature modules inherit. `AGENTS.md` embeds **Building-a-scaled-app** (PRD → prototype → system design → chunked implementation) plus preset conventions and graduation triggers. | Builders start with org standards; configs stay in sync as standards evolve. |
+
+---
+
+## 5a. ExperienceOS — the verified reference implementation
+
+Grounded against the real `headout/experienceos` repo (read 2026-07-13), not the sync notes. This is what "reference ExperienceOS" concretely means — and where the doc's earlier assumptions were wrong, this section is the correction of record.
+
+**Repo shape (correction to §8).** `headout/experienceos` is a **git-submodule monorepo** wrapping two real apps as submodules — `mmp-builder` (the MMP Builder, package `mmp-suite`) and `supply-mission-control`. It is **not** an `apps/`+`packages/` workspace. Each app is internally `client/` (React SPA) + `server/` (Express BFF) + `packages/design-system/` (the DS, released as its own package). The single-monorepo/feature-module model in §8 is our **proposed** consolidation target, not what ExperienceOS is today.
+
+**Design system = `@headout/umbreon`** (v0.1.0; released via `release-umbreon.yml`; peer deps react / react-dom / react-router-dom). Built on **Radix UI** + class-variance-authority. Exports ~60 components:
+- **Layout shells:** `TablePage`, `DetailPage`, `ListPage`, **`WizardPage`**, `AppShell`
+- **Layout primitives:** `Stack`, `Flex`, `Grid`, `Container`, `Layout`
+- **Form inputs:** `TextField`, `TextArea`, `Select`/`AsyncSelect`/`VirtualSelect`, `Checkbox(Group)`, `Radio(Group)`, `Switch`, `DatePicker`/`DateRangePicker`/`TimePicker`, `TagField`, `FileUpload`, **`Form`**, `InlineEdit`
+- **Data/tables:** `Table`, `TablePagination`, `TableColumnMenu`, `VirtualList`, `ColumnConfigurator`
+- **Navigation:** `PageHeader`, `Breadcrumbs`, `Tabs`, `FilterTab`, `SideNavigation`, **`WizardStepRail`**
+- **Overlays/feedback:** `Dialog`, `Tooltip`, `HoverCard`, `Popover`, `Menu`, `Alert`, `Toast`, `EmptyState`, `ErrorState`
+- **Composition helpers:** `Accordion`, `SectionCard`, `BulkActionToolbar`, `ExpandableText`, `MediaCarousel`, `NestedSelect`, `Tile`
+
+Theming via `DesignSystemProvider` (writes `data-theme`; light/dark/system). Per-component specs live in `specs/design-system/components/*.md` plus `ai-component-docs.md` and `accessibility.md`.
+
+**Design tokens are a real pipeline:** `client/src/tokens/tokens.css` is the source of truth → `scripts/sync-design-tokens.mjs` generates `design-tokens.generated.{json,ts}` (`yarn tokens:generate` / `tokens:check`).
+
+**ESLint DS rules exist and are enforced** (`scripts/eslint-design-system-rules.mjs`): `design/no-raw-form-elements`, `design/no-raw-table-elements`, `design/prefer-layout-primitives`, `design/no-tailwind-color-palette`, `design/prefer-text-and-tokens`, `design/prefer-text-props`, `design/no-tanstack-react-form-direct`, and `local/no-new-legacy-ui-imports`.
+
+**Backend = an Express (TypeScript) BFF — not FastAPI.** `server/` is Express 4 with `middleware/auth/guardian.client.ts` + `auth.middleware.ts` (validates the Ory/Guardian session), `api-proxy.middleware.ts` (forwards the user's session to downstream services — the BFF pattern), plus cors / request-id / request-logger / error-handler. mmp-builder is **proxy-shaped** (no DB in its deps) — it is the `viewer`/proxy pattern (preset 1) running in production. Client auth: pre-mount `modules/auth/bootstrap.ts`, session-lockout store, invalid-session dialog, `route-access-permission`, and an admin panel that manages user **roles** — role-gated access is already implemented, not aspirational. Local Ory dev via `yarn ory:tunnel`. **This is the incumbent that reframes the backend decision (see §5 backend row, §11).**
+
+**AI/agentic UI generation is real tooling.** mmp-builder ships Claude skills: `create-component-ho` (7 phased steps + component/stories/styles/types templates), `generate-ui` (question-framework → pattern-selector → code-generator → output-validator), `ds-generate-ui`, `ds-component`, `ds-storybook`, `ds-migrate`, `frontend-design-ho`, `create-ui-iterations-ho`, plus a `ds:retrieval-index` build so an agent can retrieve the right component. This is what backs the "~90% usable UI from PRD+ERD" claim.
+
+**CI/ops (real):** GitHub Actions (build, PR, semver-release, a separate `release-umbreon` for the DS package), `ci/Dockerfile`, **Medusa ODE** init (`ci/scripts/ode-init.cjs`), and **Vulcan** review wired (`.vulcanho` / `VULCANHO.md`). Deploy here is Docker-based — **do not assume Railway for ExperienceOS** (Railway remains the Storefront-side proposal, §5).
 
 ---
 
@@ -109,12 +146,12 @@ The scope agent asks these in conversation; the answers select the preset and fl
 
 | # | Question | Decides |
 |---|---|---|
-| 1 | Who uses it, roughly how many? | Tier now + graduation clause (§9) |
+| 1 | Who uses it, roughly how many? | Tier now + graduation clause (§10) |
 | 2 | Does it only display information, or also create/edit data? | Whether a database exists at all |
 | 3 | Where does that data live today? (internal service / BigQuery / nowhere yet) | Proxy vs warehouse-read vs own DB |
-| 4 | Is every record the same shape, or does it vary per record? | Postgres vs MongoDB |
+| 4 | Is every record the same shape, or does it vary per record? | Postgres (structured/repeatable) vs MongoDB (unstructured/non-repeatable) |
 | 5 | How much data, growing how fast? | OLTP vs warehouse; pagination/indexing posture |
-| 6 | How fresh must what's on screen be? | Polling (default) vs SSE vs "are you sure" (WebSocket → §9 check) |
+| 6 | How fresh must what's on screen be? | Polling (default) vs SSE vs "are you sure" (WebSocket → §10 check) |
 | 7 | Anything slow (>5s), scheduled, or needing retries? | Async tier: none → BackgroundTasks → Celery+SQS → cron-only |
 | 8 | Which third-party services, and what are their rate limits? | Queue-forcing, fallback plan (a rate limit can force async even when nothing else does) |
 | 9 | Who may see/do what? | Guardian depth: any-Headouter → role-gated (VIEW/EDIT) → row-level |
@@ -125,7 +162,7 @@ The scope agent asks these in conversation; the answers select the preset and fl
 
 ## 7. The scaffold catalogue
 
-Every preset composes from the same module library (§8) on top of the fixed base (§5). For each: what the user asked for, what repo they get, and why.
+Every preset composes from the same module library (§8) on top of the fixed base (§5). For each: what the user asked for, what feature module they get, and why.
 
 ### Preset 1 — `viewer`
 
@@ -133,14 +170,16 @@ Every preset composes from the same module library (§8) on top of the fixed bas
 
 **Real examples found:** VFS Dashboard, Booking Analytics Hub.
 
-**They get:**
+**They get:** a feature module in the monorepo shaped as:
 ```
-<name>/
-├── frontend/          Vite + React + TS · headauth · Eevee · TanStack Query (polling)
-├── backend/           FastAPI: Guardian dependency + proxy routes ONLY
+apps/<name>/   (or features/<name>/)
+├── frontend/          Vite + React + TS · headauth · ExperienceOS DS · TanStack Query (polling)
+├── backend/           FastAPI (pending confirm): Guardian dependency + proxy routes ONLY
 │   └── app/downstreams/<svc>/    typed client, forwards the user's Ory cookie
-├── docker-compose.yml · railway.toml · init.sh · AGENTS.md
+└── route registered + Guardian role gate for the requesting user/group
 ```
+(Shared `packages/`, compose, Railway, AGENTS.md live at monorepo root — not duplicated per module.)
+
 **No database. No queue. Nothing else.**
 
 **Why:** The data already lives in an internal service — provisioning a database here creates a stale mirror plus a sync job nobody owns (the single most common over-provisioning mistake). The backend still exists even though it's thin: the browser must never call downstream services directly; the BFF forwards the user's session cookie so downstream services see the real user (the established Guardian BFF pattern). This is the smallest scaffold and the one most Gate-0 survivors should land on.
@@ -180,7 +219,8 @@ Every preset composes from the same module library (§8) on top of the fixed bas
 │   ├── app/models/            SQLModel entities
 │   ├── app/alembic/           migrations
 │   └── app/api/routes/        CRUD endpoints, standardized error shape
-├── frontend/src/forms/        React Hook Form + Zod, validated both sides
+├── frontend/src/forms/        umbreon `Form` primitive (TanStack Form) + Zod, validated both sides
+│                              (raw @tanstack/react-form is ESLint-banned — use the Form primitive)
 └── docker-compose.yml         + local Postgres
 ```
 
@@ -202,10 +242,14 @@ Every preset composes from the same module library (§8) on top of the fixed bas
 ├── backend/app/tasks/         async tier 1 (BackgroundTasks: notify on transition)
 │                              or tier 2 (Celery + SQS: scheduled reminders, retries)
 ├── backend/app/integrations/slack/    webhook notify (default ON for this preset)
-└── frontend/src/wizard/       multi-step form shell, autosaved drafts
+└── frontend/                  umbreon `WizardPage` + `WizardStepRail` (both shipped
+                               in @headout/umbreon — verified §5a), autosaved drafts
+                               ✓ multi-step wizards ARE genericized in the DS — compose
+                               them, don't build a one-off shell. (Corrects the earlier
+                               "wizard not genericized" assumption.)
 ```
 
-**Why:** Every real workflow tool we found needed the same three things beyond CRUD — draft state, validated transitions, and "tell someone in Slack." The async tier is chosen by Q7, not defaulted: notify-on-save is `BackgroundTasks` (zero infra); "remind the approver after 48h" needs Celery+SQS — the pattern `dior` already runs in production. Temporal is deliberately absent: human-in-the-loop waits measured in days, with replay guarantees, is the §9 graduation boundary.
+**Why:** Every real workflow tool we found needed the same three things beyond CRUD — draft state, validated transitions, and "tell someone in Slack." The async tier is chosen by Q7, not defaulted: notify-on-save is `BackgroundTasks` (zero infra); "remind the approver after 48h" needs Celery+SQS — the pattern `dior` already runs in production. Temporal is deliberately absent: human-in-the-loop waits measured in days, with replay guarantees, is the §10 graduation boundary.
 
 ---
 
@@ -227,16 +271,16 @@ Every preset composes from the same module library (§8) on top of the fixed bas
 
 **Real examples found:** `las` (Listing Automation Service), TTD-Automation-Suite, Pompeii Voucher Generator. Production pattern: `dior`.
 
-**They get:**
+**They get:** a backend-only feature module (optionally a status page):
 ```
-<name>/
+apps/<name>/
 ├── backend/
 │   ├── app/api/routes/        trigger + status endpoints (Guardian service-key auth)
 │   ├── app/tasks/             Celery + SQS workers, beat schedules
 │   ├── app/ratelimit/         per-third-party limits from Q8, with backoff
 │   └── app/integrations/      zendesk / email / sheets-export as selected
-├── docker-compose.yml         Postgres (job state) + Redis + local SQS
-└── railway.toml               api + worker as separate Railway services
+└── (monorepo root)            Postgres (job state) + Redis + local SQS in compose;
+                               api + worker as separate Railway services
 ```
 **No frontend** (optionally a single status page).
 
@@ -250,16 +294,15 @@ Every preset composes from the same module library (§8) on top of the fixed bas
 
 **Real examples found:** bar (Slack→Jira), Wanda (on-call triage), genie, optimus; delphi and PlatoBot are the engineering-grade versions of this shape.
 
-**They get:**
+**They get:** a Slack-facing feature module:
 ```
-<name>/
+apps/<name>/
 ├── backend/
 │   ├── app/slack/             python slack-bolt: event handlers, slash commands, threads
 │   ├── app/models/            Postgres — or the Sheets adapter where the team's
 │   │                          source of truth already IS a sheet (bar's on-call roster)
 │   └── app/tasks/             tier 1 async (acknowledge fast, work in background)
-├── (flag) --llm               Anthropic client + retries + cost logging, if conversational
-└── docker-compose.yml · railway.toml
+└── (flag) --llm               Anthropic client + retries + cost logging, if conversational
 ```
 
 **Why python slack-bolt:** keeps the one-backend-language rule (PlatoBot precedent), so a Slack bot and its background jobs are one codebase in one language. Slack workspace membership provides the implicit user identity; Guardian service auth covers anything the bot calls downstream. The Sheets adapter is offered deliberately: for some ops teams the sheet *is* the database, and pretending otherwise drives them back to shadow-IT.
@@ -272,15 +315,14 @@ Every preset composes from the same module library (§8) on top of the fixed bas
 
 **Real examples found:** aviator, argus-mcp, porygon-mcp, talentmcp, headout-mcp-server — this is already a well-worn shape at Headout.
 
-**They get:**
+**They get:** an MCP feature module:
 ```
-<name>/
+apps/<name>/
 ├── backend/
 │   ├── app/mcp/               FastMCP server: tools, resources
 │   ├── app/auth/              bearer service-key (the pattern oak/delphi use)
 │   └── app/downstreams|models/   whichever data module Q3 selected
-├── README.md                  includes the claude mcp add / .mcp.json snippet
-└── railway.toml
+└── README.md                  includes the claude mcp add / .mcp.json snippet
 ```
 
 **Why:** Agent-callable data is its own interface modality, not a web app variant — no UI, bearer-token auth, and the deliverable includes the connection snippet because "how do I add it to Claude" is the entire adoption step. Registered into the Storefront catalogue as an MCP so discovery finds it before someone builds a duplicate.
@@ -312,15 +354,14 @@ Every preset composes from the same module library (§8) on top of the fixed bas
 
 **Real examples found:** metricbot shape; several "dashboards" in the audit are really this — nobody visits them, they want the push.
 
-**They get:**
+**They get:** a cron-only feature module (no web UI):
 ```
-<name>/
+apps/<name>/
 ├── backend/
 │   ├── app/jobs/report.py     the report: query → render → deliver
 │   ├── app/warehouse/         BigQuery RO + bytes cap (or internal-proxy)
 │   └── app/integrations/      slack-notify / email / sheets-export
-├── railway.toml               cron schedule — NO web service at all
-└── AGENTS.md
+└── railway cron schedule      — NO web service at all
 ```
 
 **Why this exists as its own preset:** the output *is* the product. Scaffolding a web app around a weekly digest creates a UI nobody visits and a server that idles 167 hours a week. Cron + query + deliver is the honest architecture, and it's dramatically cheaper to run and maintain.
@@ -335,10 +376,10 @@ Every preset composes from the same module library (§8) on top of the fixed bas
 
 **They get:**
 ```
-<name>/
+apps/<name>/
 ├── extension/                 TS + Manifest v3, build to unpacked/store zip
 └── backend/                   OPTIONAL — only if it needs server state
-                               (then: FastAPI + Guardian, per the fixed standards)
+                               (then: shared backend + Guardian, per the fixed standards)
 ```
 
 **Why:** Sometimes the right UI is inside an existing page, not a new app. Kept deliberately minimal; if the extension needs real server state it composes the standard backend modules rather than inventing its own.
@@ -363,71 +404,118 @@ Every preset composes from the same module library (§8) on top of the fixed bas
 
 ---
 
-## 8. The generator — `headout/app-scaffold`
+## 8. The monorepo + generator
 
-One repo produces all of the above. **A generator, not N template repos**, because GitHub's "Use this template" can't compose modules — and the catalogue is exactly that: ~7 interface modules × ~7 data modules × 4 async tiers × add-on flags, sharing one base.
+**Decision (ExperienceOS sync):** a **single shared monorepo** for internal tools, not N separate repos per problem statement.
+
+> **Reality check (§5a):** ExperienceOS today is *not* this shape — it's a **git-submodule monorepo** stitching separate repos (`mmp-builder`, `supply-mission-control`), each with its own `client/` + `server/` + `packages/design-system/`. The `apps/`+`packages/` single-workspace layout below is the **proposed** consolidation target, not existing fact. Reuse ExperienceOS's *internal* conventions (umbreon DS, Express BFF, auth modules, token pipeline) as the reference; the workspace topology is still ours to stand up.
+
+- Each problem statement becomes a **feature module** with its own dedicated route.
+- Routes are protected via **Guardian roles** tied to the requesting user/group.
+- **One** build and deployment pipeline; OD support comes out of the box.
+- Shared `packages/` for the ExperienceOS design system, ESLint rules, common utils, and shared business logic.
+- ExperienceOS and Bob are consolidation candidates (discussed with Janinder); Orbit and peers can follow.
+
+The generator still composes modules — but it **adds a feature folder + route into the monorepo**, it does not mint a new GitHub repo per request.
 
 ```
-headout/app-scaffold
-├── cli/                      generate.py: answers.json → new composed repo
-├── scaffold.config.schema.json   the contract the Storefront scope agent fills
-├── base/                     CI, init.sh, AGENTS.md template, railway/compose templates
-├── interfaces/               web-spa · web-next · slack-bot · mcp-server ·
-│                             chrome-extension · api-only · reporter
-├── backend/fastapi-core/     config · logging · health · error format
-├── auth/                     guardian-web · guardian-api · guardian-rbac ·
-│                             row-level · service-key
-├── data/                     postgres · mongo · bigquery-ro · redis-cache ·
-│                             s3-media · pgvector · sheets
-├── async/                    tier1-background · tier2-celery · cron
-├── realtime/                 polling · sse · websocket(warned)
-├── ai/                       llm · rag(wires to compass first) · agent(flagged → §9)
-├── integrations/             internal-proxy · slack-notify · zendesk · email · sheets-export
-├── observability/            logging · metrics · alerts
-└── docs/                     DECISION-FRAMEWORK.md · QUESTIONS.md · GRADUATION.md
+headout/internal-tools   (working name — finalize with Janinder)
+├── apps/                     or features/ — one folder per problem statement
+│   └── <name>/               route + UI + (optional) API slice for that tool
+├── packages/
+│   ├── design-system/        ExperienceOS DS (thematic, data-intensive primitives)
+│   ├── eslint-config/        semantic tokens · Flex/Container/Grid over raw div
+│   ├── utils/                shared helpers
+│   └── business-logic/       cross-tool domain logic as it emerges
+├── backend/                  shared API service (framework TBD — see §5 / Janinder)
+│   ├── auth/                 guardian · rbac · service-key
+│   ├── data/                 postgres · mongo · bigquery-ro · redis-cache · …
+│   ├── async/                tier1-background · tier2-celery · cron
+│   └── …
+├── scaffold/                 generate.py: answers.json → new feature module
+│   └── scaffold.config.schema.json
+├── docker-compose.yml · railway.toml · AGENTS.md · HeadoutAgentsConfig
+└── docs/                     DECISION-FRAMEWORK · QUESTIONS · GRADUATION · COMPONENT-REQUESTS
 ```
 
-Presets are pre-filled `answers.json` files — adding a preset or module is additive and doesn't touch existing ones.
+Presets remain pre-filled `answers.json` files — additive. Headless presets (automation-service, slack-bot, mcp-server, reporter) may still land as backend-only modules or sibling services in the same monorepo rather than separate GitHub repos.
+
+**Starting point:** use the existing **ExperienceOS repo** implementation as the reference for design-system usage patterns before scaffolding the new monorepo layout.
 
 ---
 
-## 9. Graduation — when a tool outgrows self-serve
+## 9. Component gaps — don't block delivery
 
-Scaffolded tools are born in the self-serve tier. Three triggers, stated in every generated `AGENTS.md`, move a tool to engineering ownership:
+`@headout/umbreon` coverage is strong for data-intensive UIs (~60 components, §5a); it is **not** complete for every pattern scaffolding will need. But ExperienceOS already has a **real, documented governance model** — use it rather than inventing one.
 
-1. **Scale:** sustained users beyond roughly the low hundreds. At that point it is a product, not a micro-tool — and it should land on engineering's conventions (Next.js App Router on the frontend, per the consumer-side standard; Kotlin/Spring Boot where a hardened service is warranted). The `web-next` interface module exists so engineering-owned-from-day-one tools can also be scaffolded.
+**The governance that actually exists** (`docs/design-system-governance.md`, verified §5a):
+- **Layers:** `tokens/` (source of truth) → `primitives/` (reusable controls) → `layouts/` (page shells). `components/ui/` is **legacy, frozen, deprecated** — enforced by ESLint `local/no-new-legacy-ui-imports` + a shrinking `legacy-ui-import-allowlist.json` (migrate-on-touch; never add entries).
+- **Stability levels:** Stable (tokens, proven primitives, layouts) · Emerging (primitives still being proven in Storybook) · Legacy.
+- **Extend vs compose:** compose from existing primitives for feature-specific assemblies; add a **new primitive** only when the behavior is reused across >1 feature, needs a consistent API, or carries a11y/interaction logic that shouldn't be reimplemented; add a **new layout** when a page structure repeats across routes.
+- **Change intake before adding anything:** (1) check `primitives/` + `layouts/` for a fit, (2) confirm the token contract in `tokens.css`, (3) document usage in Storybook when the API becomes reusable.
+
+> **Correction:** the earlier "multi-step forms aren't genericized" gap is **closed** — `WizardPage` + `WizardStepRail` ship in umbreon (§5a). And the "voting/upvote" prioritization was a **sync proposal that is not implemented** in the repo; the governance above is what's real. Keep upvoting as an *idea* if the platform team wants it, but don't cite it as existing.
+
+**When Claude/AI genuinely hits a pattern with no umbreon equivalent:**
+1. Ship a **temporary feature-local component** so delivery isn't blocked. Mark it non-standards-compliant / pending-DS.
+2. Follow the **change-intake** path above; if it clears the "add a new primitive/layout" bar, propose it into umbreon (tracked, not informal Slack), not a permanent local one-off.
+3. Resolution is **asynchronous** — replace the temporary component when umbreon lands the official one; ESLint should forbid the temporary pattern once the real primitive exists (mirrors the legacy-UI freeze mechanism).
+
+This process belongs in `AGENTS.md` and the scope agent's handoff so builders don't silently invent permanent one-offs.
+
+---
+
+## 10. Graduation — when a tool outgrows self-serve
+
+Scaffolded tools are born in the self-serve tier inside the monorepo. Three triggers, stated in every generated module's docs, move a tool to engineering ownership:
+
+1. **Scale:** sustained users beyond roughly the low hundreds. At that point it is a product, not a micro-tool — and it should land on engineering's conventions (Next.js App Router where SSR/product-surface standards apply; Kotlin/Spring Boot where a hardened service is warranted). Self-serve internal tools stay on **React + Vite**.
 2. **Criticality:** revenue-touching, cross-team writes, or a failure that pages someone.
 3. **Architecture:** the moment a requirement needs Temporal-grade durable orchestration, WebSocket collaboration, or a Claude-agent harness — these are flagged by the generator itself, not discovered later.
 
-Graduation is a planned handoff (the tool already has CI, migrations, structured logs, and org agent-config), not a rewrite-from-scratch — that is much of the point of scaffolding.
+Graduation is a planned handoff (the tool already has CI, migrations, structured logs, and org agent-config), not a rewrite-from-scratch — that is much of the point of scaffolding. Extracting a hot feature module into its own eng-owned service is an allowed graduation path; inventing a parallel shadow stack is not.
 
 ---
 
-## 10. What we need from the platform team
+## 11. What we need from the platform team
 
 **Approvals:**
-1. The fixed standards (§5) — in particular *Guardian-always* and *FastAPI-as-the-only-scaffolded-backend*.
+1. The fixed standards (§5) — in particular *Guardian-always*, *React + Vite for internal tools*, *`@headout/umbreon` design system + ESLint* (all verified live, §5a), and the monorepo/feature-module model. **Backend language is the one genuinely-open call: adopt ExperienceOS's incumbent Express/TS BFF (Guardian already built) or introduce FastAPI (net-new Guardian) — decide with Janinder.**
 2. The 11 preset compositions (§7) — or tell us which to cut/merge for v1. Our own suggestion for a minimal v1: presets **1, 2, 3, 4, 7, 10** cover everything the audit actually found; 5, 6, 8, 9, 11 can follow.
-3. The graduation policy (§9).
+3. The component-gap process (§9) and graduation policy (§10).
 
 **Build/provision items (blocking):**
 
 | Item | Status | Needed from platform |
 |---|---|---|
-| Guardian session-validation dependency for FastAPI | **Net-new** — no Python/FastAPI Guardian integration exists (existing Python usage is Django-only). Logic is proven in Kotlin (`GuardianAuthFilter`) and Express (`requireAuth`); this is a port. | Review of the implementation; agreement it becomes the blessed pattern |
-| `oak` MCP token for the scaffolder | oak exists and serves the design system | One provisioned token for the scaffold/build environment |
-| Railway project provisioning | — | An org-level flow (or API token) so the generator can create projects/services |
-| BigQuery read-only service accounts | — | A per-tool RO service-account flow with the bytes-billed cap as policy |
-| `headout/app-scaffold` repo | To be built | Ownership/maintenance agreement — Storefront builds v1; long-term home to be agreed |
+| Backend stack confirmation (API framework, DB defaults, cron, BigQuery) | **Open — Janinder** (EM, ExperienceOS; currently in office) | Sync with Anish; close FastAPI-vs-alternatives, Postgres-vs-Mongo defaults, cron needs, BigQuery integration |
+| Guardian session-validation dependency for the chosen backend | **Exists in TS today** (ExperienceOS `server/middleware/auth/guardian.client.ts` + `Guardian-App-Starter-Kit` `requireAuth`); also proven in Kotlin (`GuardianAuthFilter`). **Net-new only if we pick Python/FastAPI.** | Bless the TS BFF as the pattern, or greenlight building the FastAPI one |
+| `@headout/umbreon` DS + ESLint rules as shared `packages/` | **Published package + enforced ESLint rules already exist** in ExperienceOS (§5a) | Publish/registry access for scaffold agents; token/consumption path outside the ExperienceOS repo |
+| Railway project provisioning (monorepo pipeline) | — | Org-level flow so the shared deploy works; OD support expected from one pipeline |
+| BigQuery read-only service accounts | — | Per-tool RO service-account flow with bytes-billed cap as policy |
+| Component-request + upvote track | Proposed | Design/platform owner for the queue; don't block feature delivery |
+| Shared internal-tools monorepo | To be stood up from ExperienceOS patterns | Ownership with Janinder/platform; Storefront scaffolds feature modules into it |
 
-**What already exists and is reused, not rebuilt:** `@headout/headauth` (frontend Guardian auth), `python-fastapi-template` (backend base), the `eevee` design-system monorepo + `oak`, `HeadoutAgentsConfig` (agent config install/sync), `compass` (RAG API), the Celery+SQS pattern (`dior`), the Slack-bolt pattern (PlatoBot/bar), the MCP-server pattern (aviator/argus-mcp), and `spring-boot-service-template` (pointed to for engineering-grade services).
+**What already exists and is reused, not rebuilt:** `@headout/umbreon` (ExperienceOS DS — published package, ~60 components, enforced ESLint rules, token pipeline, AI UI-gen skills — §5a), the ExperienceOS **Express/TS Guardian BFF** (working incumbent backend), `@headout/headauth` (frontend Guardian auth), `Guardian-App-Starter-Kit` (Express BFF reference), `python-fastapi-template` (backend *alternative*, only if we go Python), `HeadoutAgentsConfig`, `compass` (RAG API), Celery+SQS (`dior`), Slack-bolt (PlatoBot/bar), MCP-server pattern (aviator/argus-mcp), `spring-boot-service-template` (eng-grade services).
+
+---
+
+## 12. Next steps (from scaffolding sync)
+
+| Action | Owner | Notes |
+|---|---|---|
+| **Connect with Janinder on backend architecture** | Anish | Cover API framework, DB choice (Postgres vs Mongo), cron needs, BigQuery integration. Loop Anish into the meeting when it happens. |
+| **Review shared architecture doc and flag gaps** | Platform / reviewers | Anish shares the doc covering scenario buckets and folder structures per problem-statement type — this taxonomy is that doc's Storefront-facing twin; flag mismatches. |
+| **Reference ExperienceOS repo for DS usage patterns** | Scaffold builders | Starting point before standing up the new monorepo; do not invent a parallel component vocabulary. |
 
 ---
 
 ## Appendix A — evidence and method
 
 - **Replit audit (2026-07-13):** full inventory of the "Headout Workspace" Replit Teams org — 39 tools, categorized by function; several confirmed abandoned by their owners.
-- **GitHub survey:** all 535 `headout` org repos enumerated; forks/archived excluded; READMEs fetched and read for all 488 active candidates (393 had real content); the load-bearing repos (`headauth`, `python-fastapi-template`, `spring-boot-service-template`, `next-template`, `Guardian-App-Starter-Kit`, `eevee`, `oak`, `recon`, `dior`, `las`, MCP servers, Slack bots) read in full — trees, source files, and skills, not just descriptions.
-- **Precedent mapping:** every pattern this document relies on is anchored to a named, verified repo (listed inline in §5–§7). Where something does **not** exist, it is called net-new (§10) rather than assumed.
+- **GitHub survey:** all 535 `headout` org repos enumerated; forks/archived excluded; READMEs fetched and read for all 488 active candidates (393 had real content); the load-bearing repos (`headauth`, `python-fastapi-template`, `spring-boot-service-template`, `next-template`, `Guardian-App-Starter-Kit`, ExperienceOS, `recon`, `dior`, `las`, MCP servers, Slack bots) read in full — trees, source files, and skills, not just descriptions.
+- **ExperienceOS scaffolding sync (2026-07-13):** frontend = React + Vite (not Next.js for internal tools); ExperienceOS DS + custom ESLint; single monorepo / feature modules; component-gap + upvote process; backend decisions pending Janinder (FastAPI vs alternatives, Postgres vs Mongo, cron, BigQuery).
+- **ExperienceOS repo read (2026-07-13, §5a):** the sync above cross-checked against the real `headout/experienceos` + `mmp-builder` submodules — trees, `package.json`, `packages/design-system/COMPONENTS.md`, `docs/design-system-governance.md`, `scripts/eslint-design-system-rules.mjs`, `server/middleware/`, and the `.claude/skills/` UI-gen tooling read directly. This corrected four earlier assumptions: DS is `@headout/umbreon` (named + published); backend is **Express/TS**, not FastAPI; multi-step wizards **are** genericized (`WizardPage`/`WizardStepRail`); and the component-gap "upvote" model is unimplemented — the repo uses a documented primitives/layouts/legacy-freeze governance instead.
+- **Precedent mapping:** every pattern this document relies on is anchored to a named, verified repo where possible (listed inline in §5–§7). Where something does **not** exist, it is called net-new / pending (§11) rather than assumed.
 - **Methodology source:** the build process embedded in every scaffold's `AGENTS.md` is the Applied AI team's `Building-a-scaled-app.md` (PRD → prototype + crux → system design → ERD → chunked implementation).
 - **Known open items:** why the three finance reconciliation tools bypassed `recon`'s existing Retool UI has not been confirmed with Finance — if that UI is inadequate, the right fix may be improving `recon`'s front-end rather than treating this purely as a discovery failure. Flagged for follow-up rather than asserted.
