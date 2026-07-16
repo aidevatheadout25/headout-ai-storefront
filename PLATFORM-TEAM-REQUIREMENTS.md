@@ -22,8 +22,7 @@ Every tool built through Storefront lives in a repo the system creates and contr
 
 ## 3. Auth / SSO
 
-- **[P0] Google Workspace SSO** — OAuth client credentials for the Storefront app, restricted to the Headout domain.
-- **[P1] How SSO is provisioned for *scaffolded* apps** — the base template ships with SSO wired; we need the standard way new internal apps authenticate against the workspace so it's baked in, not hand-rolled each time.
+- **[RESOLVED] SSO is Guardian, not raw Google OAuth.** Scaffolding for this is clear — Headout uses **Guardian**, and there's an existing **skill for setting it up easily** (Rohan sharing). The template bakes in Guardian via that skill; no bespoke OAuth wiring needed. *(Action: get the Guardian setup skill, bake into the base template.)*
 
 ## 4. Data access
 
@@ -59,6 +58,11 @@ The recent audit found 4–5 internal apps with exposed APIs / data-access issue
 - So: template CI (below) catches mechanical issues → Vulcan's auto-comments serve as an AI first-pass *on GitHub, independently* → a human reviews and merges. Storefront gates progression on the human approval, and surfaces a link to the PR (with whatever Vulcan commented) rather than parsing Vulcan.
 
 Asks:
+- **[OPEN DESIGN — flagged in review] The gated-approval model needs more thought.** There are actually *three* distinct gates in the system and we've been treating them loosely:
+  1. **Publisher listing approval** — someone registers an already-built tool; who approves it going into the catalogue, and against what bar (is it a listing check or a light review)?
+  2. **Ship-to-catalogue review** — a tool built through Storefront; the human-approval gate before deploy + auto-list.
+  3. **Access approval on the tool itself** — some listed tools (e.g. Bookings MCP) are request-access, not open.
+  Open questions to resolve: who are the approvers for each (role-based? per-team owners? a central group?), what prevents the reviewer becoming a bottleneck, how approval interacts with Guardian permissions, and whether v1 collapses these into one simple human-approval step. *(Design this properly before build; clarify Headout's existing approval-workflow conventions via Delphi.)*
 - **[P0] The org's security standards / checklist for internal apps** — so the template's CI and pre-commit hooks enforce the real rules up front (this is what actually protects us in v1, since Vulcan can't gate).
 - **[P1] The specific failure classes from the recent audit** — we build the template's CI checks (semgrep/etc.) around these (exposed routes, missing auth, open data access).
 - **[P1] Who does the human review** for Storefront-shipped tools (the actual gate). *(Yuvraj to assign.)*

@@ -8,7 +8,8 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "test": "tsx --test src/eval/*.test.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "seed:real": "tsx src/scripts/seedRealTools.ts"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
