@@ -1,0 +1,673 @@
+<style>
+  :root {
+    --bg: #f6f8fa;
+    --surface: #ffffff;
+    --surface-2: #f0f3f7;
+    --ink: #131720;
+    --muted: #5b6675;
+    --faint: #8b95a3;
+    --border: #e1e6ec;
+    --border-strong: #cfd6df;
+    --accent: #2f6bff;
+    --accent-ink: #1d4ed8;
+    --accent-wash: #eaf0ff;
+    --good: #0e8a5f;
+    --good-wash: #e6f5ee;
+    --good-border: #b9e2ce;
+    --warn: #9a6212;
+    --warn-wash: #fbf1de;
+    --warn-border: #ead9b5;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --radius: 10px;
+    --maxw: 1140px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c1017;
+      --surface: #141a22;
+      --surface-2: #1a212b;
+      --ink: #e6edf3;
+      --muted: #99a3b0;
+      --faint: #6b7480;
+      --border: #262d38;
+      --border-strong: #333c48;
+      --accent: #5b8cff;
+      --accent-ink: #8fb0ff;
+      --accent-wash: #172136;
+      --good: #43b581;
+      --good-wash: #10241b;
+      --good-border: #1f4535;
+      --warn: #d9a03a;
+      --warn-wash: #251c0d;
+      --warn-border: #453516;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f6f8fa; --surface: #ffffff; --surface-2: #f0f3f7; --ink: #131720;
+    --muted: #5b6675; --faint: #8b95a3; --border: #e1e6ec; --border-strong: #cfd6df;
+    --accent: #2f6bff; --accent-ink: #1d4ed8; --accent-wash: #eaf0ff;
+    --good: #0e8a5f; --good-wash: #e6f5ee; --good-border: #b9e2ce;
+    --warn: #9a6212; --warn-wash: #fbf1de; --warn-border: #ead9b5;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0c1017; --surface: #141a22; --surface-2: #1a212b; --ink: #e6edf3;
+    --muted: #99a3b0; --faint: #6b7480; --border: #262d38; --border-strong: #333c48;
+    --accent: #5b8cff; --accent-ink: #8fb0ff; --accent-wash: #172136;
+    --good: #43b581; --good-wash: #10241b; --good-border: #1f4535;
+    --warn: #d9a03a; --warn-wash: #251c0d; --warn-border: #453516;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  /* ---- header ---- */
+  header.masthead {
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, var(--surface) 0%, var(--bg) 100%);
+    padding: 56px 0 40px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    margin: 0 0 14px;
+  }
+  h1 {
+    font-size: clamp(30px, 5vw, 46px);
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+    margin: 0 0 16px;
+    font-weight: 720;
+  }
+  .lede {
+    font-size: 18px;
+    color: var(--muted);
+    max-width: 62ch;
+    margin: 0;
+  }
+  .lede strong { color: var(--ink); font-weight: 640; }
+
+  section { padding: 48px 0; border-bottom: 1px solid var(--border); }
+  .sec-head { display: flex; align-items: baseline; gap: 14px; margin: 0 0 6px; }
+  .sec-num {
+    font-family: var(--mono); font-size: 13px; color: var(--faint);
+    letter-spacing: 0.1em;
+  }
+  h2 {
+    font-size: 24px; letter-spacing: -0.01em; margin: 0; font-weight: 680;
+    text-wrap: balance;
+  }
+  .sec-sub { color: var(--muted); margin: 8px 0 28px; max-width: 68ch; }
+
+  /* ---- pipeline ---- */
+  .pipe {
+    display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px;
+  }
+  .stage {
+    flex: 1 1 150px; min-width: 150px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px 16px 14px;
+    display: flex; flex-direction: column; gap: 6px;
+    position: relative;
+  }
+  .stage .k {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--faint);
+  }
+  .stage .t { font-weight: 620; font-size: 15px; }
+  .stage .d { font-size: 13px; color: var(--muted); }
+  .stage.gate { border-color: var(--warn-border); background: var(--warn-wash); }
+  .stage.gate .k { color: var(--warn); }
+  .stage.emit { border-color: var(--good-border); background: var(--good-wash); }
+  .stage.emit .k { color: var(--good); }
+  .arrow {
+    align-self: center; color: var(--border-strong); font-size: 20px;
+    flex: 0 0 auto; line-height: 1;
+  }
+  .branch-note {
+    margin-top: 14px; font-size: 13px; color: var(--muted);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .branch-note .dot { color: var(--warn); font-family: var(--mono); }
+
+  /* ---- layer legend ---- */
+  .layers { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 12px; margin-bottom: 24px; }
+  .layer {
+    border: 1px solid var(--border); border-left: 3px solid var(--lc, var(--accent));
+    border-radius: 8px; background: var(--surface); padding: 13px 15px;
+  }
+  .layer .lname { font-family: var(--mono); font-size: 13px; font-weight: 600; }
+  .layer .lrole { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  .layer .ltravel { font-size: 11.5px; color: var(--faint); margin-top: 7px; font-family: var(--mono); }
+
+  /* ---- tree ---- */
+  .treebox {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow-x: auto;
+  }
+  pre.tree {
+    margin: 0; padding: 20px 22px; font-family: var(--mono);
+    font-size: 12.5px; line-height: 1.75; color: var(--ink);
+    min-width: 520px;
+  }
+  pre.tree .c { color: var(--faint); }
+  pre.tree .pk { color: var(--accent-ink); font-weight: 600; }
+  pre.tree .base { color: var(--good); font-weight: 600; }
+  pre.tree .ps { color: var(--warn); font-weight: 600; }
+  pre.tree .eng { color: var(--ink); font-weight: 700; }
+
+  /* ---- preset grid ---- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 18px 18px 16px;
+    display: flex; flex-direction: column; gap: 12px;
+    border-top: 3px solid var(--good);
+  }
+  .card-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .pname { font-family: var(--mono); font-weight: 640; font-size: 15px; }
+  .pname .pn { color: var(--faint); font-size: 12px; margin-right: 8px; }
+  .emit-tag {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.05em;
+    color: var(--good); border: 1px solid var(--good-border); background: var(--good-wash);
+    padding: 2px 7px; border-radius: 20px; white-space: nowrap; text-transform: uppercase;
+  }
+  .problem {
+    font-size: 14.5px; color: var(--ink); font-style: italic;
+    border-left: 2px solid var(--border-strong); padding-left: 12px; margin: 0;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    background: var(--surface-2); border: 1px solid var(--border);
+    padding: 2px 8px; border-radius: 6px; white-space: nowrap;
+  }
+  .chip b { color: var(--faint); font-weight: 500; }
+  .flag {
+    font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 6px;
+    color: var(--warn); background: var(--warn-wash); border: 1px solid var(--warn-border);
+  }
+  .handover { border-top: 1px dashed var(--border); padding-top: 11px; }
+  .handover .hk {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--faint); display: block; margin-bottom: 8px;
+  }
+  .comp { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .tok {
+    font-family: var(--mono); font-size: 11.5px; padding: 3px 8px; border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+  .tok.base { background: var(--good-wash); border-color: var(--good-border); color: var(--good); font-weight: 600; }
+  .tok.overlay { background: var(--accent-wash); border-color: color-mix(in srgb, var(--accent) 30%, transparent); color: var(--accent-ink); font-weight: 600; }
+  .tok.mod { background: var(--surface); color: var(--muted); }
+  .tok.mod::before { content: "+ "; color: var(--faint); }
+  .plus { color: var(--faint); font-family: var(--mono); }
+  .tok.core { background: var(--surface-2); border-color: var(--border); color: var(--muted); }
+  .tok.add { background: var(--surface); border-color: var(--border-strong); color: var(--ink); font-weight: 500; }
+
+  /* ---- shell indicator (which slices of app-base a preset actually gets) ---- */
+  .shells { display: flex; flex-wrap: wrap; gap: 6px; }
+  .shell {
+    font-family: var(--mono); font-size: 10.5px; padding: 2px 8px; border-radius: 20px;
+    border: 1px solid var(--border); display: inline-flex; align-items: center; gap: 5px;
+  }
+  .shell.on { color: var(--good); border-color: var(--good-border); background: var(--good-wash); }
+  .shell.off { color: var(--faint); background: var(--surface-2); text-decoration: line-through; }
+  .shell.alt { color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 30%, transparent); background: var(--accent-wash); }
+  .shell .m { font-size: 9px; }
+
+  /* ---- base slice matrix (section 02) ---- */
+  .matrixbox { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow-x: auto; margin-top: 18px; }
+  table.matrix { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 12.5px; }
+  table.matrix th, table.matrix td { padding: 9px 14px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.matrix thead th { font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); font-weight: 600; }
+  table.matrix tbody tr:last-child td { border-bottom: none; }
+  table.matrix td.pn2 { font-family: var(--mono); font-weight: 600; }
+  table.matrix td.core-cell { color: var(--muted); font-size: 12px; }
+  .m-yes { color: var(--good); font-weight: 700; }
+  .m-no { color: var(--faint); }
+  .m-alt { color: var(--accent-ink); font-weight: 600; }
+
+  /* ---- core contents table ---- */
+  table.core-table { border-collapse: collapse; width: 100%; font-size: 12.5px; min-width: 560px; }
+  table.core-table th, table.core-table td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.core-table thead th { font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); font-weight: 600; }
+  table.core-table tbody tr:last-child td { border-bottom: none; }
+  table.core-table td:first-child { font-family: var(--mono); font-weight: 600; white-space: nowrap; color: var(--ink); }
+  table.core-table td:last-child { color: var(--muted); }
+  .core-note { font-size: 13px; color: var(--muted); margin: 14px 0 0; max-width: 78ch; }
+
+  /* ---- framing callout ---- */
+  .framing {
+    background: var(--accent-wash);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    border-radius: var(--radius); padding: 17px 19px; margin: 0 0 26px;
+  }
+  .framing .fh { font-weight: 700; font-size: 15px; margin: 0 0 7px; color: var(--ink); }
+  .framing p { margin: 0; font-size: 13.5px; color: var(--muted); max-width: 92ch; }
+  .framing strong { color: var(--ink); font-weight: 640; }
+  .framing em { color: var(--ink); font-style: italic; }
+  .ceil {
+    font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--warn); background: var(--warn-wash); border: 1px solid var(--warn-border);
+    padding: 1px 6px; border-radius: 5px; white-space: nowrap;
+  }
+
+  /* ---- card examples + distinct ---- */
+  .examples { display: flex; flex-wrap: wrap; gap: 5px 9px; align-items: center; font-size: 12.5px; }
+  .examples .lab, .distinct .dl {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.07em; text-transform: uppercase;
+    color: var(--faint);
+  }
+  .examples .ex { color: var(--ink); }
+  .examples .ex + .ex::before { content: "· "; color: var(--faint); margin-right: 4px; }
+  .distinct { border-top: 1px solid var(--border); padding-top: 11px; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+  .distinct .dl { display: block; margin-bottom: 4px; }
+  .distinct b { color: var(--accent-ink); font-weight: 600; }
+
+  /* ---- gate 0 ---- */
+  .gate0-note { color: var(--muted); margin: 0 0 22px; max-width: 68ch; }
+  .routes { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px,1fr)); gap: 12px; }
+  .route {
+    background: var(--warn-wash); border: 1px solid var(--warn-border);
+    border-radius: 8px; padding: 14px 15px;
+  }
+  .route .rp { font-size: 14px; font-style: italic; margin: 0 0 9px; color: var(--ink); }
+  .route .rmeta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-family: var(--mono); font-size: 11.5px; }
+  .route .rcat { color: var(--warn); }
+  .route .rto { color: var(--ink); font-weight: 600; }
+  .route .rno {
+    margin-left: auto; color: var(--warn); border: 1px solid var(--warn-border);
+    padding: 1px 7px; border-radius: 20px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em;
+  }
+
+  .legend-inline { display: flex; flex-wrap: wrap; gap: 16px; margin: 22px 0 0; font-size: 12.5px; color: var(--muted); }
+  .legend-inline span { display: inline-flex; align-items: center; gap: 7px; }
+  .sw { width: 11px; height: 11px; border-radius: 3px; border: 1px solid var(--border-strong); display: inline-block; }
+
+  footer { padding: 34px 0 60px; color: var(--faint); font-size: 13px; }
+  footer code { font-family: var(--mono); color: var(--muted); }
+
+  a { color: var(--accent-ink); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  @media (max-width: 600px) {
+    .arrow { transform: rotate(90deg); align-self: flex-start; margin-left: 8px; }
+    .pipe { flex-direction: column; }
+  }
+</style>
+
+<header class="masthead">
+  <div class="wrap">
+    <p class="eyebrow">Storefront · internal-tools scaffold</p>
+    <h1>The Scaffold Monorepo</h1>
+    <p class="lede">One lookup source, per-tool repos out. A requester's problem statement lands in <strong>one category</strong>, which picks <strong>one preset</strong>, which decides <strong>exactly what repository we package and hand over</strong>. Nothing runs from this monorepo — it's the source we carve from.</p>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">01</span><h2>How a request becomes a repository</h2></div>
+    <p class="sec-sub">The scope agent's answers flow left to right. Gate 0 decides <em>whether</em> a repo is handed over at all; the preset catalogue decides <em>which</em> one.</p>
+    <div class="pipe">
+      <div class="stage">
+        <span class="k">Input</span>
+        <span class="t">answers.json</span>
+        <span class="d">10-question checklist filled by the scope agent</span>
+      </div>
+      <span class="arrow">›</span>
+      <div class="stage gate">
+        <span class="k">Gate 0</span>
+        <span class="t">Is this even a repo?</span>
+        <span class="d">Routes non-app requests out — no repo produced</span>
+      </div>
+      <span class="arrow">›</span>
+      <div class="stage">
+        <span class="k">Lookup</span>
+        <span class="t">preset + modules</span>
+        <span class="d">Answers map to one of 11 shapes and its flags</span>
+      </div>
+      <span class="arrow">›</span>
+      <div class="stage">
+        <span class="k">Compose</span>
+        <span class="t">base + overlays</span>
+        <span class="d">Skeleton merged with preset &amp; module files</span>
+      </div>
+      <span class="arrow">›</span>
+      <div class="stage emit">
+        <span class="k">Package</span>
+        <span class="t">headout/&lt;tool&gt;</span>
+        <span class="d">Standalone repo pushed, Guardian roles wired, auto-listed</span>
+      </div>
+    </div>
+    <p class="branch-note"><span class="dot">└─</span> Requests that fail Gate 0 branch off here → routed to a no-code workflow, a skill, a script, or an existing tool. No repository.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">02</span><h2>What's in the monorepo</h2></div>
+    <p class="sec-sub">Four layers. The split that makes it work: the <b>framework</b> travels to every emitted repo as a versioned dependency (never copied), while the <b>skeleton, presets, and modules</b> are rendered as owned source the builder edits.</p>
+    <div class="layers">
+      <div class="layer" style="--lc: var(--accent)">
+        <div class="lname">packages/</div>
+        <div class="lrole">Shared framework — design system, Guardian auth recipe, BFF kit, data/async kits, observability.</div>
+        <div class="ltravel">→ travels as @headout/* dependency</div>
+      </div>
+      <div class="layer" style="--lc: var(--good)">
+        <div class="lname">bases/app-base/</div>
+        <div class="lrole">The skeleton every emitted repo starts from — frontend shell, backend BFF entry, CI, agent skills.</div>
+        <div class="ltravel">→ rendered as owned source</div>
+      </div>
+      <div class="layer" style="--lc: var(--warn)">
+        <div class="lname">presets/ + modules/</div>
+        <div class="lrole">The 11 shapes and the composable flags (data, auth, async, integrations). Each is a manifest + overlay.</div>
+        <div class="ltravel">→ rendered as overlay files</div>
+      </div>
+      <div class="layer" style="--lc: var(--ink)">
+        <div class="lname">scaffold/</div>
+        <div class="lrole">The engine — registry (answers→preset), compose (merge overlays), package-repo (emit &amp; register).</div>
+        <div class="ltravel">→ runs the lookup, never ships</div>
+      </div>
+    </div>
+    <div class="treebox">
+<pre class="tree"><span class="eng">headout/internal-tools-scaffold</span>
+<span class="c">│</span>
+├── <span class="pk">packages/</span>              <span class="c"># shared framework · published @headout/* · emitted repos DEPEND on these</span>
+│   ├── umbreon/           <span class="c"># the design system</span>
+│   ├── guardian-auth/     <span class="c"># verified Guardian/Ory recipe (backend requireAuth + frontend bootstrap)</span>
+│   ├── bff-kit/           <span class="c"># Express app factory + middleware + typed downstream-client factory</span>
+│   ├── data-kit/          <span class="c"># Drizzle/pg + migration harness · mongo adapter</span>
+│   ├── async-kit/         <span class="c"># kafka helpers · node-cron registry · background tasks</span>
+│   ├── observability/     <span class="c"># Coralogix logs · /health · /metrics</span>
+│   ├── llm-kit/           <span class="c"># Anthropic client · streaming · cost logging</span>
+│   └── eslint-config/     <span class="c"># DS rules + require-auth-on-routes</span>
+│
+├── <span class="base">bases/app-base/</span>        <span class="c"># a MENU, not a monolith — every preset picks its slices (see table below)</span>
+│   ├── core/              <span class="c"># package.json · CI · AGENTS.md · .env.example · README — always, every preset</span>
+│   ├── frontend-shell/    <span class="c"># Vite+React·DS·auth bootstrap — ONLY presets with a web UI</span>
+│   ├── backend-shell/     <span class="c"># Express BFF·requireAuth·/health — ONLY presets with an HTTP backend</span>
+│   ├── alt-shells/        <span class="c"># extension-shell · mcp-shell · bot-shell · cron-entry — the non-web interfaces</span>
+│   └── .agents/skills/    <span class="c"># guardian-auth · api-integration · use-design-system</span>
+│
+├── <span class="ps">presets/</span>               <span class="c"># the 11 shapes — manifest + overlay each</span>
+│   └── viewer/ warehouse-dashboard/ crud-admin/ workflow-console/ …
+├── <span class="ps">modules/</span>               <span class="c"># composable flags toggled by checklist answers</span>
+│   └── data-postgres/ data-mongo/ data-bigquery-ro/ auth-rbac/ async-* …
+│
+└── <span class="eng">scaffold/</span>              <span class="c"># the lookup + packaging engine</span>
+    └── registry.ts · compose.ts · package-repo.ts · answers.schema.json</pre>
+    </div>
+
+    <p class="sec-sub" style="margin:24px 0 0"><b>"Base" is not one fixed bundle a tool either fully gets or doesn't.</b> <code style="font-family:var(--mono);font-size:12.5px">core</code> ships to every repo; everything else in <code style="font-family:var(--mono);font-size:12.5px">app-base</code> is a slice a preset either includes or drops. A reporter gets no web UI and no HTTP listener at all — it isn't "base minus something," it never had them.</p>
+
+    <p class="sec-sub" style="margin:22px 0 10px"><b>What's actually in <code style="font-family:var(--mono);font-size:13px">core</code></b> — nine items, every repo, regardless of interface:</p>
+    <div class="matrixbox">
+      <table class="core-table">
+        <thead><tr><th>File / folder</th><th>What it is</th></tr></thead>
+        <tbody>
+          <tr><td>package.json</td><td>The workspace manifest — declares which <code style="font-family:var(--mono)">@headout/*</code> framework packages this repo depends on. Guardian auth + the relevant kit are always there; <code style="font-family:var(--mono)">umbreon</code> is added only when a frontend-shell is also present.</td></tr>
+          <tr><td>tsconfig.json</td><td>Extends <code style="font-family:var(--mono)">@headout/tsconfig</code>'s strict base — the app/node/react variant matches whichever shells exist.</td></tr>
+          <tr><td>.github/workflows/ci.yml</td><td>lint → typecheck → test → build, using <code style="font-family:var(--mono)">@headout/eslint-config</code>. The design-system rules only fire on repos that actually have a frontend-shell to lint.</td></tr>
+          <tr><td>.agents/skills/</td><td><code style="font-family:var(--mono)">guardian-auth</code>, <code style="font-family:var(--mono)">api-integration</code>, <code style="font-family:var(--mono)">use-design-system</code> — copied in so the builder's Claude Code follows the verified recipe instead of reinventing auth or downstream wiring.</td></tr>
+          <tr><td>AGENTS.md</td><td>Embeds Building-a-scaled-app (PRD → prototype → system design → chunked implementation), plus this preset's specific conventions and its graduation triggers.</td></tr>
+          <tr><td>.env.example</td><td>Every env var this composed repo actually needs — Guardian config always, plus whatever each turned-on module adds (<code style="font-family:var(--mono)">DATABASE_URL</code>, <code style="font-family:var(--mono)">KAFKA_BROKERS</code>, …).</td></tr>
+          <tr><td>README.md</td><td>What the tool is and how to run it locally — plus, for mcp-server, the <code style="font-family:var(--mono)">claude mcp add</code> / <code style="font-family:var(--mono)">.mcp.json</code> connection snippet.</td></tr>
+          <tr><td>docker-compose.yml</td><td>Local dev services. Present in every repo, but stays close to empty unless a data/cache module adds a service to it.</td></tr>
+          <tr><td>Dockerfile + deploy manifest</td><td>The deploy target — an explicit open item, not a settled default (incumbent AWS/ODE pipeline vs Railway).</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="core-note"><code style="font-family:var(--mono);font-size:12px">core</code> never contains business logic, models, routes, or UI components — none of that is interface-agnostic, so none of it belongs here. That's exactly what the shells, the preset overlay, and the modules add on top.</p>
+
+    <p class="sec-sub" style="margin:22px 0 10px"><b>Then, which shells each preset actually keeps:</b></p>
+    <div class="matrixbox">
+      <table class="matrix">
+        <thead><tr><th>Preset</th><th>core</th><th>frontend-shell</th><th>backend-shell (HTTP)</th><th>alt shell</th></tr></thead>
+        <tbody>
+          <tr><td class="pn2">viewer</td><td class="core-cell">always</td><td class="m-yes">✓ web UI</td><td class="m-yes">✓ (proxy only)</td><td class="m-no">—</td></tr>
+          <tr><td class="pn2">warehouse-dashboard</td><td class="core-cell">always</td><td class="m-yes">✓ web UI</td><td class="m-yes">✓</td><td class="m-no">—</td></tr>
+          <tr><td class="pn2">crud-admin</td><td class="core-cell">always</td><td class="m-yes">✓ web UI</td><td class="m-yes">✓</td><td class="m-no">—</td></tr>
+          <tr><td class="pn2">workflow-console</td><td class="core-cell">always</td><td class="m-yes">✓ web UI</td><td class="m-yes">✓</td><td class="m-no">—</td></tr>
+          <tr><td class="pn2">doc-store</td><td class="core-cell">always</td><td class="m-yes">✓ web UI</td><td class="m-yes">✓</td><td class="m-no">—</td></tr>
+          <tr><td class="pn2">automation-service</td><td class="core-cell">always</td><td class="m-no">✗ none</td><td class="m-yes">✓ (trigger/status only)</td><td class="m-no">—</td></tr>
+          <tr><td class="pn2">slack-bot</td><td class="core-cell">always</td><td class="m-no">✗ none</td><td class="m-no">✗ none</td><td class="m-alt">bot-shell</td></tr>
+          <tr><td class="pn2">mcp-server</td><td class="core-cell">always</td><td class="m-no">✗ none</td><td class="m-no">✗ (no cookie auth)</td><td class="m-alt">mcp-shell</td></tr>
+          <tr><td class="pn2">ai-tool</td><td class="core-cell">always</td><td class="m-yes">✓ web UI</td><td class="m-yes">✓</td><td class="m-no">—</td></tr>
+          <tr><td class="pn2">reporter</td><td class="core-cell">always</td><td class="m-no">✗ none</td><td class="m-no">✗ (no listener)</td><td class="m-alt">cron-entry</td></tr>
+          <tr><td class="pn2">extension</td><td class="core-cell">always</td><td class="m-no">✗ replaced</td><td class="m-alt">optional</td><td class="m-alt">extension-shell</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">03</span><h2>The preset catalogue</h2></div>
+    <p class="sec-sub">If the problem is <em>this</em> → we hand over <em>that</em>. Each card spells out exactly what lands in the repo: which <b>shells</b> from <code style="font-family:var(--mono);font-size:12.5px">app-base</code> it keeps (a tool never gets shells it has no use for — see the matrix above), and the real folders the preset + its modules add on top. There are 11 cards because there are 11 <em>different problem shapes</em> — each names what makes it distinct from its look-alikes.</p>
+
+    <div class="framing">
+      <p class="fh">Examples name the shape, not the size</p>
+      <p>Each card lists real Headout tools that share its problem <strong>shape</strong>. A couple are heavyweight engineering products — <span class="ceil">eng-grade ceiling</span> <strong>Delphi</strong> (codebase-intelligence MCP), <strong>Plato</strong> (autonomous coding bot). <strong>Nobody self-serves a Delphi — and that's the point.</strong> Delphi solves one problem at full engineering depth, but the <em>shape</em> of it — "let an agent answer questions about our data" — is one a non-technical team can meet with a <strong>simple chatbot</strong>. The example marks the shape; the scaffold hands you the lightweight version.</p>
+    </div>
+
+    <div class="grid">
+
+      <div class="card">
+        <div class="card-top"><span class="pname"><span class="pn">01</span>viewer</span><span class="emit-tag">→ repo</span></div>
+        <p class="problem">"See information that already lives in our systems, gathered in one place."</p>
+        <div class="examples"><span class="lab">e.g.</span><span class="ex">VFS Dashboard</span><span class="ex">Booking Analytics Hub</span></div>
+        <div class="chips"><span class="chip"><b>ui</b> web</span><span class="chip"><b>data</b> read-only</span><span class="chip"><b>async</b> none</span><span class="flag">no database</span></div>
+        <div class="handover">
+          <span class="hk">shells kept</span>
+          <div class="shells"><span class="shell on">frontend-shell</span><span class="shell on">backend-shell <span class="m">(proxy only)</span></span></div>
+          <span class="hk" style="margin-top:10px">+ concretely, in the repo</span>
+          <div class="comp"><span class="tok core">core</span><span class="tok add">backend/downstreams/&lt;svc&gt;/</span><span style="font-size:12px;color:var(--muted)">— that's it, no models/, no migrations/</span></div>
+        </div>
+        <div class="distinct"><span class="dl">its own preset because</span>It only <b>displays</b> — never writes, so no DB. Not <b>warehouse-dashboard</b>: its source is a live service, not BigQuery.</div>
+      </div>
+
+      <div class="card">
+        <div class="card-top"><span class="pname"><span class="pn">02</span>warehouse-dashboard</span><span class="emit-tag">→ repo</span></div>
+        <p class="problem">"A dashboard over our historical / metrics / funnel data."</p>
+        <div class="examples"><span class="lab">e.g.</span><span class="ex">Ops Command Centre</span><span class="ex">Biz Data Analyst</span><span class="ex">Data Correlation Engine</span></div>
+        <div class="chips"><span class="chip"><b>ui</b> web</span><span class="chip"><b>data</b> warehouse-read</span><span class="chip"><b>async</b> cron opt.</span></div>
+        <div class="handover">
+          <span class="hk">shells kept</span>
+          <div class="shells"><span class="shell on">frontend-shell</span><span class="shell on">backend-shell</span></div>
+          <span class="hk" style="margin-top:10px">+ concretely, in the repo</span>
+          <div class="comp"><span class="tok core">core</span><span class="tok add">backend/downstreams/&lt;bigquery&gt;/</span><span class="tok add">backend/warehouse/</span><span class="tok add">backend/cache/</span></div>
+        </div>
+        <div class="distinct"><span class="dl">its own preset because</span>It reads the <b>warehouse (BigQuery)</b> → forces read-only creds, a cost cap, a cache. Not <b>viewer</b>: the data lives in the warehouse, not a service.</div>
+      </div>
+
+      <div class="card">
+        <div class="card-top"><span class="pname"><span class="pn">03</span>crud-admin</span><span class="emit-tag">→ repo</span></div>
+        <p class="problem">"My team creates, tracks and edits records that don't exist yet — every record has the same fields."</p>
+        <div class="examples"><span class="lab">e.g.</span><span class="ex">BOB-BizOps Tool</span><span class="ex">Assortment Mapper</span><span class="ex">Candidate NPS</span></div>
+        <div class="chips"><span class="chip"><b>ui</b> web</span><span class="chip"><b>data</b> Postgres</span><span class="chip"><b>async</b> tier 0–1</span></div>
+        <div class="handover">
+          <span class="hk">shells kept</span>
+          <div class="shells"><span class="shell on">frontend-shell</span><span class="shell on">backend-shell</span></div>
+          <span class="hk" style="margin-top:10px">+ concretely, in the repo</span>
+          <div class="comp"><span class="tok core">core</span><span class="tok add">backend/models/</span><span class="tok add">backend/db/migrations/</span><span class="tok add">frontend/forms/</span><span class="tok mod">authorize()?</span></div>
+        </div>
+        <div class="distinct"><span class="dl">its own preset because</span>It <b>writes</b> brand-new, uniform records → owns a Postgres DB. Not <b>viewer</b> (it writes); not <b>workflow-console</b> (records are flat, no stages).</div>
+      </div>
+
+      <div class="card">
+        <div class="card-top"><span class="pname"><span class="pn">04</span>workflow-console</span><span class="emit-tag">→ repo</span></div>
+        <p class="problem">"Move items through defined stages — draft → review → approved — with reminders."</p>
+        <div class="examples"><span class="lab">e.g.</span><span class="ex">Blueprint (onboarding)</span><span class="ex">HiringOS</span><span class="ex">invoice generation</span></div>
+        <div class="chips"><span class="chip"><b>ui</b> web</span><span class="chip"><b>data</b> Postgres</span><span class="chip"><b>async</b> tier 1–2</span></div>
+        <div class="handover">
+          <span class="hk">shells kept</span>
+          <div class="shells"><span class="shell on">frontend-shell</span><span class="shell on">backend-shell</span></div>
+          <span class="hk" style="margin-top:10px">+ concretely, in the repo</span>
+          <div class="comp"><span class="tok core">core</span><span class="tok add">backend/models/</span><span class="tok add">backend/db/migrations/</span><span class="tok add">backend/workflow/</span><span class="tok add">frontend/wizard/</span><span class="tok add">backend/tasks/notify.ts</span></div>
+        </div>
+        <div class="distinct"><span class="dl">its own preset because</span>Records <b>move through stages</b> with approvals + reminders (a state machine). Not <b>crud-admin</b>: the difference is the stages, not the storage.</div>
+      </div>
+
+      <div class="card">
+        <div class="card-top"><span class="pname"><span class="pn">05</span>doc-store</span><span class="emit-tag">→ repo</span></div>
+        <p class="problem">"Store and manage records where every record has a different shape."</p>
+        <div class="examples"><span class="lab">e.g.</span><span class="ex">vendor-payload ingestion</span><span class="ex">precedent: payload, athena</span></div>
+        <div class="chips"><span class="chip"><b>ui</b> web</span><span class="chip"><b>data</b> document DB</span><span class="chip"><b>async</b> tier 0–1</span><span class="flag">gated</span></div>
+        <div class="handover">
+          <span class="hk">shells kept</span>
+          <div class="shells"><span class="shell on">frontend-shell</span><span class="shell on">backend-shell</span></div>
+          <span class="hk" style="margin-top:10px">+ concretely, in the repo</span>
+          <div class="comp"><span class="tok core">core</span><span class="tok add">backend/collections/</span><span style="font-size:12px;color:var(--muted)">replaces models/+migrations/ — same forms/wizard as crud/workflow</span></div>
+        </div>
+        <div class="distinct"><span class="dl">its own preset because</span>Every record is a <b>different shape</b> → schemaless (Mongo). Not <b>crud-admin</b>: chosen only when data genuinely isn't uniform. Gated hard.</div>
+      </div>
+
+      <div class="card">
+        <div class="card-top"><span class="pname"><span class="pn">06</span>automation-service</span><span class="emit-tag">→ repo</span></div>
+        <p class="problem">"A process that runs automatically against other services — nobody needs a screen."</p>
+        <div class="examples"><span class="lab">e.g.</span><span class="ex">las (Listing Automation Service)</span><span class="ex">TTD-Automation-Suite</span><span class="ex">Pompeii Voucher Generator</span></div>
+        <div class="chips"><span class="chip"><b>ui</b> headless API</span><span class="chip"><b>data</b> Postgres + queue</span><span class="chip"><b>async</b> tier 2</span><span class="flag">no frontend</span></div>
+        <div class="handover">
+          <span class="hk">shells kept</span>
+          <div class="shells"><span class="shell off">frontend-shell</span><span class="shell on">backend-shell <span class="m">(trigger/status only)</span></span></div>
+          <span class="hk" style="margin-top:10px">+ concretely, in the repo</span>
+          <div class="comp"><span class="tok core">core</span><span class="tok add">backend/routes/trigger-status.ts</span><span class="tok add">backend/tasks/worker.ts</span><span class="tok add">backend/ratelimit/</span><span style="font-size:12px;color:var(--muted)">— no frontend/ folder ships at all</span></div>
+        </div>
+        <div class="distinct"><span class="dl">its own preset because</span><b>Event/trigger-driven</b> orchestration against third parties; queue-first. Not <b>reporter</b>: it reacts to incoming work, it isn't on a clock.</div>
+      </div>
+
+      <div class="card">
+        <div class="card-top"><span class="pname"><span class="pn">07</span>slack-bot</span><span class="emit-tag">→ repo</span></div>
+        <p class="problem">"Do this work from inside a chat channel."</p>
+        <div class="examples"><span class="lab">e.g.</span><span class="ex">bar (Slack→Jira)</span><span class="ex">Wanda (on-call triage)</span><span class="ex">genie</span><span class="ex">optimus</span><span class="ceil">ceiling: Plato</span></div>
+        <div class="chips"><span class="chip"><b>ui</b> chat</span><span class="chip"><b>data</b> Postgres / sheet</span><span class="chip"><b>async</b> tier 1</span></div>
+        <div class="handover">
+          <span class="hk">shells kept</span>
+          <div class="shells"><span class="shell off">frontend-shell</span><span class="shell off">backend-shell</span><span class="shell alt">bot-shell</span></div>
+          <span class="hk" style="margin-top:10px">+ concretely, in the repo</span>
+          <div class="comp"><span class="tok core">core</span><span class="tok add">backend/slack/</span><span class="tok add">backend/models/ <span style="font-weight:400">or</span> sheets-adapter/</span></div>
+        </div>
+        <div class="distinct"><span class="dl">its own preset because</span><b>Humans</b> do the work in a channel. Not <b>mcp-server</b>: the users are people, not agents. Plato is this shape at eng-grade — a self-serve build is a simple channel bot.</div>
+      </div>
+
+      <div class="card">
+        <div class="card-top"><span class="pname"><span class="pn">08</span>mcp-server</span><span class="emit-tag">→ repo</span></div>
+        <p class="problem">"Our data and actions should be callable by AI agents — no human screen."</p>
+        <div class="examples"><span class="lab">e.g.</span><span class="ex">aviator</span><span class="ex">argus-mcp</span><span class="ex">porygon-mcp</span><span class="ex">talentmcp</span><span class="ceil">ceiling: Delphi</span></div>
+        <div class="chips"><span class="chip"><b>ui</b> agent (MCP)</span><span class="chip"><b>data</b> any adapter</span><span class="chip"><b>async</b> none</span></div>
+        <div class="handover">
+          <span class="hk">shells kept</span>
+          <div class="shells"><span class="shell off">frontend-shell</span><span class="shell off">backend-shell <span class="m">(no cookie auth)</span></span><span class="shell alt">mcp-shell</span></div>
+          <span class="hk" style="margin-top:10px">+ concretely, in the repo</span>
+          <div class="comp"><span class="tok core">core</span><span class="tok add">backend/mcp/</span><span class="tok mod">auth-service-key</span><span style="font-size:12px;color:var(--muted)">+ README connection snippet</span></div>
+        </div>
+        <div class="distinct"><span class="dl">its own preset because</span><b>AI agents</b> are the caller — tools, not a UI. Not <b>slack-bot</b>: the agent is the user. Delphi is this shape at eng-grade — a self-serve MCP is a thin data adapter.</div>
+      </div>
+
+      <div class="card">
+        <div class="card-top"><span class="pname"><span class="pn">09</span>ai-tool</span><span class="emit-tag">→ repo</span></div>
+        <p class="problem">"Users give input and get an AI-generated result, with saved state and uploads."</p>
+        <div class="examples"><span class="lab">e.g.</span><span class="ex">Spectra Image Gen</span><span class="ex">Combo Split Image Gen</span><span class="ex">ResumeRanker</span></div>
+        <div class="chips"><span class="chip"><b>ui</b> web</span><span class="chip"><b>data</b> Postgres + object store</span><span class="chip"><b>async</b> tier 2</span></div>
+        <div class="handover">
+          <span class="hk">shells kept</span>
+          <div class="shells"><span class="shell on">frontend-shell</span><span class="shell on">backend-shell</span></div>
+          <span class="hk" style="margin-top:10px">+ concretely, in the repo</span>
+          <div class="comp"><span class="tok core">core</span><span class="tok add">backend/models/</span><span class="tok add">frontend/forms/</span><span class="tok add">backend/llm/</span><span class="tok add">backend/media/</span><span class="tok mod">backend/embeddings/?</span></div>
+        </div>
+        <div class="distinct"><span class="dl">its own preset because</span>LLM-powered <b>and</b> needs saved state / uploads / queues. Not a <b>Claude skill</b> (Gate 0): a one-shot transform with no state gets no repo.</div>
+      </div>
+
+      <div class="card">
+        <div class="card-top"><span class="pname"><span class="pn">10</span>reporter</span><span class="emit-tag">→ repo</span></div>
+        <p class="problem">"A recurring summary pushed to a channel — nobody visits a page."</p>
+        <div class="examples"><span class="lab">e.g.</span><span class="ex">metricbot shape</span><span class="ex">"dashboards" nobody visits</span></div>
+        <div class="chips"><span class="chip"><b>ui</b> none (cron)</span><span class="chip"><b>data</b> warehouse-read</span><span class="chip"><b>async</b> cron</span><span class="flag">no web service</span></div>
+        <div class="handover">
+          <span class="hk">shells kept</span>
+          <div class="shells"><span class="shell off">frontend-shell</span><span class="shell off">backend-shell <span class="m">(no listener)</span></span><span class="shell alt">cron-entry</span></div>
+          <span class="hk" style="margin-top:10px">+ concretely, in the repo</span>
+          <div class="comp"><span class="tok core">core</span><span class="tok add">backend/jobs/report.ts</span><span class="tok add">backend/warehouse/</span><span class="tok add">backend/tasks/deliver.ts</span><span style="font-size:12px;color:var(--muted)">— no server ever listens</span></div>
+        </div>
+        <div class="distinct"><span class="dl">its own preset because</span><b>Scheduled</b> query → deliver a digest; the output is the product. Not <b>warehouse-dashboard</b> (nobody visits it); not <b>automation-service</b> (clock-driven, not event-driven).</div>
+      </div>
+
+      <div class="card">
+        <div class="card-top"><span class="pname"><span class="pn">11</span>extension</span><span class="emit-tag">→ repo</span></div>
+        <p class="problem">"A control or overlay inside a page we already work in."</p>
+        <div class="examples"><span class="lab">e.g.</span><span class="ex">metaview</span><span class="ex">nexus</span><span class="ex">alan</span><span class="ex">open-mb-in-localhost</span></div>
+        <div class="chips"><span class="chip"><b>ui</b> browser extension</span><span class="chip"><b>data</b> none / opt.</span><span class="chip"><b>async</b> none</span></div>
+        <div class="handover">
+          <span class="hk">shells kept</span>
+          <div class="shells"><span class="shell off">frontend-shell <span class="m">(replaced)</span></span><span class="shell alt">extension-shell</span><span class="shell alt">backend-shell? <span class="m">(optional)</span></span></div>
+          <span class="hk" style="margin-top:10px">+ concretely, in the repo</span>
+          <div class="comp"><span class="tok core">core</span><span class="tok add">extension/</span><span style="font-size:12px;color:var(--muted)">backend/ only if it needs server state</span></div>
+        </div>
+        <div class="distinct"><span class="dl">its own preset because</span>The UI belongs <b>inside a page you already use</b>. Not <b>viewer</b>: it augments an existing page instead of being a standalone app.</div>
+      </div>
+
+    </div>
+
+    <div class="legend-inline">
+      <span><span class="shell on" style="padding:1px 6px">on</span> shell included</span>
+      <span><span class="shell off" style="padding:1px 6px">off</span> shell dropped entirely</span>
+      <span><span class="shell alt" style="padding:1px 6px">alt</span> a different shell replaces it</span>
+      <span><span class="sw" style="background:var(--surface-2)"></span> core — every repo, no exceptions</span>
+      <span><span class="sw" style="background:var(--surface);border-color:var(--border-strong)"></span> real added folder</span>
+      <span><span class="sw" style="background:var(--warn-wash);border-color:var(--warn-border)"></span> flag / conditional module</span>
+      <span style="color:var(--faint)"><code style="font-family:var(--mono)">?</code> = only if the checklist turns it on</span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="sec-num">04</span><h2>Gate 0 — the "no repo" categories</h2></div>
+    <p class="gate0-note">Some problem statements get no repository, because a repo is the wrong answer. These route out before the catalogue is ever reached — only the 11 presets above produce a packaged repository.</p>
+    <div class="routes">
+      <div class="route">
+        <p class="rp">"Generate content and send it on a schedule or trigger, no real screen."</p>
+        <div class="rmeta"><span class="rcat">workflow automation</span> → <span class="rto">no-code workflow</span><span class="rno">no repo</span></div>
+      </div>
+      <div class="route">
+        <p class="rp">"Text or image in, artifact out, no saved state, one user."</p>
+        <div class="rmeta"><span class="rcat">one-shot transform</span> → <span class="rto">Claude skill</span><span class="rno">no repo</span></div>
+      </div>
+      <div class="route">
+        <p class="rp">"A single function one person runs occasionally."</p>
+        <div class="rmeta"><span class="rcat">utility</span> → <span class="rto">script</span><span class="rno">maybe no repo</span></div>
+      </div>
+      <div class="route">
+        <p class="rp">"Standard slicing of warehouse data, no custom logic."</p>
+        <div class="rmeta"><span class="rcat">BI / reporting</span> → <span class="rto">existing BI tooling</span><span class="rno">no repo</span></div>
+      </div>
+      <div class="route">
+        <p class="rp">"Mostly the same as a tool that already exists."</p>
+        <div class="rmeta"><span class="rcat">duplicate</span> → <span class="rto">the existing tool</span><span class="rno">no repo</span></div>
+      </div>
+      <div class="route">
+        <p class="rp">"Durable multi-service orchestration with day-long human waits."</p>
+        <div class="rmeta"><span class="rcat">engineering project</span> → <span class="rto">a project pitch</span><span class="rno">not self-serve</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    Companion to <code>SCAFFOLD-MONOREPO.md</code> and <code>SCAFFOLDING-TAXONOMY.md</code>. Stack grounded in the verified reference implementations: React + Vite / umbreon frontend, TypeScript / Express BFF backend, Guardian&nbsp;auth, Drizzle · Kafka · node-cron.
+  </div>
+</footer>
