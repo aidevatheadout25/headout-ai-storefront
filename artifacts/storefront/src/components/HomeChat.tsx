@@ -46,16 +46,26 @@ import {
 import type { Tool } from "@/lib/types";
 
 const STARTER_PROMPTS = [
-  "My team spends hours each week manually compiling reports — is there a better way?",
-  "I want to build something that sends a weekly digest from our internal data",
-  "Is there anything that can draft responses to customer complaints?",
-  "I just built a tool — how do I get it added to the platform?",
+  "Weekly reports take hours — better way?",
+  "Draft replies to customer complaints",
 ] as const;
 
 const SCOPE_LAUNCHERS = [
-  { label: "🔍 Find an existing tool", text: "I need to find an existing tool" },
-  { label: "🔨 Build something new", text: "I want to scope an idea for a new internal tool" },
-  { label: "➕ Register a tool I built", text: "I just built a tool and want to add it to the catalogue" },
+  {
+    label: "Find an existing tool",
+    text: "I need to find an existing tool",
+    icon: "search" as const,
+  },
+  {
+    label: "Build something new",
+    text: "I want to scope an idea for a new internal tool",
+    icon: "bulb" as const,
+  },
+  {
+    label: "Register a tool I built",
+    text: "I just built a tool and want to add it to the catalogue",
+    icon: "checkmark" as const,
+  },
 ] as const;
 
 const JOURNEY_PILL_LABELS: Partial<Record<FunnelStage, string>> = {
@@ -68,6 +78,22 @@ const JOURNEY_PILL_LABELS: Partial<Record<FunnelStage, string>> = {
 };
 
 type JourneyPhase = "brief" | "scaffold" | "checklist" | "review" | "live" | null;
+
+const JOURNEY_STEP_LABELS: Record<Exclude<JourneyPhase, null>, string> = {
+  brief: "Brief",
+  scaffold: "Repo",
+  checklist: "Checklist",
+  review: "Review",
+  live: "Live",
+};
+
+const JOURNEY_STEP_ORDER = [
+  "brief",
+  "scaffold",
+  "checklist",
+  "review",
+  "live",
+] as const satisfies ReadonlyArray<Exclude<JourneyPhase, null>>;
 
 type ChatMessage = {
   id: string;
@@ -176,6 +202,7 @@ export function HomeChat() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const seededRef = useRef(false);
   const loadedConvRef = useRef<string | null>(null);
+  const stickToBottomRef = useRef(true);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -203,6 +230,9 @@ export function HomeChat() {
   const [inScopeMode, setInScopeMode] = useState(false);
 
   const started = messages.length > 0;
+  const hasToolResults = messages.some(
+    (message) => message.tools && message.tools.length > 0,
+  );
 
   const scrollToEnd = useCallback(() => {
     requestAnimationFrame(() => {
@@ -213,8 +243,17 @@ export function HomeChat() {
     });
   }, []);
 
+  const handleThreadScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distanceFromBottom < 96;
+  }, []);
+
   useEffect(() => {
-    scrollToEnd();
+    if (stickToBottomRef.current) {
+      scrollToEnd();
+    }
   }, [messages, sending, journeyPhase, scrollToEnd]);
 
   // Auto-grow the composer with its content, up to a max height (then scroll).
@@ -557,6 +596,7 @@ export function HomeChat() {
 
     if (!c) {
       loadedConvRef.current = null;
+      stickToBottomRef.current = true;
       setConversationId(null);
       setMessages([]);
       setAddMode(false);
@@ -573,6 +613,7 @@ export function HomeChat() {
     }
 
     loadedConvRef.current = c;
+    stickToBottomRef.current = true;
     setLoadingConv(true);
     setError(null);
     fetchConversation(c)
@@ -709,32 +750,28 @@ export function HomeChat() {
 
   const isJourneyActive = journeyPhase !== null;
 
+  const typingLabel = addMode
+    ? "Thinking…"
+    : inScopeMode || isJourneyActive
+      ? "Thinking…"
+      : "Searching the catalogue…";
+
+  const journeyStepIndex = journeyPhase
+    ? JOURNEY_STEP_ORDER.indexOf(journeyPhase)
+    : -1;
+
   return (
-    <div className="home-chat">
-      {isAuthenticated && (
+    <div className={`home-chat${hasToolResults ? " home-chat--wide" : ""}`}>
+      {isAuthenticated && currentPillLabel && (
         <div className="home-chat__header">
-          {currentPillLabel && (
-            <span className="home-chat__mode-pill t-label-xs">{currentPillLabel}</span>
-          )}
-          <a href="/" className="home-chat__new-chat-btn" title="New chat" aria-label="New chat">
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M12 20h9" />
-              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
-            </svg>
-          </a>
+          <span className="home-chat__mode-pill t-label-xs">{currentPillLabel}</span>
         </div>
       )}
-      <div className="home-chat__thread" ref={scrollRef}>
+      <div
+        className="home-chat__thread"
+        ref={scrollRef}
+        onScroll={handleThreadScroll}
+      >
         {!started && !loadingConv && (
           <div className="home-chat__empty">
             <h1 className="home-chat__heading t-display-xs">
@@ -742,8 +779,27 @@ export function HomeChat() {
             </h1>
             <p className="home-chat__intro t-para-md">
               Tell me what you need and I&apos;ll find the right internal tool — or
-              help you figure out if anything needs building at all.
+              help you figure out if anything needs building at all. Use the
+              composer below, or pick a path.
             </p>
+            <div className="home-chat__launchers">
+              {SCOPE_LAUNCHERS.map((launcher) => (
+                <button
+                  key={launcher.label}
+                  type="button"
+                  className="home-chat__launcher t-label-sm"
+                  onClick={() => submitText(launcher.text)}
+                >
+                  <Icon
+                    name={launcher.icon}
+                    size={16}
+                    className="home-chat__launcher-icon"
+                  />
+                  {launcher.label}
+                </button>
+              ))}
+            </div>
+            <p className="home-chat__starters-label t-label-xs">Try an example</p>
             <div className="home-chat__starters">
               {STARTER_PROMPTS.map((prompt) => (
                 <button
@@ -753,18 +809,6 @@ export function HomeChat() {
                   onClick={() => submitText(prompt)}
                 >
                   {prompt}
-                </button>
-              ))}
-            </div>
-            <div className="home-chat__launchers">
-              {SCOPE_LAUNCHERS.map((l) => (
-                <button
-                  key={l.label}
-                  type="button"
-                  className="home-chat__launcher t-label-sm"
-                  onClick={() => submitText(l.text)}
-                >
-                  {l.label}
                 </button>
               ))}
             </div>
@@ -890,7 +934,8 @@ export function HomeChat() {
                         submitText(message.addDisambiguationText ?? "", { forceChat: true });
                       }}
                     >
-                      🔍 Search for this
+                      <Icon name="search" size={16} />
+                      Search for this
                     </Button>
                     <ButtonLink href="/registry" variant="secondary" size="sm">
                       Browse the catalogue
@@ -924,7 +969,8 @@ export function HomeChat() {
                         submitText(message.journeyDisambiguationText ?? "", { forceChat: true });
                       }}
                     >
-                      🔍 Do that instead
+                      <Icon name="search" size={16} />
+                      Do that instead
                     </Button>
                     <Button
                       type="button"
@@ -946,7 +992,7 @@ export function HomeChat() {
             {sending && (
               <li className="chat-bubble chat-bubble--assistant">
                 <div className="chat-bubble__body chat-bubble__body--typing t-para-md">
-                  {addMode ? "Thinking…" : "Searching the catalogue…"}
+                  {typingLabel}
                 </div>
               </li>
             )}
@@ -975,7 +1021,8 @@ export function HomeChat() {
                 });
               }}
             >
-              🔨 Nothing fits — let&apos;s scope it
+              <Icon name="bulb" size={16} />
+              Nothing fits — let&apos;s scope it
             </button>
           </div>
         )}
@@ -1021,7 +1068,7 @@ export function HomeChat() {
             {/* Phase 5: Live ceremony */}
             {journeyPhase === "live" && reviewResult && (
               <div className="home-chat__live-banner">
-                <span className="t-heading-sm">🎉 Your tool is live!</span>
+                <span className="t-heading-sm">Your tool is live!</span>
                 <div className="home-chat__live-actions">
                   <ButtonLink href={`/tools/${reviewResult.toolId}`} variant="primary" size="sm">
                     View {reviewResult.toolName} →
@@ -1047,7 +1094,8 @@ export function HomeChat() {
                       setInScopeMode(false);
                     }}
                   >
-                    🔍 Search again
+                    <Icon name="search" size={16} />
+                    Search again
                   </button>
                   <button
                     type="button"
@@ -1061,7 +1109,7 @@ export function HomeChat() {
                       router.push("/registry");
                     }}
                   >
-                    📚 Browse the catalogue
+                    Browse the catalogue
                   </button>
                 </div>
               </div>
@@ -1090,16 +1138,20 @@ export function HomeChat() {
 
       <div className="home-chat__footer">
         {/* Journey phase pill */}
-        {isJourneyActive && (
+        {isJourneyActive && journeyPhase && (
           <div className="home-chat__journey-phase">
-            {(["brief", "scaffold", "checklist", "review", "live"] as JourneyPhase[]).map((phase, i) => (
-              <span
-                key={phase}
-                className={`home-chat__journey-step ${journeyPhase === phase ? "home-chat__journey-step--active" : ""} ${["scaffold", "checklist", "review", "live"].slice(0, ["scaffold", "checklist", "review", "live"].indexOf(journeyPhase as string)).includes(phase ?? "") ? "home-chat__journey-step--done" : ""}`}
-              >
-                {i + 1}. {phase}
-              </span>
-            ))}
+            {JOURNEY_STEP_ORDER.map((phase, i) => {
+              const isActive = journeyPhase === phase;
+              const isDone = journeyStepIndex > i;
+              return (
+                <span
+                  key={phase}
+                  className={`home-chat__journey-step${isActive ? " home-chat__journey-step--active" : ""}${isDone ? " home-chat__journey-step--done" : ""}`}
+                >
+                  {i + 1}. {JOURNEY_STEP_LABELS[phase]}
+                </span>
+              );
+            })}
           </div>
         )}
         <form className="home-chat__composer" onSubmit={handleSubmit}>
