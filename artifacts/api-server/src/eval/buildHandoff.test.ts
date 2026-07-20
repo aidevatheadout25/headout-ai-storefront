@@ -13,14 +13,17 @@
  * `searchContext`, never message phrasing.
  *
  * Run with: `pnpm --filter @workspace/api-server run test`
- * Requires: AI_INTEGRATIONS_ANTHROPIC_BASE_URL. Skipped automatically when absent.
+ * Requires: ANTHROPIC_API_KEY. Skipped automatically when absent.
  */
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { _testOverrides as catalogueOverrides, type ApiTool } from "../lib/catalogue";
 import { runChat, _testOverrides as chatAgentOverrides } from "../lib/chatAgent";
 
-const AI_READY = !!process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL;
+const AI_READY = !!(
+  process.env.ANTHROPIC_API_KEY ||
+  process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY
+);
 
 const NEAR_MISS_TOOL: ApiTool = {
   id: "near-miss-tool-id",
@@ -71,7 +74,7 @@ after(() => {
 
 describe(
   "build-shaped handoff routing",
-  { skip: AI_READY ? false : "AI_INTEGRATIONS_ANTHROPIC_BASE_URL not set" },
+  { skip: AI_READY ? false : "ANTHROPIC_API_KEY not set" },
   () => {
     test(
       "near-miss (below strong threshold) hands off to scope with the near-miss attached, no concierge interview",

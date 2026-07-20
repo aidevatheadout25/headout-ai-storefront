@@ -111,13 +111,14 @@ describe("weak-match similarity guardrail", () => {
   }
 });
 
-const AI_READY =
-  !!process.env.AI_INTEGRATIONS_OPENAI_API_KEY &&
-  !!process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+const AI_READY = !!(
+  process.env.ANTHROPIC_API_KEY ||
+  process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY
+);
 
 describe(
   "concierge no-match path",
-  { skip: AI_READY ? false : "OpenAI AI integration env not set" },
+  { skip: AI_READY ? false : "ANTHROPIC_API_KEY not set" },
   () => {
     let runChat: typeof import("../lib/chatAgent").runChat;
 
@@ -179,7 +180,7 @@ describe(
  */
 describe(
   "concierge search + route",
-  { skip: AI_READY ? false : "OpenAI AI integration env not set" },
+  { skip: AI_READY ? false : "ANTHROPIC_API_KEY not set" },
   () => {
     let runChat: typeof import("../lib/chatAgent").runChat;
 

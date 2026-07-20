@@ -1,9 +1,9 @@
 import type { Tool } from "@/lib/types";
 
 /**
- * The catalogue is served by the Express api-server, mounted at `/api` on the
- * platform proxy (same origin as the storefront). All catalogue reads/writes go
- * through here — the DB is the single source of truth.
+ * The catalogue is served by the Express api-server at `/api`.
+ * Production: same origin (Express serves the SPA + API).
+ * Local Vite: `server.proxy` forwards `/api` to the API server.
  */
 const API_BASE = "/api";
 
@@ -277,11 +277,14 @@ export type AddChatResult =
 
 /**
  * Conversational add-tool flow.
- * First call: pass only { url } — returns the opening assistant message + inferred draft.
- * Subsequent calls: pass { url, messages, preview } — returns next question or ready:true.
+ * First call: pass `{ url }` or `{ skillMarkdown }` — returns the opening
+ * assistant message + inferred draft.
+ * Subsequent calls: pass `{ url?, messages, preview }` — returns next question
+ * or ready:true. Skills uploaded as SKILL.md may omit url.
  */
 export async function addToolChat(params: {
-  url: string;
+  url?: string;
+  skillMarkdown?: string;
   messages?: AddChatTurn[];
   preview?: ToolPreview;
 }): Promise<AddChatResult> {

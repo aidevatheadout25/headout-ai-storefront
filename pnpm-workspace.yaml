@@ -4,6 +4,12 @@ packages:
   - lib/integrations/*
   - scripts
 
+allowBuilds:
+  esbuild: true
+  onnxruntime-node: true
+  protobufjs: true
+  sharp: true
+
 autoInstallPeers: false
 
 catalog:

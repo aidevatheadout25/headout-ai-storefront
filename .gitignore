@@ -47,3 +47,16 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Scratch reference clones (never commit)
+.headauth-tmp/
+.guardian-kit-tmp/
+.guardian-refs/
+
+# Local tooling config (never commit)
+.codex/
+
+# Local env
+.env
+.env.local
+.env.*.local

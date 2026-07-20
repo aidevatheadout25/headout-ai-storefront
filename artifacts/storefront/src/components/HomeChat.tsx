@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
 } from "react";
@@ -217,6 +218,7 @@ export function HomeChat() {
   const [addDraft, setAddDraft] = useState<ToolPreview | null>(null);
   const [addTurns, setAddTurns] = useState<AddChatTurn[]>([]);
   const [addConfirming, setAddConfirming] = useState(false);
+  const skillFileInputRef = useRef<HTMLInputElement>(null);
 
   // ── Tool detail overlay ───────────────────────────────────────────────────
   const [detailToolId, setDetailToolId] = useState<string | null>(null);
@@ -271,7 +273,7 @@ export function HomeChat() {
       setError(null);
       try {
         // First add-mode message: treat text as the URL
-        if (!addUrl) {
+        if (!addDraft) {
           const url = text.trim();
           const result = await addToolChat({ url });
           if ("duplicate" in result && result.duplicate) {
@@ -356,6 +358,75 @@ export function HomeChat() {
       }
     },
     [addUrl, addDraft, addTurns],
+  );
+
+  const runAddSkillUpload = useCallback(
+    async (markdown: string, fileName: string) => {
+      setSending(true);
+      setError(null);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: msgId(),
+          role: "user",
+          text: `Uploaded skill: ${fileName}`,
+        },
+      ]);
+      try {
+        const result = await addToolChat({ skillMarkdown: markdown });
+        if ("duplicate" in result && result.duplicate) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: msgId(),
+              role: "assistant",
+              text: `**${result.tool.name}** is already in the catalogue. [View it →](/tools/${result.tool.id})`,
+            },
+          ]);
+          setAddMode(false);
+          return;
+        }
+        const r = result as Extract<typeof result, { ready: boolean }>;
+        setAddUrl(r.preview.url ?? "");
+        setAddDraft(r.preview);
+        const openingTurn: AddChatTurn = { role: "assistant", content: r.message };
+        setAddTurns([openingTurn]);
+        setMessages((prev) => [
+          ...prev,
+          { id: msgId(), role: "assistant", text: r.message },
+        ]);
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Couldn't read that skill file — try again.",
+        );
+      } finally {
+        setSending(false);
+      }
+    },
+    [],
+  );
+
+  const handleSkillFileChange = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (!file || sending || addConfirming || addDraft) return;
+      if (!/\.(md|markdown|txt)$/i.test(file.name) && file.type && !file.type.includes("text")) {
+        setError(
+          "Upload only works for SKILL.md (Claude/Cursor skills). For docs, apps, or PDFs, paste a public link instead.",
+        );
+        return;
+      }
+      try {
+        const text = await file.text();
+        await runAddSkillUpload(text, file.name);
+      } catch {
+        setError("Couldn't read that file — try again.");
+      }
+    },
+    [addConfirming, addDraft, runAddSkillUpload, sending],
   );
 
   // Stable ref so runChat can trigger the add-tool flow without a circular dep.
@@ -547,7 +618,7 @@ export function HomeChat() {
       }
       if (addMode && !overrideOpts?.forceChat) {
         // First add-mode message: validate it looks like a URL before calling addToolChat.
-        if (!addUrl) {
+        if (!addDraft) {
           const looksLikeUrl =
             !trimmed.includes(" ") &&
             (trimmed.includes(".") || trimmed.startsWith("http"));
@@ -558,7 +629,7 @@ export function HomeChat() {
               {
                 id: msgId(),
                 role: "assistant" as const,
-                text: "That doesn't look like a link — what would you like to do?",
+                text: "That doesn't look like a link. Paste a URL for apps, docs, Zeps, or MCPs — or upload a SKILL.md for Claude/Cursor skills.",
                 addDisambiguation: true,
                 addDisambiguationText: trimmed,
               },
@@ -580,7 +651,7 @@ export function HomeChat() {
         });
       }
     },
-    [addMode, addUrl, inScopeMode, journeyPhase, runAddChat, runChat, sending],
+    [addMode, addDraft, inScopeMode, journeyPhase, runAddChat, runChat, sending],
   );
 
   useEffect(() => {
@@ -742,8 +813,8 @@ export function HomeChat() {
 
   const currentPillLabel = pillLabel(messages);
 
-  const inputPlaceholder = addMode && !addUrl
-    ? "Paste a link — e.g. https://…"
+  const inputPlaceholder = addMode && !addDraft
+    ? "Paste a URL for apps, docs, Zeps, MCPs…"
     : addMode
       ? "Reply…"
       : 'Describe a task, e.g. \u201csummarise customer reviews\u201d\u2026';
@@ -950,7 +1021,20 @@ export function HomeChat() {
                         )
                       }
                     >
-                      Paste a link instead
+                      Paste a URL instead
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        setMessages((prev) =>
+                          prev.filter((m) => !m.addDisambiguation),
+                        );
+                        skillFileInputRef.current?.click();
+                      }}
+                    >
+                      Upload SKILL.md (skills only)
                     </Button>
                   </div>
                 )}
@@ -1172,6 +1256,34 @@ export function HomeChat() {
               Send
             </Button>
           </div>
+          {addMode && !addDraft && (
+            <div className="home-chat__add-upload">
+              <p className="home-chat__add-upload-lead t-label-xs">
+                <strong>Apps, docs, Zeps, MCPs:</strong> paste their URL above.
+                {" "}
+                <strong>Claude/Cursor skills:</strong> upload a SKILL.md (not a PDF or doc).
+              </p>
+              <input
+                ref={skillFileInputRef}
+                type="file"
+                accept=".md,.markdown,.txt,text/markdown,text/plain"
+                className="home-chat__skill-file-input"
+                disabled={sending || addConfirming}
+                onChange={(e) => void handleSkillFileChange(e)}
+                aria-label="Upload a SKILL.md file for a Claude or Cursor skill"
+                tabIndex={-1}
+              />
+              <button
+                type="button"
+                className="home-chat__chip t-para-sm"
+                disabled={sending || addConfirming}
+                onClick={() => skillFileInputRef.current?.click()}
+              >
+                <Icon name="checkmark" size={16} />
+                Upload SKILL.md
+              </button>
+            </div>
+          )}
         </form>
       </div>
 

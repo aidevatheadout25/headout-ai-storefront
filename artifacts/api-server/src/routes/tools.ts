@@ -24,7 +24,13 @@ import {
   renderTagVocabulary,
   TAG_POLICY_PROMPT,
 } from "../lib/tagPolicy";
-import { inferToolFromUrl, isZepsUrl, type InferredTool } from "../lib/inferTool";
+import {
+  inferToolFromSkillMarkdown,
+  inferToolFromUrl,
+  isZepsUrl,
+  type InferredTool,
+} from "../lib/inferTool";
+import { SkillMdParseError } from "../lib/parseSkillMd";
 import { logger } from "../lib/logger";
 import { anthropic, CLAUDE_MODEL } from "../lib/anthropicClient";
 import {
@@ -241,33 +247,46 @@ const addChatMessageSchema = z.object({
   content: z.string(),
 });
 
-const addChatSchema = z.object({
-  url: z.string().trim().min(1),
-  messages: z.array(addChatMessageSchema).optional().default([]),
-  preview: z
-    .object({
-      type: z.string(),
-      title: z.string(),
-      oneLiner: z.string(),
-      description: z.string(),
-      tags: z.array(z.string()),
-      team: z.string(),
-      url: z.string(),
-    })
-    .optional(),
+const addChatPreviewSchema = z.object({
+  type: z.string(),
+  title: z.string(),
+  oneLiner: z.string(),
+  description: z.string(),
+  tags: z.array(z.string()),
+  team: z.string(),
+  url: z.string(),
 });
+
+const addChatSchema = z
+  .object({
+    /** Install/docs URL — required for link-based adds; optional for skill uploads. */
+    url: z.string().trim().optional().default(""),
+    /** Raw SKILL.md contents when the user uploaded a skill file instead of a URL. */
+    skillMarkdown: z.string().optional(),
+    messages: z.array(addChatMessageSchema).optional().default([]),
+    preview: addChatPreviewSchema.optional(),
+  })
+  .refine(
+    (data) =>
+      Boolean(data.skillMarkdown?.trim()) ||
+      Boolean(data.url.trim()) ||
+      Boolean(data.preview),
+    { message: "url or skillMarkdown is required" },
+  );
 
 /**
  * POST /api/tools/add-chat — stateless conversational add-tool flow.
  *
- * First turn  ({ url, messages: [] }): infers metadata from the URL and returns
- * an opening assistant message + the draft preview. No save happens here.
+ * First turn:
+ *   - `{ url, messages: [] }` — infer from a pasted link
+ *   - `{ skillMarkdown, messages: [] }` — infer from an uploaded SKILL.md
+ *   Returns an opening assistant message + draft preview. No save happens here.
  *
- * Subsequent turns ({ url, messages, preview }): continues the conversation via
+ * Subsequent turns ({ url?, messages, preview }): continues the conversation via
  * the LLM. When all fields are confirmed the LLM calls `finalize_tool` and the
  * response carries { ready: true, preview }.
  *
- * If the URL is already in the catalogue, returns { duplicate: true, tool }.
+ * If a non-empty URL is already in the catalogue, returns { duplicate: true, tool }.
  */
 router.post(
   "/tools/add-chat",
@@ -275,29 +294,72 @@ router.post(
   async (req: Request, res: Response) => {
     const parsed = addChatSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      return res.status(400).json({ error: "url is required" });
+      return res
+        .status(400)
+        .json({ error: "Paste a link or upload a SKILL.md file" });
     }
-    const { url, messages, preview: clientPreview } = parsed.data;
+    const {
+      url,
+      skillMarkdown,
+      messages,
+      preview: clientPreview,
+    } = parsed.data;
+    const skillUpload = Boolean(skillMarkdown?.trim());
 
-    if (!isSafeLinkScheme(url)) {
+    if (url && !isSafeLinkScheme(url)) {
       return res
         .status(400)
         .json({ error: "Only http and https URLs are allowed" });
     }
 
-    // Dedup check (pure DB, no network).
-    try {
-      const existing = await findToolByUrl(url);
-      if (existing) {
-        return res.status(200).json({ duplicate: true, tool: existing });
+    // Dedup check (pure DB, no network) — only when we have a real URL.
+    if (url) {
+      try {
+        const existing = await findToolByUrl(url);
+        if (existing) {
+          return res.status(200).json({ duplicate: true, tool: existing });
+        }
+      } catch (err) {
+        logger.error({ err }, "Dedup lookup failed in add-chat");
+        return res.status(500).json({ error: "Failed to check tool" });
       }
-    } catch (err) {
-      logger.error({ err }, "Dedup lookup failed in add-chat");
-      return res.status(500).json({ error: "Failed to check tool" });
     }
 
     // ── First turn: infer metadata and compose opening message ────────────────
     if (messages.length === 0) {
+      if (skillUpload) {
+        try {
+          const { preview, lowConfidence } = await inferToolFromSkillMarkdown(
+            skillMarkdown!,
+            { url: url || undefined },
+          );
+          const message = buildOpeningMessage(preview, lowConfidence);
+          const draftPreview: ToolDraftPayload = {
+            type: "skill",
+            title: preview.title ?? "",
+            oneLiner: preview.oneLiner ?? "",
+            description: preview.description ?? "",
+            tags: preview.tags ?? [],
+            team: preview.team ?? "Platform",
+            url: preview.url ?? url,
+          };
+          return res.status(200).json({
+            ready: false,
+            message,
+            preview: draftPreview,
+            lowConfidence,
+          });
+        } catch (err) {
+          if (err instanceof SkillMdParseError) {
+            return res.status(400).json({ error: err.message });
+          }
+          logger.error({ err }, "Failed to infer skill in add-chat");
+          return res.status(500).json({
+            error: "Couldn't read that skill file — check the format and try again.",
+          });
+        }
+      }
+
       try {
         await assertSafePublicUrl(url);
       } catch (err) {
@@ -402,7 +464,7 @@ Rules:
           description: finalArgs.description ?? clientPreview.description,
           tags: finalTags,
           team: finalArgs.team ?? clientPreview.team,
-          url,
+          url: url || clientPreview.url,
         };
         const confirmText =
           `Ready to add **${finalPreview.title}** (${finalPreview.type} · ${finalPreview.team}) to the catalogue. Tap the button below to confirm.`;
@@ -429,7 +491,8 @@ Rules:
 // ─────────────────────────────────────────────────────────────────────────────
 
 const createSchema = z.object({
-  url: z.string().trim().min(1),
+  // Empty allowed for skills uploaded as SKILL.md with no public install URL yet.
+  url: z.string().trim().default(""),
   type: z.enum(TOOL_TYPES),
   title: z.string().trim().min(1),
   oneLiner: z.string().trim(),
@@ -442,18 +505,19 @@ const createSchema = z.object({
  * POST /api/tools — persist a reviewed tool. The metadata here is the
  * (possibly edited) values the user confirmed from the inspect preview, so we
  * save exactly what they reviewed rather than re-inferring. Still dedups and
- * SSRF-validates the URL. Zeps URLs are pinned to the `zep` type.
+ * SSRF-validates non-empty URLs. Zeps URLs are pinned to the `zep` type.
+ * Skills may be registered with an empty URL (file upload path).
  */
 router.post("/tools", async (req: Request, res: Response) => {
   const parsed = createSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return res
       .status(400)
-      .json({ error: "Title, type, team and a valid URL are required" });
+      .json({ error: "Title, type, and team are required" });
   }
   const data = parsed.data;
 
-  if (!isSafeLinkScheme(data.url)) {
+  if (data.url && !isSafeLinkScheme(data.url)) {
     return res
       .status(400)
       .json({ error: "Only http and https URLs are allowed" });
@@ -467,28 +531,30 @@ router.post("/tools", async (req: Request, res: Response) => {
     });
   }
 
-  try {
-    const existing = await findToolByUrl(data.url);
-    if (existing) {
-      return res.status(200).json({ tool: existing, duplicate: true });
+  if (data.url) {
+    try {
+      const existing = await findToolByUrl(data.url);
+      if (existing) {
+        return res.status(200).json({ tool: existing, duplicate: true });
+      }
+    } catch (err) {
+      logger.error({ err }, "Dedup lookup failed");
+      return res.status(500).json({ error: "Failed to add tool" });
     }
-  } catch (err) {
-    logger.error({ err }, "Dedup lookup failed");
-    return res.status(500).json({ error: "Failed to add tool" });
-  }
 
-  try {
-    await assertSafePublicUrl(data.url);
-  } catch (err) {
-    if (err instanceof UnsafeUrlError) {
-      return res.status(400).json({ error: err.message });
+    try {
+      await assertSafePublicUrl(data.url);
+    } catch (err) {
+      if (err instanceof UnsafeUrlError) {
+        return res.status(400).json({ error: err.message });
+      }
+      return res.status(400).json({ error: "url is not a valid URL" });
     }
-    return res.status(400).json({ error: "url is not a valid URL" });
   }
 
   try {
     const tool = await insertTool({
-      type: isZepsUrl(data.url) ? "zep" : data.type,
+      type: data.url && isZepsUrl(data.url) ? "zep" : data.type,
       title: data.title,
       oneLiner: data.oneLiner,
       description: data.description,

@@ -166,7 +166,7 @@ Before anything else, check if the user is signalling they already built somethi
 
 Signals: "I built X", "I made X", "I finished building X", "register my tool", "add my tool", "how do I list this", or a raw URL they created.
 
-If any match → call start_registration immediately. Don't search first. Don't ask a question first. Pass the URL if they provided one. After the call, write one warm sentence that registration happens right here in this chat — they just paste the link.
+If any match → call start_registration immediately. Don't search first. Don't ask a question first. Pass the URL if they provided one. After the call, write one warm sentence that registration happens right here: paste a URL for apps/docs/Zeps/MCPs, or upload a SKILL.md for Claude/Cursor skills (file upload is skills-only — not PDFs or docs).
 
 ━━ WHEN SOMEONE DESCRIBES A NEED ━━
 
@@ -1142,7 +1142,7 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
             ok: true,
             note: registration.url
               ? "Registration started with the provided URL. Write one warm sentence telling the user you've captured the link and will kick off registration right here in this conversation — no need to go anywhere else."
-              : "Registration flow started. Write one warm sentence telling the user that registration happens right here in this conversation — they can paste their tool's link and it will be added to the catalogue.",
+              : "Registration flow started. Write one warm sentence: paste a URL for apps, docs, Zeps, or MCPs; upload a SKILL.md only for Claude/Cursor skills. Do not suggest uploading PDFs or docs.",
           }),
         });
         continue;
@@ -1341,7 +1341,7 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
   // Exhausted turns without a clean final answer — surface what we found.
   if (registration) {
     return buildResult(
-      "Sure — paste your tool's link here and I'll add it to the catalogue.",
+      "Sure — paste a URL for apps, docs, Zeps, or MCPs. For a Claude/Cursor skill, upload a SKILL.md below (not a PDF or doc).",
       [],
       registration,
     );

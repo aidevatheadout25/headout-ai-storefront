@@ -7,8 +7,10 @@ import {
   userOwnsConversation,
 } from "../lib/conversations";
 import { logger } from "../lib/logger";
+import { requireAuth } from "../middlewares/authMiddleware";
 
 const router: IRouter = Router();
+router.use(requireAuth);
 
 function parseHistory(body: unknown): ChatTurn[] | null {
   const messages = (body as { messages?: unknown })?.messages;
@@ -39,10 +41,8 @@ function lastUserText(history: ChatTurn[]): string {
  * keep appending to it.
  */
 router.post("/chat", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) {
-    return res.status(401).json({ error: "Sign in to use the chat" });
-  }
-
+  // requireAuth guarantees req.user
+  const user = req.user!;
   const history = parseHistory(req.body);
   if (!history || history.length === 0) {
     return res.status(400).json({ error: "messages array is required" });
@@ -53,7 +53,7 @@ router.post("/chat", async (req: Request, res: Response) => {
     typeof requestedId === "string" && requestedId ? requestedId : null;
 
   if (conversationId) {
-    const owns = await userOwnsConversation(req.user.id, conversationId);
+    const owns = await userOwnsConversation(user.id, conversationId);
     if (!owns) {
       return res.status(404).json({ error: "Conversation not found" });
     }
@@ -71,8 +71,8 @@ router.post("/chat", async (req: Request, res: Response) => {
         ? (bodyCtx as { query: string; nearMisses: { name: string; oneLiner: string }[] })
         : undefined;
     const userCtx: ChatUserContext = {
-      email: (req.user as { email?: string } | undefined)?.email,
-      userId: req.user?.id,
+      email: user.email ?? undefined,
+      userId: user.id,
       conversationId: conversationId ?? undefined,
       mode: bodyMode === "scope" ? "scope" : undefined,
       searchContext,
@@ -81,7 +81,7 @@ router.post("/chat", async (req: Request, res: Response) => {
 
     if (!conversationId) {
       const conversation = await createConversation(
-        req.user.id,
+        user.id,
         titleFromMessage(userText),
       );
       conversationId = conversation.id;
