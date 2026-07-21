@@ -212,6 +212,80 @@ export async function sendChat(
   });
 }
 
+/**
+ * Streaming variant of sendChat. POSTs to /chat/stream and reads the SSE body,
+ * calling `onDelta` with each incremental chunk of assistant text, then
+ * resolving with the authoritative final ChatResult. Falls back to throwing an
+ * ApiError on transport failure or a server-sent error event. The caller should
+ * render deltas live, then replace the streamed text with `result.message` and
+ * apply stage/payloads from the resolved result.
+ */
+export async function sendChatStream(
+  messages: ChatTurn[],
+  conversationId: string | null | undefined,
+  opts: SendChatOpts | undefined,
+  onDelta: (text: string) => void,
+): Promise<ChatResult> {
+  const res = await fetch(`${API_BASE}/chat/stream`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({
+      messages,
+      ...(conversationId ? { conversationId } : {}),
+      ...(opts?.mode ? { mode: opts.mode } : {}),
+      ...(opts?.searchContext ? { searchContext: opts.searchContext } : {}),
+    }),
+  });
+  if (!res.ok || !res.body) {
+    throw new ApiError(res.status, `Chat stream failed (${res.status})`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: ChatResult | null = null;
+
+  const handleEvent = (dataLine: string) => {
+    if (!dataLine) return;
+    let evt: { type?: string; text?: string; error?: string } & Partial<ChatResult>;
+    try {
+      evt = JSON.parse(dataLine);
+    } catch {
+      return; // ignore malformed frames
+    }
+    if (evt.type === "delta" && typeof evt.text === "string") {
+      onDelta(evt.text);
+    } else if (evt.type === "result") {
+      const { type: _t, ...rest } = evt;
+      result = rest as ChatResult;
+    } else if (evt.type === "error") {
+      throw new ApiError(500, evt.error || "Chat failed");
+    }
+  };
+
+  // SSE frames are separated by a blank line; each frame's payload is on `data:` lines.
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep: number;
+    while ((sep = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      const data = frame
+        .split("\n")
+        .filter((l) => l.startsWith("data:"))
+        .map((l) => l.slice(5).trim())
+        .join("");
+      handleEvent(data);
+    }
+  }
+
+  if (!result) throw new ApiError(500, "Chat stream ended without a result");
+  return result;
+}
+
 export async function fetchConversations(): Promise<ConversationSummary[]> {
   const data = await getJson<{ conversations: ConversationSummary[] }>(
     "/conversations",

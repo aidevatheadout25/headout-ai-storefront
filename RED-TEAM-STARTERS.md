@@ -15,8 +15,9 @@ Each is a **first message**. "Expected" = what correct routing looks like. Run o
 - [ ] How do dynamic prices get calculated here
 - [ ] Show me something for schema change alerts
 - [ ] Is there an API for orders/bookings
+- [ ] Can I build an app where users describe what they want and we output a PRD?
 
-*Expected: search runs, names matching catalogue tools with one-liners, asks if they fit. No scope, no build.*
+*Expected: search runs, cards render for matches (framing text only — no duplicated tool list), asks if they fit. No scope, no build. For the PRD ask: Product OS / Porygon — never create-pr or pr-describe; stay on discovery (not deterministic build handoff).*
 
 ## 2. Discovery — no match → should fork to scoping
 
@@ -74,8 +75,10 @@ Each is a **first message**. "Expected" = what correct routing looks like. Run o
 - [ ] Here's a repo I made: github.com/me/thing
 - [ ] how do I register something
 - [ ] I made an MCP, want to publish it
+- [ ] I have a claude skill can I upload that?
+- [ ] Cool where do I upload my prd skill?
 
-*Expected: start_registration → pre-filled card, no search interview. Watch #5 (bare URL) and #8 (MCP) specifically — likely soft spots.*
+*Expected: start_registration → stage register + visible Upload SKILL.md panel (not prose-only). Pre-filled card when URL given. No search interview. Watch bare URL / MCP / skill-upload soft spots.*
 
 ## 7. Browse (should list, not search-interview)
 

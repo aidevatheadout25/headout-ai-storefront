@@ -75,6 +75,7 @@
     "zod": "catalog:"
   },
   "dependencies": {
-    "@ory/client-fetch": "^1.22.63"
+    "@ory/client-fetch": "^1.22.63",
+    "fflate": "^0.8.3"
   }
 }

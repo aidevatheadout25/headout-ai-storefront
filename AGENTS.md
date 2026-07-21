@@ -15,7 +15,7 @@ The core differentiator is **tool access + Headout context**, not the model. Sto
 ## The three capabilities (from the architecture syncs)
 - **Redirect** to an existing app (discovery).
 - **Micro-apps via Zeps** — Headout's no-code, agent-based platform (lightweight, no full stack). Default for workflow-shaped automations.
-- **Scaffold full internal apps** from standardized, category-based templates (see the scaffolding-taxonomy track — owned by Anish/Rajasekhar, separate workstream).
+- **Scaffold full internal apps** from standardized, category-based templates (see `SCAFFOLD-MONOREPO.md` — owned by Anish/Rajasekhar, separate workstream).
 
 ## Modality model (the reusable IP — the scope agent's job is to pick one and justify it)
 `no_build` (Codex-native / one-off) · `zep` (workflow, connectors+triggers, no custom UI — the default) · `skill` (Codex skill, text-in/artifact-out) · `mcp` (agent-callable data/actions, no UI) · `script` (one-off/dev automation) · `micro_app`/`full_app` (only when Zeps genuinely can't — needs custom UI/multi-user) · `eng_project` (too big/critical for self-serve → project pitch, not a repo).
@@ -41,7 +41,7 @@ The scope agent is a **thin decide-and-route layer**, not a monolith. It does NO
 - Behavior parity over cleverness: if the eval report drifts after a change, that's a bug — fix the transport, not the prompts.
 - Assert on stage/routing/payload, never on LLM phrasing. Never add prompt rules whose only purpose is passing a flaky test.
 - Measure and fix are separate steps: run the eval, read it, then one scoped fix pass.
-- Don't touch the scaffolding taxonomy (categories/subcategories/templates) here — separate workstream (Anish/Rajasekhar).
+- Don't touch the scaffold monorepo (`SCAFFOLD-MONOREPO.md` — presets/modules/generator) here — separate workstream (Anish/Rajasekhar).
 - User (Anish) prefers direct, first-principles, execution-focused answers; minimal fluff.
 
 ## Docs in this repo

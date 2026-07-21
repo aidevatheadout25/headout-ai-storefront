@@ -60,3 +60,6 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+
+# Local pnpm store (never commit)
+.pnpm-store/

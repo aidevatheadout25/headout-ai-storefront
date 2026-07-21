@@ -20,7 +20,7 @@ export type SeedTool = Omit<InsertTool, "embedding">;
  * (zapdos, wall-street, athena, uruk, minerva, magellan, muse, rosetta, ...),
  * pure infra-as-code (terraform-modules, helm-charts, chokidar, arsenal, ...),
  * scaffolding/service templates (python-fastapi-template, spring-boot-service-
- * template — that's the separate scaffolding-taxonomy workstream), and repos
+ * template — that's the separate SCAFFOLD-MONOREPO workstream), and repos
  * with a blank description and no README (too little signal to describe
  * honestly). Real Zeps *agents* are intentionally not fabricated here — only
  * the Zeps platform itself is listed; the individual zep rows in the fictional
@@ -357,10 +357,19 @@ export const REAL_SEED_TOOLS: SeedTool[] = [
   {
     type: "skill",
     title: "Product OS",
-    oneLiner: "End-to-end product agent — PM + data + designer in one Claude Code workflow.",
+    oneLiner:
+      "End-to-end product agent — drafts PRDs / product requirements, prototypes, and product direction in Claude Code.",
     description:
-      "Install as a Claude Code plugin and run /product-os to go from problem to direction to execution options to HTML prototypes (with a design-critique loop) to optional live-page injection, backed by Porygon. Phases: brainstorm (grounded in Slack/Granola/BigQuery/Porygon KB), ideate (2-4 execution options), prototype (Tailwind HTML + screenshots + critique until \"ship\"), and on-demand PRD generation.",
-    tags: ["skill", "claude-code", "product", "prototyping", "product-os"],
+      "Install as a Claude Code plugin and run /product-os to go from problem to direction to execution options to HTML prototypes (with a design-critique loop) to optional live-page injection, backed by Porygon. Phases: brainstorm (grounded in Slack/Granola/BigQuery/Porygon KB), ideate (2-4 execution options), prototype (Tailwind HTML + screenshots + critique until \"ship\"), and on-demand Product Requirements Document (PRD) generation. This is for product requirements / PRDs — not GitHub pull requests.",
+    tags: [
+      "skill",
+      "claude-code",
+      "product",
+      "prototyping",
+      "product-os",
+      "prd",
+      "product-requirements",
+    ],
     ownerName: "",
     ownerSlackId: "",
     team: "Product",
@@ -901,10 +910,11 @@ export const HEADOUT_AGENT_SKILLS: SeedTool[] = [
   {
     type: "skill",
     title: "create-pr",
-    oneLiner: "Pushes the current branch and opens a GitHub PR with a structured summary.",
+    oneLiner:
+      "Pushes the current branch and opens a GitHub Pull Request (PR) with a structured summary — not a Product Requirements Document (PRD).",
     description:
-      "Pushes the current branch and opens a GitHub pull request with a structured summary and test plan. Use when the user wants to create, open, or submit a PR, or says \"ready for review\".",
-    tags: ["skill", "claude-code", "pull-requests", "github", "engineering"],
+      "Pushes the current branch and opens a GitHub pull request (code review PR) with a structured summary and test plan. Use when the user wants to create, open, or submit a GitHub PR, or says \"ready for review\". Not for writing product requirements documents (PRDs) — use Product OS for that.",
+    tags: ["skill", "claude-code", "pull-requests", "github", "github-pr", "engineering"],
     ownerName: "",
     ownerSlackId: "",
     team: "Engineering",
@@ -917,10 +927,11 @@ export const HEADOUT_AGENT_SKILLS: SeedTool[] = [
   {
     type: "skill",
     title: "pr-describe",
-    oneLiner: "Generates a PR title and description from the branch diff.",
+    oneLiner:
+      "Generates a GitHub Pull Request (PR) title and description from the branch diff — not a Product Requirements Document (PRD).",
     description:
-      "Generates a PR title and description optimized for human reviewers from the branch diff, without creating the PR. Use when the user wants to write or update a PR description/title.",
-    tags: ["skill", "claude-code", "pull-requests", "engineering"],
+      "Generates a GitHub pull request title and description optimized for human reviewers from the branch diff, without creating the PR. Use when the user wants to write or update a GitHub PR description/title. Not for product requirements documents (PRDs) — use Product OS for that.",
+    tags: ["skill", "claude-code", "pull-requests", "github-pr", "engineering"],
     ownerName: "",
     ownerSlackId: "",
     team: "Engineering",

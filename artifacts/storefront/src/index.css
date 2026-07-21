@@ -5437,19 +5437,79 @@ html[data-theme="dark"] .pm-recommendation__stakes {
 }
 
 .home-chat__skill-file-input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
+  /* Visually hidden but still "real" for macOS file dialogs.
+     1×1 clipped inputs + MIME accept filters often open a blank picker. */
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 0.1px;
+  height: 0.1px;
+  opacity: 0;
   overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
+  z-index: -1;
+}
+
+.home-chat__upload-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 var(--space-16);
+  border-radius: var(--radius-8, 8px);
+  background: var(--color-purps, #540ba9);
+  color: #fff;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.home-chat__upload-label:hover {
+  filter: brightness(1.05);
+}
+
+.home-chat__upload-label--disabled {
+  opacity: 0.5;
+  pointer-events: none;
+  cursor: not-allowed;
 }
 
 .home-chat__add-upload-hint {
   color: var(--text-secondary);
+}
+
+.home-chat__register-panel {
+  margin: var(--space-12) 0 var(--space-8);
+  padding: var(--space-16);
+  border: 1px solid var(--border-primary, rgba(0, 0, 0, 0.08));
+  border-radius: var(--radius-12, 12px);
+  background: var(--surface-grey-2, #f7f7f8);
+}
+
+.home-chat__register-panel-title {
+  margin: 0 0 var(--space-8);
+  color: var(--text-primary);
+}
+
+.home-chat__register-panel-body {
+  margin: 0 0 var(--space-12);
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.home-chat__register-panel-body code {
+  font-size: 0.92em;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: var(--surface-grey-1, #fff);
+  color: var(--text-primary);
+}
+
+.home-chat__register-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
 }
 
 .home-chat__input-wrap {

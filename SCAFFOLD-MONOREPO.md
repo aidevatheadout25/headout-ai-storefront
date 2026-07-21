@@ -1,6 +1,6 @@
 # The Scaffold Monorepo — one lookup source, per-tool repos out
 
-**Status:** Concrete structure proposal (2026-07-14). Grounded in the verified stack from `SCAFFOLDING-TAXONOMY.md` §5a (frontend = umbreon/React+Vite) and §5b (backend = TS/Express BFF, Guardian/Ory, Drizzle, Kafka, node-cron). This is the concrete form of §8.
+**Status:** Source of truth for Storefront app scaffolding (2026-07-14). Grounded in the verified stack: frontend = umbreon/React+Vite; backend = TS/Express BFF, Guardian/Ory, Drizzle, Kafka, node-cron.
 **Owner:** Anish Adamane (Storefront workstream)
 
 ---
@@ -11,7 +11,7 @@
 
 **It is not** where tools run. Nothing deploys *from* this repo. When Storefront decides "build tool X," it **looks up this one monorepo**, the generator **composes base + preset + selected modules**, and it **packages a standalone git repository** that becomes the requester's own. That repo is what gets handed over, built on with Claude Code, reviewed, deployed, and auto-listed back into the catalogue.
 
-> **Why this supersedes §8's "live feature-module monorepo":** a single deployed monorepo holding every team's tool couples unrelated tools into one build/deploy/blast-radius and makes ownership fuzzy. Making the monorepo a *template/catalogue source* and handing out *standalone repos* keeps each tool independently owned, deployed, and revocable — while still giving every tool the same paved road, because the framework arrives as **versioned dependencies**, not copy-paste. (`SCAFFOLDING-TAXONOMY.md` §8 should be updated to reference this doc.)
+> **Why standalone repos (not one live feature-module monorepo):** a single deployed monorepo holding every team's tool couples unrelated tools into one build/deploy/blast-radius and makes ownership fuzzy. Making this monorepo a *template/catalogue source* and handing out *standalone repos* keeps each tool independently owned, deployed, and revocable — while still giving every tool the same paved road, because the framework arrives as **versioned dependencies**, not copy-paste.
 
 ```
 Storefront scope agent  ──►  answers.json  (the 10-question checklist, §6)
@@ -126,7 +126,7 @@ A common misreading of "every emitted repo starts from `bases/app-base`" is that
 | `.env.example` | Every env var this composed repo actually needs — Guardian config always, plus whatever each turned-on module adds (`DATABASE_URL`, `KAFKA_BROKERS`, …). |
 | `README.md` | What the tool is and how to run it locally — plus, for `mcp-server`, the `claude mcp add` / `.mcp.json` connection snippet. |
 | `docker-compose.yml` | Local dev services. Present in every repo, but its body stays close to empty unless a data/cache module (`data-postgres`, `cache-redis`, …) adds a service to it. |
-| `Dockerfile` + deploy manifest (`railway.toml` or equivalent) | The deploy target — an explicit open item, not a settled default (`SCAFFOLDING-TAXONOMY.md` §11: incumbent AWS/ODE pipeline vs Railway). |
+| `Dockerfile` + deploy manifest (`railway.toml` or equivalent) | The deploy target — an explicit open item, not a settled default (incumbent AWS/ODE pipeline vs Railway). |
 
 `core` never contains business logic, models, routes, or UI components — none of that is interface-agnostic, so none of it belongs here. That's exactly what the shells, the preset overlay, and the modules add on top (§2a).
 
@@ -182,7 +182,7 @@ This is the lookup table the generator encodes: a requester's problem statement 
 | 10 | "I want a recurring summary pushed to a channel — nobody visits a page." | none (cron) · warehouse-read · cron | **reporter** | **no frontend-shell, no backend-shell (no listener)** → **`cron-entry`** | `core` + `backend/jobs/report.ts` (query → render) + `backend/warehouse/` + `backend/tasks/deliver.ts` (Slack/email/sheets). **No server process ever listens.** |
 | 11 | "I want a control or overlay inside a page we already work in." | browser extension · none / backend opt. · none | **extension** | frontend-shell **replaced** → **`extension-shell`**; backend-shell optional | `core` + `extension/` (Manifest v3 build). `backend/` only appears if the checklist says it needs server state. |
 
-**Before any of the above — the request must survive Gate 0.** Some problem statements get **no repository at all**, because a repo is the wrong answer. Those categories route out (details in `SCAFFOLDING-TAXONOMY.md` §4):
+**Before any of the above — the request must survive Gate 0.** Some problem statements get **no repository at all**, because a repo is the wrong answer. Those categories route out:
 
 | Problem statement (generalized) | Category | We hand over |
 |---|---|---|
@@ -304,13 +304,13 @@ The requester opens this in Claude Code; Claude follows `.agents/skills/api-inte
 
 ## 5. Decisions baked in (call out for platform sign-off)
 
-- **Framework = published deps, app = generated source** (§2). Requires the registry access already listed in `SCAFFOLDING-TAXONOMY.md` §11 (umbreon + guardian-auth + bff-kit consumable outside their origin repos).
-- **Output = standalone repo**, not a PR into a live monorepo (supersedes §8). If the platform team prefers a live monorepo, `package-repo.ts` gets a second emit target (`add-feature-module`) — the compose step is identical; only the emit differs.
+- **Framework = published deps, app = generated source** (§2). Requires registry access so umbreon + guardian-auth + bff-kit are consumable outside their origin repos.
+- **Output = standalone repo**, not a PR into a live monorepo. If the platform team prefers a live monorepo, `package-repo.ts` gets a second emit target (`add-feature-module`) — the compose step is identical; only the emit differs.
 - **pnpm workspace + turbo** for this monorepo (matches `Guardian-App-Starter-Kit`, the auth reference). Emitted repos are single pnpm workspaces.
-- **Stack = TS/Express + umbreon** everywhere (§5a/§5b). Python/FastAPI or Kotlin/Spring are *not* emitted by this generator — they're the graduation path (§10), a separate template-per-repo flow.
-- **Queue = Kafka** (`async-kafka-worker`), matching the incumbent (§5b) — not Celery/SQS.
+- **Stack = TS/Express + umbreon** everywhere. Python/FastAPI or Kotlin/Spring are *not* emitted by this generator — they're the graduation path (§10), a separate template-per-repo flow.
+- **Queue = Kafka** (`async-kafka-worker`), matching the incumbent — not Celery/SQS.
 
-**Open items inherited from `SCAFFOLDING-TAXONOMY.md` §11:** deploy pipeline (AWS/ODE vs Railway) and versioned-migration policy (`drizzle-kit` migrate vs `push`) — both surface in `bases/app-base` and must be settled before the first real emit.
+**Open items:** deploy pipeline (AWS/ODE vs Railway) and versioned-migration policy (`drizzle-kit` migrate vs `push`) — both surface in `bases/app-base` and must be settled before the first real emit.
 
 ---
 

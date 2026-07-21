@@ -10,6 +10,7 @@ import { and, asc, cosineDistance, desc, eq, getTableColumns, sql } from "drizzl
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { embed } from "./embeddings";
 import { normalizeUrl } from "./normalizeUrl";
+import { expandSearchQuery, excludeGitHubPrSkillsForPrdQuery } from "./searchQuery";
 
 /**
  * The JSON shape the frontend renders. It is intentionally a superset of the
@@ -139,7 +140,7 @@ export async function searchCatalogue(
     return _testOverrides.searchImpl(query, k);
   }
 
-  const trimmed = query.trim();
+  const trimmed = expandSearchQuery(query);
   if (!trimmed) return [];
 
   const queryEmbedding = await embed(trimmed);
@@ -156,12 +157,15 @@ export async function searchCatalogue(
     .orderBy(asc(distance))
     .limit(k);
 
-  return rows
-    .filter((row) => canView(row))
-    .map(({ similarity: score, ...row }) => ({
-      ...rowToApiTool(row as ToolRow),
-      similarity: score,
-    }));
+  return excludeGitHubPrSkillsForPrdQuery(
+    query,
+    rows
+      .filter((row) => canView(row))
+      .map(({ similarity: score, ...row }) => ({
+        ...rowToApiTool(row as ToolRow),
+        similarity: score,
+      })),
+  );
 }
 
 export async function listTools(

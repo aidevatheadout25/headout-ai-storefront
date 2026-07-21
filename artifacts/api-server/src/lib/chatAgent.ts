@@ -13,11 +13,37 @@ import {
   type ApiTool,
 } from "./catalogue";
 import { verifyCapability } from "./verifyCapability";
+import {
+  callDelphiTool,
+  DELPHI_TOOL_NAMES,
+  type DelphiToolName,
+} from "./delphiClient";
 
 const MODEL = CLAUDE_MODEL;
 const MAX_TURNS = 10;
 
 export type ChatTurn = { role: "user" | "assistant"; content: string };
+
+/** Streaming sink for the assistant's text as it's generated. Optional — when
+ *  omitted (the eval, tests, and the non-streaming `/chat` route), the agent
+ *  runs the identical blocking path it always has. */
+export type OnDelta = (text: string) => void;
+
+/**
+ * Run one model turn. Behaviour is identical to `anthropic.messages.create`
+ * and returns the same final Message; when `onDelta` is provided we use the
+ * streaming API instead and forward text deltas as they arrive. Tool-use turns
+ * emit little or no text; the user-facing final turn is what actually streams.
+ */
+async function runModelTurn(
+  params: Anthropic.MessageCreateParamsNonStreaming,
+  onDelta?: OnDelta,
+): Promise<Anthropic.Message> {
+  if (!onDelta) return anthropic.messages.create(params);
+  const stream = anthropic.messages.stream(params);
+  stream.on("text", (delta) => onDelta(delta));
+  return stream.finalMessage();
+}
 
 /**
  * Vestigial from the superseded "cheapest-path builder" funnel. Kept only so
@@ -170,6 +196,20 @@ If strong matches come back: write 1–2 short framing sentences only — do NOT
 ━━ CAPABILITY CLAIMS ━━
 Before asserting any negative capability claim about Claude or ChatGPT ("X can't do Y"), call verify_capability(platform, capability). If supported=true, treat it as confirmed — don't assert a limitation that doesn't exist. If unknown, say you're not certain and suggest verifying before building around the assumption.
 
+━━ HEADOUT KNOWLEDGE BEYOND THE CATALOGUE (Delphi) ━━
+The catalogue is ONLY listed tools in our database. For anything beyond that — Headout repos, Notion/Coda/Google Docs, org policy, "where is X implemented?", "which repos use Y?" — call Delphi:
+- delphi_ask: general Headout Q&A (full pipeline)
+- delphi_search_docs: Notion/Coda/Google Docs RAG
+- delphi_find_repos: discover relevant headout/* repos
+- delphi_analyze_code: deep code analysis (pass repo_names when known; prefer find_repos first)
+- delphi_classify: cheap routing flags before a heavier call
+- delphi_fetch_page: pull a specific Notion/Coda/GDocs URL
+Rules:
+1. Listed tools → always search_catalogue / browse_catalogue / get_tool_details. Never use Delphi to answer what is or isn't in the catalogue.
+2. After a weak/empty catalogue search, if they are asking whether related *code or docs* already exist, call delphi_find_repos or delphi_ask. Present findings as Headout knowledge / related repos — NEVER as catalogue cards, and NEVER invent a catalogue entry from Delphi.
+3. Explicit KB asks (policies, how a domain works, pasted Notion/Coda/GDocs links) → Delphi. Still search the catalogue first when they are also looking for a listed tool.
+4. If Delphi returns unavailable/error, say you couldn't reach Headout knowledge right now and continue with catalogue-only judgment.
+
 ━━ BROWSING / DETAILS / FLAGGING / ACCESS / UPDATES ━━
 - NEVER state what is or isn't in the catalogue from memory. Always call search_catalogue or browse_catalogue first, and only describe what the tool actually returned — never invent counts ("we have 8 MCPs"), names, or availability.
 - Browse ("show me all data tools", "what has ops built?", "list all MCPs"): call browse_catalogue with type/team filters. Present like search — framing only, cards own the listing. Valid types: app, skill, docs, mcp, plugin, script, slack-bot, zep. Valid teams: Platform, Applied AI, Supply Ops, Growth, Content.
@@ -182,7 +222,7 @@ Before asserting any negative capability claim about Claude or ChatGPT ("X can't
 Only ever mention the platform team on Slack for API keys, credentials, or access provisioning — never for hosting, infra, architecture, or general build advice.
 
 ━━ OFF-MISSION ━━
-If the request has nothing to do with the catalogue, tools, or a build (creative writing, trivia, small talk), do NOT do the thing asked. Give a one-line warm redirect back to what this chat is for and stop. Never produce the requested content first — the redirect IS the entire response.
+If the request has nothing to do with the catalogue, tools, a build, or Headout internal knowledge that Delphi can answer (creative writing, trivia, small talk), do NOT do the thing asked. Give a one-line warm redirect back to what this chat is for and stop. Never produce the requested content first — the redirect IS the entire response.
 
 ━━ TONE ━━
 - One question per message, always — at most one question mark per reply. Ask, wait, then ask the next.
@@ -247,6 +287,9 @@ Only-wants-a-file-output (Word/Excel/PDF/CSV) as a one-off → kill; but a recur
 
 ━━ RISK ━━
 Blast radius and data sensitivity, not team size. high whenever it touches PII, financial data, or data owned by a compliance-relevant team (Legal, Procurement, Finance) needing sign-off — even if 100% internal. Only "customer-facing" if the actual end users are customers, not Headout staff.
+
+━━ DELPHI (beyond catalogue) ━━
+Catalogue near-misses above are settled — do NOT re-search the catalogue. When you need Headout facts beyond those rows (how a domain works, whether code already does this, Notion/Coda/GDocs, which repos own a concern), call Delphi (delphi_ask / delphi_search_docs / delphi_find_repos / delphi_analyze_code / delphi_classify / delphi_fetch_page). Ground kill/reshape/modality claims in what Delphi returns. Never invent catalogue cards from Delphi results. If Delphi is unavailable, say so briefly and continue with conversation judgment.
 
 ━━ RULES ━━
 - End with EXACTLY ONE terminal call: draft_brief, recommend_kill, or escalate_to_eng. Never produce a brief/kill/pitch as chat text — always use the tool.
@@ -439,6 +482,112 @@ const ESCALATE_TOOL: Anthropic.Tool = {
   },
 };
 
+/** Anthropic-facing wrappers around Delphi MCP tools. Prefixed so they never collide with catalogue tools. */
+const DELPHI_ASK_TOOL: Anthropic.Tool = {
+  name: "delphi_ask",
+  description:
+    "Ask Delphi about Headout beyond the catalogue — repos, internal docs, org knowledge. Full pipeline (classify + code/docs/web). Do NOT use for catalogue listings; use search_catalogue for that. Never invent catalogue cards from the result.",
+  input_schema: {
+    type: "object",
+    properties: {
+      prompt: { type: "string", description: "The Headout question to ask." },
+      links: {
+        type: "array",
+        items: { type: "string" },
+        description: "Optional Notion/Coda/Google Docs URLs to include as context.",
+      },
+    },
+    required: ["prompt"],
+  },
+};
+
+const DELPHI_SEARCH_DOCS_TOOL: Anthropic.Tool = {
+  name: "delphi_search_docs",
+  description:
+    "RAG search across Headout Notion, Coda, and Google Docs. Use for policies, process, and product docs — not for catalogue tool search.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Documentation question or search query." },
+      pods: {
+        type: "array",
+        items: { type: "string" },
+        description: "Optional pod/team name filters.",
+      },
+    },
+    required: ["query"],
+  },
+};
+
+const DELPHI_ANALYZE_CODE_TOOL: Anthropic.Tool = {
+  name: "delphi_analyze_code",
+  description:
+    "Deep analysis of headout/* GitHub repos. Prefer delphi_find_repos first to scope repos, then call this with repo_names. Slow — use only when you need implementation detail.",
+  input_schema: {
+    type: "object",
+    properties: {
+      prompt: { type: "string", description: "Code question (e.g. where is pricing logic implemented?)." },
+      repo_names: {
+        type: "array",
+        items: { type: "string" },
+        description: "Optional headout/* repo names to scope the analysis.",
+      },
+    },
+    required: ["prompt"],
+  },
+};
+
+const DELPHI_CLASSIFY_TOOL: Anthropic.Tool = {
+  name: "delphi_classify",
+  description:
+    "Classify a Headout query into code/doc/web routing flags and identified repos. Cheap pre-step before delphi_ask / delphi_analyze_code / delphi_search_docs.",
+  input_schema: {
+    type: "object",
+    properties: {
+      prompt: { type: "string", description: "The query to classify." },
+    },
+    required: ["prompt"],
+  },
+};
+
+const DELPHI_FIND_REPOS_TOOL: Anthropic.Tool = {
+  name: "delphi_find_repos",
+  description:
+    "Embedding-based discovery of relevant headout/* repos for a query. Use after a weak/empty catalogue search when asking whether related *code* already exists. Results are repos, not catalogue cards.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "What capability or code area to find repos for." },
+      max_repos: { type: "number", description: "Max repos to return (default 3)." },
+    },
+    required: ["query"],
+  },
+};
+
+const DELPHI_FETCH_PAGE_TOOL: Anthropic.Tool = {
+  name: "delphi_fetch_page",
+  description:
+    "Fetch content from a Headout Notion, Coda, or Google Docs URL. Use when the user pastes such a link or Delphi returned one.",
+  input_schema: {
+    type: "object",
+    properties: {
+      url: { type: "string", description: "Notion, Coda, or Google Docs URL." },
+    },
+    required: ["url"],
+  },
+};
+
+const DELPHI_TOOLS: Anthropic.Tool[] = [
+  DELPHI_ASK_TOOL,
+  DELPHI_SEARCH_DOCS_TOOL,
+  DELPHI_ANALYZE_CODE_TOOL,
+  DELPHI_CLASSIFY_TOOL,
+  DELPHI_FIND_REPOS_TOOL,
+  DELPHI_FETCH_PAGE_TOOL,
+];
+
+const DELPHI_ANTHROPIC_NAMES = new Set(DELPHI_TOOLS.map((t) => t.name));
+
 /** Discovery/concierge tools — available when NOT in scope mode. */
 const CONCIERGE_TOOLS: Anthropic.Tool[] = [
   REGISTER_TOOL,
@@ -449,6 +598,7 @@ const CONCIERGE_TOOLS: Anthropic.Tool[] = [
   ACCESS_TOOL,
   UPDATE_TOOL_DEF,
   VERIFY_CAPABILITY_TOOL,
+  ...DELPHI_TOOLS,
 ];
 
 const END_SCOPE_TOOL: Anthropic.Tool = {
@@ -468,8 +618,13 @@ const END_SCOPE_TOOL: Anthropic.Tool = {
 /** The three terminal outcomes — the conclusive exits from scope mode. */
 const TERMINAL_SCOPE_TOOLS: Anthropic.Tool[] = [DRAFT_BRIEF_TOOL, RECOMMEND_KILL_TOOL, ESCALATE_TOOL];
 
-/** Scope-mode tools: NO search/browse (can't re-litigate reuse). verify_capability for honest kills, end_scope for a graceful off-script exit. */
-const SCOPE_TOOLS: Anthropic.Tool[] = [...TERMINAL_SCOPE_TOOLS, VERIFY_CAPABILITY_TOOL, END_SCOPE_TOOL];
+/** Scope-mode tools: NO search/browse (can't re-litigate reuse). Delphi for Headout facts beyond the catalogue. verify_capability for honest kills, end_scope for a graceful off-script exit. */
+const SCOPE_TOOLS: Anthropic.Tool[] = [
+  ...TERMINAL_SCOPE_TOOLS,
+  VERIFY_CAPABILITY_TOOL,
+  END_SCOPE_TOOL,
+  ...DELPHI_TOOLS,
+];
 
 const MAX_SCOPE_QUESTIONS = 6;
 
@@ -587,20 +742,24 @@ function renderStrongMatchMessage(matches: ApiTool[]): string {
 async function runConciergeToolLoop(
   messages: Anthropic.MessageParam[],
   userContext: ChatUserContext | undefined,
+  onDelta?: OnDelta,
 ): Promise<ChatResult> {
   const found = new Map<string, ApiTool>();
   let lastCatalogueHits: ApiTool[] = [];
   let registration: { url: string | null } | null = null;
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const response = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 8192,
-      system: BASE_SYSTEM_PROMPT,
-      tools: CONCIERGE_TOOLS,
-      tool_choice: { type: "auto" },
-      messages,
-    });
+    const response = await runModelTurn(
+      {
+        model: MODEL,
+        max_tokens: 8192,
+        system: BASE_SYSTEM_PROMPT,
+        tools: CONCIERGE_TOOLS,
+        tool_choice: { type: "auto" },
+        messages,
+      },
+      onDelta,
+    );
 
     messages.push({ role: "assistant", content: response.content });
     const toolUseBlocks = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
@@ -631,6 +790,11 @@ async function runConciergeToolLoop(
 
       if (block.name === "verify_capability") {
         toolResults.push(await runVerifyCapability(block));
+        continue;
+      }
+
+      if (DELPHI_ANTHROPIC_NAMES.has(block.name)) {
+        toolResults.push(await runDelphiTool(block));
         continue;
       }
 
@@ -727,21 +891,29 @@ async function runConciergeToolLoop(
         continue;
       }
 
-      // Default: search_catalogue
-      const a = block.input as { query?: string };
-      const query = typeof a.query === "string" ? a.query : "";
-      const results = await searchCatalogue(query, 6);
-      const strong = results.filter((t) => (t.similarity ?? 0) >= MIN_MATCH_SIMILARITY);
-      lastCatalogueHits = strong;
-      for (const t of strong) found.set(t.id, t);
+      if (block.name === "search_catalogue") {
+        const a = block.input as { query?: string };
+        const query = typeof a.query === "string" ? a.query : "";
+        const results = await searchCatalogue(query, 6);
+        const strong = results.filter((t) => (t.similarity ?? 0) >= MIN_MATCH_SIMILARITY);
+        lastCatalogueHits = strong;
+        for (const t of strong) found.set(t.id, t);
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: JSON.stringify(
+            strong.length > 0
+              ? strong.map((t) => ({ id: t.id, name: t.name, type: t.types[0], oneLiner: t.oneLiner, description: t.description, tags: t.tags, similarity: Number((t.similarity ?? 0).toFixed(3)) }))
+              : { results: [], note: "No tool met the relevance threshold for this query. If the user needs Headout repos/docs/org knowledge beyond listed tools, call Delphi next; otherwise say nothing in the catalogue covers it." },
+          ),
+        });
+        continue;
+      }
+
       toolResults.push({
         type: "tool_result",
         tool_use_id: block.id,
-        content: JSON.stringify(
-          strong.length > 0
-            ? strong.map((t) => ({ id: t.id, name: t.name, type: t.types[0], oneLiner: t.oneLiner, description: t.description, tags: t.tags, similarity: Number((t.similarity ?? 0).toFixed(3)) }))
-            : { results: [], note: "No tool met the relevance threshold for this query." },
-        ),
+        content: JSON.stringify({ error: `Unknown tool: ${block.name}` }),
       });
     }
 
@@ -785,9 +957,95 @@ async function runVerifyCapability(block: Anthropic.ToolUseBlock): Promise<Anthr
   return { type: "tool_result", tool_use_id: block.id, content: JSON.stringify({ ...result, note }) };
 }
 
+function delphiMcpName(anthropicName: string): DelphiToolName | null {
+  if (!anthropicName.startsWith("delphi_")) return null;
+  const mcp = anthropicName.slice("delphi_".length);
+  return (DELPHI_TOOL_NAMES as readonly string[]).includes(mcp) ? (mcp as DelphiToolName) : null;
+}
+
+function delphiArgsFromInput(mcpName: DelphiToolName, input: unknown): Record<string, unknown> {
+  const a = (input ?? {}) as Record<string, unknown>;
+  switch (mcpName) {
+    case "ask": {
+      const out: Record<string, unknown> = {
+        prompt: typeof a.prompt === "string" ? a.prompt : "",
+      };
+      if (Array.isArray(a.links)) out.links = a.links.filter((u): u is string => typeof u === "string");
+      return out;
+    }
+    case "search_docs": {
+      const out: Record<string, unknown> = {
+        query: typeof a.query === "string" ? a.query : "",
+      };
+      if (Array.isArray(a.pods)) out.pods = a.pods.filter((p): p is string => typeof p === "string");
+      return out;
+    }
+    case "analyze_code": {
+      const out: Record<string, unknown> = {
+        prompt: typeof a.prompt === "string" ? a.prompt : "",
+      };
+      if (Array.isArray(a.repo_names)) {
+        out.repo_names = a.repo_names.filter((r): r is string => typeof r === "string");
+      }
+      return out;
+    }
+    case "classify":
+      return { prompt: typeof a.prompt === "string" ? a.prompt : "" };
+    case "find_repos": {
+      const out: Record<string, unknown> = {
+        query: typeof a.query === "string" ? a.query : "",
+      };
+      if (typeof a.max_repos === "number" && Number.isFinite(a.max_repos)) out.max_repos = a.max_repos;
+      return out;
+    }
+    case "fetch_page":
+      return { url: typeof a.url === "string" ? a.url : "" };
+    default: {
+      const _exhaustive: never = mcpName;
+      return _exhaustive;
+    }
+  }
+}
+
+async function runDelphiTool(block: Anthropic.ToolUseBlock): Promise<Anthropic.ToolResultBlockParam> {
+  const mcpName = delphiMcpName(block.name);
+  if (!mcpName) {
+    return {
+      type: "tool_result",
+      tool_use_id: block.id,
+      content: JSON.stringify({ ok: false, error: `Unknown Delphi tool: ${block.name}` }),
+    };
+  }
+  const result = await callDelphiTool(mcpName, delphiArgsFromInput(mcpName, block.input));
+  if (!result.ok) {
+    return {
+      type: "tool_result",
+      tool_use_id: block.id,
+      content: JSON.stringify({
+        ok: false,
+        unavailable: result.unavailable === true,
+        error: result.error,
+        note: result.unavailable
+          ? "Delphi is not configured. Continue with catalogue-only judgment; do not invent Headout facts."
+          : "Delphi call failed. Continue without inventing facts; you may retry with a narrower question once.",
+      }),
+    };
+  }
+  return {
+    type: "tool_result",
+    tool_use_id: block.id,
+    content: JSON.stringify({
+      ok: true,
+      source: "delphi",
+      data: result.data,
+      note: "This is Headout knowledge / repos / docs — NOT a Storefront catalogue listing. Do not invent catalogue cards from it.",
+    }),
+  };
+}
+
 // ─── Scope / critique loop ─────────────────────────────────────────────────────
 
-async function runScopeChat(messages: Anthropic.MessageParam[], history: ChatTurn[], userContext?: ChatUserContext): Promise<ChatResult> {
+async function runScopeChat(messages: Anthropic.MessageParam[], history: ChatTurn[], userContext?: ChatUserContext, onDelta?: OnDelta): Promise<ChatResult> {
   const searchContext = userContext?.searchContext ?? {
     query: [...history].reverse().find((t) => t.role === "user")?.content.slice(0, 120) ?? "",
     nearMisses: [],
@@ -800,17 +1058,20 @@ async function runScopeChat(messages: Anthropic.MessageParam[], history: ChatTur
   const toolChoice: Anthropic.MessageCreateParams["tool_choice"] = atCap ? { type: "any" } : { type: "auto" };
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    let response: Awaited<ReturnType<typeof anthropic.messages.create>>;
+    let response: Anthropic.Message;
     try {
-      response = await anthropic.messages.create({
-        model: MODEL,
-        max_tokens: 4096,
-        system,
-        tools,
-        tool_choice: toolChoice,
-        messages,
-        temperature: 0,
-      });
+      response = await runModelTurn(
+        {
+          model: MODEL,
+          max_tokens: 4096,
+          system,
+          tools,
+          tool_choice: toolChoice,
+          messages,
+          temperature: 0,
+        },
+        onDelta,
+      );
     } catch {
       return buildResult("Something went wrong with the critique session — let's try again.", [], null, { stage: "scope" });
     }
@@ -868,6 +1129,10 @@ async function runScopeChat(messages: Anthropic.MessageParam[], history: ChatTur
         toolResults.push(await runVerifyCapability(block));
         continue;
       }
+      if (DELPHI_ANTHROPIC_NAMES.has(block.name)) {
+        toolResults.push(await runDelphiTool(block));
+        continue;
+      }
       toolResults.push({ type: "tool_result", tool_use_id: block.id, content: JSON.stringify({ error: "Unknown tool" }) });
     }
     messages.push({ role: "user", content: toolResults });
@@ -884,7 +1149,11 @@ async function runScopeChat(messages: Anthropic.MessageParam[], history: ChatTur
 
 // ─── Entry point ────────────────────────────────────────────────────────────
 
-export async function runChat(history: ChatTurn[], userContext?: ChatUserContext): Promise<ChatResult> {
+export async function runChat(
+  history: ChatTurn[],
+  userContext?: ChatUserContext,
+  onDelta?: OnDelta,
+): Promise<ChatResult> {
   const messages: Anthropic.MessageParam[] = history.map((turn) => ({ role: turn.role, content: turn.content }));
 
   // Build-critique mode: the client has flagged that the user entered the scope
@@ -892,12 +1161,12 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
   // has NO search/browse tools, so it cannot re-surface a match it already ruled
   // out. This is the structural fix for the old flip-flopping.
   if (userContext?.mode === "scope") {
-    return runScopeChat(messages, history, userContext);
+    return runScopeChat(messages, history, userContext, onDelta);
   }
 
   // Otherwise: the unified discovery/concierge agent handles search, browse,
   // details, registration, flag, access, update, and capability checks. When
   // nothing fits it says so plainly (stage chat, noMatch true) and the client's
   // next turn enters scope.
-  return runConciergeToolLoop(messages, userContext);
+  return runConciergeToolLoop(messages, userContext, onDelta);
 }

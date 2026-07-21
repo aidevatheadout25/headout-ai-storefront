@@ -24,6 +24,7 @@ import {
   createTool,
   fetchConversation,
   sendChat,
+  sendChatStream,
   type AddChatTurn,
   type BriefPayload,
   type BuilderId,
@@ -38,6 +39,8 @@ import {
 } from "@/lib/api";
 import { useAuthContext } from "@/lib/auth-context";
 import { useConversationsContext } from "@/lib/conversations-context";
+import { isMatchRejection, isOffScopeRedirect, isScopeAffirm } from "@/lib/scopeIntent";
+import { isSkillUploadFilename, readSkillUpload } from "@/lib/readSkillUpload";
 import {
   builderUrl,
   isManualPath,
@@ -230,6 +233,12 @@ export function HomeChat() {
   const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null);
   /** True while the critique/scope agent is active. Cleared on brief/kill/continuation. */
   const [inScopeMode, setInScopeMode] = useState(false);
+  /**
+   * After the user rejects catalogue cards, the next scope/build affirm should
+   * enter critique immediately (same as the fork chip) — don't wait for another click.
+   */
+  const rejectedMatchesRef = useRef<{ name: string; oneLiner: string }[]>([]);
+  const rejectedQueryRef = useRef("");
 
   const started = messages.length > 0;
   const hasToolResults = messages.some(
@@ -256,7 +265,7 @@ export function HomeChat() {
     if (stickToBottomRef.current) {
       scrollToEnd();
     }
-  }, [messages, sending, journeyPhase, scrollToEnd]);
+  }, [messages, sending, journeyPhase, addMode, addDraft, scrollToEnd]);
 
   // Auto-grow the composer with its content, up to a max height (then scroll).
   useLayoutEffect(() => {
@@ -411,19 +420,29 @@ export function HomeChat() {
   const handleSkillFileChange = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0];
+      // Reset so selecting the same file again still fires onChange.
       event.target.value = "";
-      if (!file || sending || addConfirming || addDraft) return;
-      if (!/\.(md|markdown|txt)$/i.test(file.name) && file.type && !file.type.includes("text")) {
+      if (!file) return;
+      if (sending || addConfirming) return;
+      if (addDraft) {
+        setError("Finish or cancel the current draft before uploading another skill.");
+        return;
+      }
+
+      if (!isSkillUploadFilename(file.name)) {
         setError(
-          "Upload only works for SKILL.md (Claude/Cursor skills). For docs, apps, or PDFs, paste a public link instead.",
+          "Upload a .skill package (e.g. prd-writer.skill) or a SKILL.md file.",
         );
         return;
       }
+
       try {
-        const text = await file.text();
+        const text = await readSkillUpload(file);
         await runAddSkillUpload(text, file.name);
-      } catch {
-        setError("Couldn't read that file — try again.");
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Couldn't read that skill file — try again.",
+        );
       }
     },
     [addConfirming, addDraft, runAddSkillUpload, sending],
@@ -452,10 +471,32 @@ export function HomeChat() {
           .map((m) => ({ role: m.role, content: m.text }));
         turns.push({ role: "user", content: text });
 
-        const result = await sendChat(turns, conversationId, opts);
-        const newMsg: ChatMessage = {
-          id: msgId(),
-          role: "assistant",
+        // Stream the assistant text into a live placeholder; fall back to the
+        // blocking endpoint if the SSE stream fails (e.g. proxy buffering).
+        let streamId: string | null = null;
+        let result: Awaited<ReturnType<typeof sendChat>>;
+        try {
+          streamId = msgId();
+          const placeholderId = streamId;
+          setMessages((prev) => [
+            ...prev,
+            { id: placeholderId, role: "assistant", text: "", userQuery: text },
+          ]);
+          result = await sendChatStream(turns, conversationId, opts, (delta) => {
+            setMessages((prev) =>
+              prev.map((m) => (m.id === placeholderId ? { ...m, text: m.text + delta } : m)),
+            );
+          });
+        } catch {
+          if (streamId) {
+            const removeId = streamId;
+            setMessages((prev) => prev.filter((m) => m.id !== removeId));
+          }
+          streamId = null;
+          result = await sendChat(turns, conversationId, opts);
+        }
+
+        const finalFields = {
           text: result.message,
           tools: result.tools,
           noMatch: result.noMatch,
@@ -468,7 +509,14 @@ export function HomeChat() {
           escalatePayload: result.escalatePayload,
           userQuery: text,
         };
-        setMessages((prev) => [...prev, newMsg]);
+        if (streamId) {
+          const finalizeId = streamId;
+          setMessages((prev) =>
+            prev.map((m) => (m.id === finalizeId ? { ...m, ...finalFields } : m)),
+          );
+        } else {
+          setMessages((prev) => [...prev, { id: msgId(), role: "assistant", ...finalFields }]);
+        }
 
         if (result.conversationId && result.conversationId !== conversationId) {
           loadedConvRef.current = result.conversationId;
@@ -639,19 +687,81 @@ export function HomeChat() {
         }
         setMessages((prev) => [...prev, userMessage]);
         void runAddChat(trimmed);
-      } else {
-        const chatOpts =
-          overrideOpts?.forceChat
-            ? undefined
-            : overrideOpts ?? (inScopeMode ? { mode: "scope" as const } : undefined);
+        return;
+      }
+
+      // After a catalogue gap / rejected matches, the next real reply enters
+      // critique — "I am ready", "what next", or describing the tool. Don't
+      // wait for the fork chip or re-search Product OS.
+      const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+      const priorTools = lastAssistant?.tools ?? [];
+      if (
+        !overrideOpts?.forceChat &&
+        !overrideOpts?.mode &&
+        !inScopeMode &&
+        isMatchRejection(trimmed) &&
+        priorTools.length > 0
+      ) {
+        rejectedMatchesRef.current = priorTools.map((t) => ({
+          name: t.name,
+          oneLiner: t.oneLiner,
+        }));
+        rejectedQueryRef.current =
+          lastAssistant?.userQuery ?? lastAssistant?.text?.slice(0, 120) ?? "";
+      }
+
+      const afterGap =
+        Boolean(lastAssistant?.noMatch) || rejectedMatchesRef.current.length > 0;
+      const continuingAfterGap =
+        afterGap &&
+        !isOffScopeRedirect(trimmed) &&
+        trimmed.length > 1;
+      const shouldEnterScope =
+        !overrideOpts?.forceChat &&
+        !overrideOpts?.mode &&
+        !inScopeMode &&
+        !isOffScopeRedirect(trimmed) &&
+        (isScopeAffirm(trimmed) || continuingAfterGap || isMatchRejection(trimmed)) &&
+        (afterGap || priorTools.length > 0 || isScopeAffirm(trimmed));
+
+      if (shouldEnterScope && messages.length > 0) {
+        const nearMisses =
+          rejectedMatchesRef.current.length > 0
+            ? rejectedMatchesRef.current
+            : (lastAssistant?.tools ?? []).map((t) => ({
+                name: t.name,
+                oneLiner: t.oneLiner,
+              }));
+        const query =
+          rejectedQueryRef.current ||
+          lastAssistant?.userQuery ||
+          lastAssistant?.text?.slice(0, 120) ||
+          trimmed;
+        rejectedMatchesRef.current = [];
+        rejectedQueryRef.current = "";
+        setInScopeMode(true);
         setMessages((prev) => {
           const next = [...prev, userMessage];
-          void runChat(trimmed, prev, chatOpts);
+          void runChat(trimmed, prev, {
+            mode: "scope",
+            searchContext: { query, nearMisses },
+          });
           return next;
         });
+        return;
       }
+
+      const chatOpts =
+        overrideOpts?.forceChat
+          ? undefined
+          : overrideOpts ?? (inScopeMode ? { mode: "scope" as const } : undefined);
+      setMessages((prev) => {
+        const next = [...prev, userMessage];
+        void runChat(trimmed, prev, chatOpts);
+        return next;
+      });
     },
-    [addMode, addDraft, inScopeMode, journeyPhase, runAddChat, runChat, sending],
+    [addMode, addDraft, inScopeMode, journeyPhase, messages, runAddChat, runChat, sending],
   );
 
   useEffect(() => {
@@ -1034,7 +1144,7 @@ export function HomeChat() {
                         skillFileInputRef.current?.click();
                       }}
                     >
-                      Upload SKILL.md (skills only)
+                      Upload skill (.skill / SKILL.md)
                     </Button>
                   </div>
                 )}
@@ -1081,6 +1191,47 @@ export function HomeChat() {
               </li>
             )}
           </ul>
+        )}
+
+        {/* Registration: in-thread upload panel — composer-only was easy to miss */}
+        {addMode && !addDraft && !sending && (
+          <div
+            className="home-chat__register-panel"
+            role="region"
+            aria-label="Add a tool to the catalogue"
+          >
+            <p className="home-chat__register-panel-title t-heading-sm">
+              Add it to the catalogue
+            </p>
+            <p className="home-chat__register-panel-body t-para-sm">
+              Claude or Cursor skill? Upload the <code>.skill</code> package
+              (e.g. <code>prd-writer.skill</code>) or a bare <code>SKILL.md</code>.
+              Apps, docs, Zeps, or MCPs — paste their URL in the box below.
+            </p>
+            <div className="home-chat__register-panel-actions">
+              <label
+                htmlFor="home-chat-skill-upload"
+                className={`home-chat__upload-label${addConfirming || sending ? " home-chat__upload-label--disabled" : ""}`}
+              >
+                Upload skill
+              </label>
+            </div>
+          </div>
+        )}
+
+        {/* Always mount the file input while registering. Accept .skill (zip
+            packages) — filtering to .md alone hides them on macOS. */}
+        {addMode && !addDraft && (
+          <input
+            id="home-chat-skill-upload"
+            ref={skillFileInputRef}
+            type="file"
+            accept=".skill,.zip,.md,.markdown,.txt"
+            className="home-chat__skill-file-input"
+            disabled={sending || addConfirming}
+            onChange={(e) => void handleSkillFileChange(e)}
+            aria-label="Upload a .skill package or SKILL.md file"
+          />
         )}
 
         {/* Nothing fits → scope fork chip */}
@@ -1259,29 +1410,11 @@ export function HomeChat() {
           {addMode && !addDraft && (
             <div className="home-chat__add-upload">
               <p className="home-chat__add-upload-lead t-label-xs">
-                <strong>Apps, docs, Zeps, MCPs:</strong> paste their URL above.
+                Or paste a public URL above for apps, docs, Zeps, and MCPs.
                 {" "}
-                <strong>Claude/Cursor skills:</strong> upload a SKILL.md (not a PDF or doc).
+                Prefer the <strong>Upload skill</strong> button above for{" "}
+                <code>.skill</code> / <code>SKILL.md</code>.
               </p>
-              <input
-                ref={skillFileInputRef}
-                type="file"
-                accept=".md,.markdown,.txt,text/markdown,text/plain"
-                className="home-chat__skill-file-input"
-                disabled={sending || addConfirming}
-                onChange={(e) => void handleSkillFileChange(e)}
-                aria-label="Upload a SKILL.md file for a Claude or Cursor skill"
-                tabIndex={-1}
-              />
-              <button
-                type="button"
-                className="home-chat__chip t-para-sm"
-                disabled={sending || addConfirming}
-                onClick={() => skillFileInputRef.current?.click()}
-              >
-                <Icon name="checkmark" size={16} />
-                Upload SKILL.md
-              </button>
             </div>
           )}
         </form>
