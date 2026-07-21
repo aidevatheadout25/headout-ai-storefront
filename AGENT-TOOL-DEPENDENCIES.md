@@ -20,7 +20,7 @@ This is where richer tool access most improves the answer. Today it reasons larg
 
 | Tool | Why the agent needs it | Status |
 |---|---|---|
-| **Delphi (Headout KB)** | Headout-specific context so it doesn't build on wrong assumptions (how seat maps / bookings / pricing work). Also the source of truth for the questions below. | 🔌 confirm MCP access + endpoint |
+| **Delphi (Headout KB)** | Headout-specific context so it doesn't build on wrong assumptions (how seat maps / bookings / pricing work). Also the source of truth for the questions below. | ✅ wired (`delphiClient.ts` → MCP `https://delphi.headout.com/tools/mcp`; needs `DELPHI_API_KEY`) |
 | **Capability check** (`verify_capability`) | Avoid false "Claude/ChatGPT can't do X" claims before recommending a build | ✅ built |
 | **Existing-tools lookup** (reuse the catalogue search) | Ground the "feature-request the near-miss instead" recommendation in real tools | ✅ built |
 | **Zeps capability + connector list** | To recommend "build a Zep" accurately, the agent must know what Zeps can actually do *today* (which connectors are live, what's still being wired) | ❓ confirm current Zeps capabilities (confirm via Delphi) |
@@ -59,7 +59,7 @@ This is where richer tool access most improves the answer. Today it reasons larg
 
 ## The gaps that most limit assistance quality (priority order)
 
-1. **Delphi MCP access** — the biggest single upgrade to the critique agent's usefulness; it's the difference between generic PM advice and Headout-grounded advice. *(Confirm endpoint/auth via Delphi itself.)*
+1. **Delphi MCP access** — ✅ wired in api-server (`delphiClient.ts` + `delphi_*` chat tools). Set `DELPHI_API_KEY` (Slack `/create-delphi-api-key`) in the deploy env to activate. Catalogue stays DB; Delphi is beyond-catalogue only.
 2. **Live Zeps capability list** — since Zep is the default recommendation for workflows, recommending it for something Zeps can't do yet is a broken promise. Needs the current-state connector/capability list.
 3. **Approved-vendor + data-policy list** — so third-party recommendations are safe and sanctioned.
 4. **GitHub App + template + Guardian skill** — the build handoff can't be real without these.

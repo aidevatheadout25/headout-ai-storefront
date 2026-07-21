@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
+import { devAuthCookiePlugin } from "./vite-dev-auth-cookie-plugin";
 
 const rawPort = process.env.PORT;
 
@@ -26,12 +27,18 @@ if (!basePath) {
   );
 }
 
+/** Where Vite forwards `/api` in local dev (Express api-server). */
+const apiProxyTarget =
+  process.env.API_PROXY_TARGET ?? "http://127.0.0.1:8080";
+
 export default defineConfig({
   base: basePath,
   plugins: [
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),
+    // apply: "serve" — omitted from production builds automatically
+    devAuthCookiePlugin(),
     ...(process.env.NODE_ENV !== "production" &&
     process.env.REPL_ID !== undefined
       ? [
@@ -65,6 +72,15 @@ export default defineConfig({
     allowedHosts: true,
     fs: {
       strict: true,
+    },
+    // Off Replit there is no platform router — proxy /api to the API server so
+    // the SPA can keep root-relative `/api` calls (same as production, where
+    // Express serves both).
+    proxy: {
+      "/api": {
+        target: apiProxyTarget,
+        changeOrigin: true,
+      },
     },
   },
   preview: {

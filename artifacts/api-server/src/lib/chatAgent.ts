@@ -13,21 +13,42 @@ import {
   type ApiTool,
 } from "./catalogue";
 import { verifyCapability } from "./verifyCapability";
+import {
+  callDelphiTool,
+  DELPHI_TOOL_NAMES,
+  type DelphiToolName,
+} from "./delphiClient";
 
 const MODEL = CLAUDE_MODEL;
-const MAX_TURNS = 8;
+const MAX_TURNS = 10;
 
 export type ChatTurn = { role: "user" | "assistant"; content: string };
 
+/** Streaming sink for the assistant's text as it's generated. Optional — when
+ *  omitted (the eval, tests, and the non-streaming `/chat` route), the agent
+ *  runs the identical blocking path it always has. */
+export type OnDelta = (text: string) => void;
+
 /**
- * The recommendation the concierge makes at the end of the funnel.
- *
- * Cheapest-path ordering (ascending cost/complexity):
- *   manual       — start without building; use a shared tracker, spreadsheet, or Slack workflow
- *   claude-skill — a reusable Claude skill (text-in / text-out, no UI, no hosting)
- *   replit       — full app or UI, confirmed integrations, small user count
- *   zeps         — no-code conversational agent or workflow
- *   real-app     — production-grade platform for many users / high-stakes
+ * Run one model turn. Behaviour is identical to `anthropic.messages.create`
+ * and returns the same final Message; when `onDelta` is provided we use the
+ * streaming API instead and forward text deltas as they arrive. Tool-use turns
+ * emit little or no text; the user-facing final turn is what actually streams.
+ */
+async function runModelTurn(
+  params: Anthropic.MessageCreateParamsNonStreaming,
+  onDelta?: OnDelta,
+): Promise<Anthropic.Message> {
+  if (!onDelta) return anthropic.messages.create(params);
+  const stream = anthropic.messages.stream(params);
+  stream.on("text", (delta) => onDelta(delta));
+  return stream.finalMessage();
+}
+
+/**
+ * Vestigial from the superseded "cheapest-path builder" funnel. Kept only so
+ * ChatResult / conversations.ts stay type-compatible; always null in practice.
+ * (Slated for removal in a follow-up once the persistence layer drops it.)
  */
 export type BuilderId =
   | "manual"
@@ -38,23 +59,24 @@ export type BuilderId =
   | "real-app";
 
 /**
- * Where the build-gate funnel has landed for this reply:
- * - `chat`: a normal answer, clarifying question, match presentation, or one of
- *   the scoping questions — the build/Slack hand-off UI must NOT render.
- * - `handoff`: the funnel has cleared all four gates, so the hand-off UI may
- *   render with `recommendedBuilder` as the primary action.
- * - `register`: the user has signalled they already built something and want it
- *   listed in the catalogue; the UI switches to the add-tool paste-link flow.
- * - `scope`: the user entered the Builder journey critique loop; the UI shows
- *   the scoping conversation without the normal handoff buttons.
- * - `brief`: the critique agent produced a requirements brief; the UI shows
- *   the editable BriefCard with a "Create my repo" button.
- * - `kill`: the critique agent called recommend_kill; the UI shows a kill card
- *   with an actionable alternative instead of a brief.
- * - `escalate`: the critique agent called escalate_to_eng; the UI shows a
- *   project-pitch card instead of a self-serve repo — this idea is too large
- *   or load-bearing for any self-serve path.
- * - `disambiguation`: off-script input detected mid-flow; the UI shows chips.
+ * Where the funnel has landed for this reply. In the unified agent (one LLM,
+ * one message history) the stage is derived from *which tool the model called*,
+ * not from regex-scanning prose:
+ * - `chat`: discovery / browse / plain answer / a clarifying or gap question —
+ *   catalogue cards may attach; the "nothing fits → scope" fork chip renders
+ *   when `noMatch` is true.
+ * - `register`: the model called start_registration.
+ * - `scope`: the client flagged `mode:"scope"` (the user has entered the
+ *   build-critique loop) and the model asked a critique question rather than
+ *   concluding. No search tools exist in this mode, so the agent cannot
+ *   re-surface a catalogue match it already ruled out — this is what kills the
+ *   old "nothing fits ↔ X already does this" flip-flopping.
+ * - `brief` / `kill` / `escalate`: the model called
+ *   draft_brief / recommend_kill / escalate_to_eng.
+ * - `scope_exit`: in scope mode the model called end_scope (user backed out);
+ *   `forwardQuery` carries any search/browse to run outside scope.
+ * `handoff` and `disambiguation` are retained in the union for client/type
+ *   compatibility but are no longer emitted by the server.
  */
 export type FunnelStage =
   | "chat"
@@ -68,20 +90,15 @@ export type FunnelStage =
   | "disambiguation";
 
 /**
- * The shape a build should take — the reusable core of the critique agent's
- * decision. Replaces the old binary `appClass` (micro|full), which flattened
- * every non-app idea (an MCP server, a Claude skill, a Zep) into "micro" with
- * no way to express what it actually was.
+ * The shape a build should take — the reusable core of the critique decision.
  *
  *   no_build   — Claude-native or a genuine one-off; pairs with recommend_kill
  *   skill      — Claude skill: text-in, artifact-out, reusable, no hosting
  *   mcp        — machine-callable server exposing data/actions to agents;
  *                no UI, programmatic callers, typically high query volume
  *   zep        — a Zep on Headout's Zeps platform: a no-code multi-step
- *                workflow agent that orchestrates connectors (Slack/GitHub/
- *                Notion/etc.) and runs on triggers (web/API/Slack/WhatsApp/
- *                webhook/cron), built by chatting — no code, self-serve.
- *                The default for workflow/automation-shaped needs.
+ *                workflow agent orchestrating connectors on triggers. The
+ *                default for workflow/automation-shaped needs.
  *   script     — one-off or dev-side automation, not a persistent service
  *   micro_app  — small UI + backend, one job, small audience
  *   full_app   — multi-user UI + backend + multiple integrations
@@ -107,24 +124,20 @@ export type BriefPayload = {
   frequency: string;
   mustDo: string[];
   wontDo: string[];
-  /** Never "no_build" or "eng_project" here — those pair with kill/escalate, not a brief. */
+  /** Never "no_build" or "eng_project" here — those pair with kill/escalate. */
   modality: Modality;
-  /** Why this modality and not another — the signal that decided it. */
   modalityReason: string;
   risk: "low" | "high";
 };
 
 export type KillPayload = {
-  /** Always "no_build" — a kill call is by definition a no_build modality. */
   modality: "no_build";
   reason: string;
   alternative: string;
   alternativeUrl?: string;
 };
 
-/** Produced by escalate_to_eng: a short project pitch instead of a self-serve repo. */
 export type EscalatePayload = {
-  /** Always "eng_project" — an escalate call is by definition an eng_project modality. */
   modality: "eng_project";
   problem: string;
   whyLoadBearing: string;
@@ -135,107 +148,168 @@ export type EscalatePayload = {
 export type ChatResult = {
   message: string;
   tools: ApiTool[];
-  /** True when no catalogue tool was recommended this turn. Drives nothing in
-   *  the UI on its own anymore — the hand-off UI is gated on `stage`. */
   noMatch: boolean;
   stage: FunnelStage;
-  /** Set only at the hand-off stage: the single best-fit path, chosen by cheapest-path-that-works. */
+  /** Vestigial — always null. */
   recommendedBuilder: BuilderId | null;
-  /** A concise build brief synthesised from the scoping answers, for pre-fill. */
+  /** Vestigial — always null. */
   buildPrompt: string | null;
-  /** Set only at the register stage: the URL captured from the user, or null if not yet provided. */
   registration: { url: string | null } | null;
-  /** Set when stage === 'brief': the full draft brief produced by the critique agent. */
   briefPayload: BriefPayload | null;
-  /** Set when stage === 'kill': reason + alternative from the critique agent. */
   killPayload: KillPayload | null;
-  /** Set when stage === 'escalate': the project pitch from the critique agent. */
   escalatePayload: EscalatePayload | null;
-  /** Set when stage === 'scope_exit' and the user's exit message carried an
-   *  actionable request (e.g. "show me the registry instead") — the client
-   *  should forward this as a new search instead of just acknowledging the exit. */
+  /** Retained for type compatibility; the unified agent no longer emits scope_exit. */
   forwardQuery: string | null;
 };
 
-const SYSTEM_PROMPT = `You are the AI PM advisor for Headout's internal AI Storefront — the platform where Headout teams discover, use, and register internal AI tools.
+export type ChatUserContext = {
+  email?: string;
+  userId?: string;
+  conversationId?: string;
+  /** When 'scope', the user has entered the build-critique loop: the agent
+   *  gathers requirements and concludes with draft_brief / recommend_kill /
+   *  escalate_to_eng, and has NO search/browse tools (so it can't re-litigate
+   *  reuse). Set by the client's fork chip / build-affirm, threaded on every
+   *  subsequent turn until a terminal outcome resolves it. */
+  mode?: "scope";
+  /** Near-miss tools from the last search, passed by the client when entering
+   *  scope so the critique agent can open by challenging a specific near-miss. */
+  searchContext?: { query: string; nearMisses: { name: string; oneLiner: string }[] };
+};
 
-Your job is search and routing: find something that already exists, or plainly acknowledge when nothing does. You do not scope new builds yourself (see below). Be warm, direct, and honest.
+// ─── System prompt (single unified agent) ──────────────────────────────────────
+
+const BASE_SYSTEM_PROMPT = `You are the AI PM advisor for Headout's internal AI Storefront — the platform where Headout teams discover, use, register, and scope internal AI tools. You handle the whole conversation yourself, end to end: finding something that already exists, honestly saying when nothing does, and — when the person wants to build — challenging the idea and scoping it right here. Be warm, direct, and honest.
 
 ━━ REGISTRATION — CHECK THIS FIRST ━━
-Before anything else, check if the user is signalling they already built something and want it listed.
+Before anything else, check if the user is signalling they already built something and want it listed: "I built X", "I made X", "register my tool", "add my tool", "how do I list this", a raw URL they created, or "where do I upload my skill / SKILL.md".
 
-Signals: "I built X", "I made X", "I finished building X", "register my tool", "add my tool", "how do I list this", or a raw URL they created.
-
-If any match → call start_registration immediately. Don't search first. Don't ask a question first. Pass the URL if they provided one. After the call, write one warm sentence that registration happens right here in this chat — they just paste the link.
+If any match → call start_registration immediately. Don't search first, don't ask a question first. Pass the URL if they gave one. After the call, write one warm sentence: registration happens right here — paste a URL for apps/docs/Zeps/MCPs, or upload a SKILL.md for Claude/Cursor skills (file upload is skills-only, not PDFs/docs). Never promise an upload without calling start_registration.
 
 ━━ WHEN SOMEONE DESCRIBES A NEED ━━
+1. SEARCH THE CATALOGUE FIRST. For any capability or problem, call search_catalogue before saying anything else. Rephrase vague asks into a concise capability description. If results are weak, try once more with different phrasing. "PRD" always means a Product Requirements Document — never a GitHub pull request; if search returns PR skills (create-pr, pr-describe) for a PRD ask, treat them as wrong and search again with "product requirements document" phrasing.
 
-1. SEARCH THE CATALOGUE FIRST.
-For any capability or problem, call search_catalogue before saying anything else. Rephrase vague asks into a concise capability description. If results are weak, try once more with different phrasing.
+If strong matches come back: write 1–2 short framing sentences only — do NOT list tools, restate one-liners, or dump metadata (the UI renders a card for every result with name, summary, team, link). Ask if any cover their need. A one-sentence gap note ("covers X; falls short on Y") is fine when useful.
 
-If strong matches come back: name each one (exact name from the results) with one sentence on why it fits — the UI renders a card for every tool you name. Ask if any of these cover their need.
-
-2. NOTHING FITS → HAND OFF, DON'T INTERVIEW.
-If nothing fits, say so in one plain sentence, e.g. "Nothing in the catalogue covers this — let's scope it properly." You do not run a scoping interview — you never ask about outcome, frequency, audience, or feasibility, and there is no record_recommendation tool or approval step for you to call. Do not attempt to recommend a builder, a path, or a "don't build this" verdict yourself, and do not narrate how the handoff works or who picks it up next — just acknowledge the gap and stop.
-
-Scoping a build is NOT a separate team's job, not a different product, and not something that happens "elsewhere" — it happens right here, in this same chat, once the person confirms they want to build. Never say (or imply) any version of: "I'm not the right place for that," "take this to the team who can build it," "I don't scope," "there's nothing more I can do here," or "someone else handles that." If you catch yourself about to say the person needs to go somewhere else to scope a build, stop — say the one-line acknowledgement above instead and nothing more.
-
-If the ask is too vague to search on at all (e.g. "I want to build something new" with no description of what), ask exactly one question — what are they trying to build — and stop there. Once they answer, search on that answer before doing anything else.
+2. NOTHING FITS → SAY SO IN ONE SENTENCE, THEN STOP COMPLETELY. If nothing fits — or the user rejects the matches — your ENTIRE reply is one plain sentence that nothing in the catalogue covers it. That's the whole message. Do NOT ask a follow-up question. Do NOT ask what their ideal tool would do. Do NOT propose a build, a modality, or a rough scope. Do NOT advise whether they should build it, and do NOT suggest "just write a script" or "just use Claude for this" — deciding build-vs-no-build and critiquing the idea is the scoping step's job, not yours. The user's very next message automatically enters that scoping step (still you, still right here) — so you don't need to invite it, tee it up, or ask them to confirm. Never say or imply "I'm not the right place for that", "take this to another team", "I don't scope", or "there's nothing more I can do here". If the ask is too vague to search on at all ("I want to build something new" with no description), ask exactly one question — what are they trying to build — then search on their answer (this is the one allowed exception to the one-sentence rule, and it is a search clarifier, not scoping).
 
 ━━ CAPABILITY CLAIMS ━━
-Before asserting any negative capability claim about Claude or ChatGPT ("X can't do Y"), call verify_capability(platform, capability) first. If the result is supported=true, treat it as confirmed — don't assert a limitation that doesn't exist. If the result is unknown, say you're not certain and suggest the user verify before assuming a limitation.
+Before asserting any negative capability claim about Claude or ChatGPT ("X can't do Y"), call verify_capability(platform, capability). If supported=true, treat it as confirmed — don't assert a limitation that doesn't exist. If unknown, say you're not certain and suggest verifying before building around the assumption.
+
+━━ HEADOUT KNOWLEDGE BEYOND THE CATALOGUE (Delphi) ━━
+The catalogue is ONLY listed tools in our database. For anything beyond that — Headout repos, Notion/Coda/Google Docs, org policy, "where is X implemented?", "which repos use Y?" — call Delphi:
+- delphi_ask: general Headout Q&A (full pipeline)
+- delphi_search_docs: Notion/Coda/Google Docs RAG
+- delphi_find_repos: discover relevant headout/* repos
+- delphi_analyze_code: deep code analysis (pass repo_names when known; prefer find_repos first)
+- delphi_classify: cheap routing flags before a heavier call
+- delphi_fetch_page: pull a specific Notion/Coda/GDocs URL
+Rules:
+1. Listed tools → always search_catalogue / browse_catalogue / get_tool_details. Never use Delphi to answer what is or isn't in the catalogue.
+2. After a weak/empty catalogue search, if they are asking whether related *code or docs* already exist, call delphi_find_repos or delphi_ask. Present findings as Headout knowledge / related repos — NEVER as catalogue cards, and NEVER invent a catalogue entry from Delphi.
+3. Explicit KB asks (policies, how a domain works, pasted Notion/Coda/GDocs links) → Delphi. Still search the catalogue first when they are also looking for a listed tool.
+4. If Delphi returns unavailable/error, say you couldn't reach Headout knowledge right now and continue with catalogue-only judgment.
+
+━━ BROWSING / DETAILS / FLAGGING / ACCESS / UPDATES ━━
+- NEVER state what is or isn't in the catalogue from memory. Always call search_catalogue or browse_catalogue first, and only describe what the tool actually returned — never invent counts ("we have 8 MCPs"), names, or availability.
+- Browse ("show me all data tools", "what has ops built?", "list all MCPs"): call browse_catalogue with type/team filters. Present like search — framing only, cards own the listing. Valid types: app, skill, docs, mcp, plugin, script, slack-bot, zep. Valid teams: Platform, Applied AI, Supply Ops, Growth, Content.
+- Tool details ("tell me more about X", "who owns Y?"): call get_tool_details with the ID from a prior search/browse. Present key facts in plain prose. Never fabricate details not in the result.
+- Flagging ("link is broken", "outdated", "wrong info"): find the tool by name via search if needed, then flag_tool with ID + reason (broken-link, outdated, wrong-info, other). Warm one-sentence confirmation after.
+- Access ("I need access to X"): check accessLevel. If open, they can use it directly. If restricted, ask what they'll use it for if not stated, then request_access(toolId, reason).
+- Updating an owned tool: (1) confirm tool + field, (2) confirm new value, (3) ask for their manage key, then call update_tool. Never before step 3. Fields: url, title, oneLiner, description, status.
 
 ━━ PLATFORM TEAM ━━
-Only ever mention the platform team on Slack for API keys, credentials, or access provisioning. Never for hosting, infra, architecture, or general build advice — that's not something to explain or route yourself.
+Only ever mention the platform team on Slack for API keys, credentials, or access provisioning — never for hosting, infra, architecture, or general build advice.
 
-━━ BROWSING THE CATALOGUE ━━
-When a user wants to explore rather than search — "show me all data tools", "what has the ops team built?", "list all Claude skills" — call browse_catalogue with the appropriate type and/or team filters. Present results the same way as search: name each tool with one sentence on what it does. The UI renders a card for every tool you name.
+━━ OFF-MISSION ━━
+If the request has nothing to do with the catalogue, tools, a build, or Headout internal knowledge that Delphi can answer (creative writing, trivia, small talk), do NOT do the thing asked. Give a one-line warm redirect back to what this chat is for and stop. Never produce the requested content first — the redirect IS the entire response.
 
-Valid type values: app, skill, docs, mcp, plugin, script, slack-bot, zep.
-Valid team values: Platform, Applied AI, Supply Ops, Growth, Content.
-
-━━ TOOL DETAILS ━━
-When a user asks about a specific tool — "tell me more about X", "who owns Y?", "what's the access level for Z?" — and you have its ID from a prior search or browse, call get_tool_details. Present the key facts in plain prose: what it does, the team, access requirements, and the link. Never fabricate details not in the result. If you don't have the tool's ID yet, run search_catalogue or browse_catalogue first.
-
-━━ FLAGGING ISSUES ━━
-When a user reports a problem — "the link is broken", "this tool is outdated", "the description is wrong" — identify the tool by name using search_catalogue if the ID is not already known, then call flag_tool with the ID and reason. Write a brief warm confirmation after. Valid reasons: broken-link, outdated, wrong-info, other.
-
-━━ REQUESTING ACCESS ━━
-When a user says they need access to a tool — "I need access to X", "how do I get access to Y?" — first check the tool's accessLevel. If it's open, tell them they can use it directly. If access is restricted (request or sensitive), ask what they'll use it for if not already stated, then call request_access(toolId, reason). Confirm warmly after.
-
-━━ UPDATING YOUR TOOLS ━━
-When a user wants to edit a tool they own — "update the URL for my tool", "change the description of X" — follow this sequence:
-1. Confirm which tool and which field they want to change.
-2. Confirm the new value.
-3. Ask for their manage key: "You received a manage key when you first claimed this tool — it's a long string of letters and numbers. Paste it here and I'll apply the change."
-4. Once you have all three, call update_tool. Never call it before step 3 is complete.
-
-Updatable fields: url, title, oneLiner, description, status. If the manage key is wrong, say so and ask them to double-check. If they can't find it, direct them to the platform team on Slack.
-
-━━ OFF-MISSION REQUESTS ━━
-If the request has nothing to do with the catalogue, tools, or a build — creative writing, general trivia, small talk, anything not covered above — do NOT do the thing asked. Give a one-line warm redirect back to what this chat is for and stop there. Never produce the requested content first and redirect afterward (e.g. never write the poem/essay/joke and then mention what you actually do) — the redirect IS the entire response.
-
-━━ TONE AND APPROACH ━━
-- One question per message, always — never stack multiple questions (even related ones from the same list) into a single reply. A message should contain at most one question mark. Ask, wait for the answer, then ask the next one if you still need it.
-- Be direct. One clear recommendation beats three hedged options.
-- Be warm. You're a thoughtful colleague who knows the stack, not a form.
+━━ TONE ━━
+- One question per message, always — at most one question mark per reply. Ask, wait, then ask the next.
+- Be direct: one clear recommendation beats three hedged options. Be warm: a thoughtful colleague who knows the stack, not a form.
 - Challenge assumptions once, firmly but kindly. If they push back, accept it and move on.
-- No markdown headers in your responses. Short paragraphs, plain prose.
-- Never claim to run, operate, or demonstrate any tool yourself — only point to them.
-- Never invent or name a tool that wasn't in the search results.
-- If the request is genuinely ambiguous before you can search, ask exactly one short clarifying question.`;
+- No markdown headers. Short paragraphs, plain prose.
+- Never restate tool names/one-liners/teams in a list after a search/browse — cards show those. Never claim to run, operate, or demonstrate a tool. Never invent a tool that wasn't in the results.`;
+
+/**
+ * The scope-mode addendum. Appended to the base prompt when the client flags
+ * mode:"scope". In this mode the tool set has NO search/browse — the agent has
+ * already established the catalogue gap and must critique + conclude, not
+ * re-search. The near-misses from the entering search are injected here so the
+ * agent can open by challenging a specific one.
+ */
+function scopeSection(searchContext?: { query: string; nearMisses: { name: string; oneLiner: string }[] }): string {
+  const nearMissLines =
+    searchContext && searchContext.nearMisses.length > 0
+      ? searchContext.nearMisses.map((t) => `  • ${t.name}: ${t.oneLiner}`).join("\n")
+      : "  (none — no close catalogue matches)";
+  const query = searchContext?.query ?? "";
+
+  return `
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BUILD-CRITIQUE MODE — the user has confirmed they want to build. The catalogue gap is already settled: nothing adequate exists, and you will NOT re-check or re-recommend the catalogue (treat that question as closed). NEVER mention your tools, their absence, "I can't search here", or any internal mechanics to the user — just do the work. Your job now: challenge the idea, then land on exactly one of three outcomes — a tight requirements brief (draft_brief), a recommendation not to build (recommend_kill), or a project pitch for an engineering team (escalate_to_eng).
+
+━━ SEARCH CONTEXT (do NOT ask the user to repeat this) ━━
+Original query: "${query}"
+Near-misses from the catalogue:
+${nearMissLines}
+
+━━ APPROACH ━━
+1. OPEN WITH A CHALLENGE, not a data-gathering question. Your first message must push back on the idea itself — kill it outright, propose reshaping it smaller, or point at a near-miss and ask why it doesn't already cover this. Only gather requirements once the idea survives.
+2. Then ask ONE focused question at a time — max 6 across the whole session. This is a sharp challenge, not gate-by-gate requirements gathering. Once you've asked 6, the tools force a conclusion — spend them wisely, never re-ask something already answered.
+3. After two justified pushbacks from the user ("no, that doesn't work because X"), concede and proceed.
+4. Direct, warm, honest, no sycophancy. If it's a one-off, say so plainly.
+5. HANDLE NON-ANSWERS: if a reply doesn't address what you asked, don't re-ask — make a reasonable, explicitly-stated assumption ("I'll assume weekly use since you didn't say") and move on. Never ask the same question more than twice.
+
+━━ MODALITY — figure out the actual shape, don't default to "an app" ━━
+Every brief names a modality justified from a concrete signal in the conversation. This is the most important judgment you make — a wrong modality (calling an MCP a "micro app") hides the real shape of the work.
+zep is the FIRST thing to consider for any workflow/automation need — Headout's self-serve substrate: a no-code multi-step workflow agent orchestrating connectors (Slack/GitHub/Notion/etc.) on triggers (web/API/Slack/WhatsApp/webhook/cron). If it's "when X happens, do Y across these systems" with no bespoke UI, it's a zep. Only pick micro_app/full_app when you can state WHY Zeps can't serve it (needs a real custom UI or a persistent multi-user surface).
+- Connector orchestration + triggers, no custom UI → zep (the default for workflow asks)
+- Agents/pipelines calling it programmatically, no human in the loop, steady/high volume, no UI → mcp
+- Same text-in, artifact-out steps repeated by a person/small team, no hosting → skill
+- A fixed one-off dataset/migration/dev-side tooling → script (usually pairs with recommend_kill)
+- A real custom UI required and Zeps genuinely can't cover it, small audience → micro_app
+- Multiple users, multiple integrations, a real application surface, Zeps can't cover it → full_app
+- Touches every X, feeds a live production system, or several teams must co-own it → eng_project (escalate_to_eng, never draft_brief)
+
+━━ KILL vs BUILD — do NOT over-kill ━━
+recommend_kill (modality no_build) ONLY when the task is genuinely one-off or rare (happens less than ~twice a month), OR it's a single ad-hoc thing one person needs once that Claude.ai answers in a single prompt. Always give a concrete alternative they can do right now.
+DO NOT kill just because "Claude could do it with a good prompt" — that logic alone is a trap. If the same prompt/steps are run REPEATEDLY (roughly weekly or more) by a person or a team, that recurrence is exactly what a skill packages → draft_brief with modality skill, do NOT kill. "Claude can do it" justifies a kill only when it's also a genuine one-off.
+A SCHEDULED or TRIGGERED automation across systems (e.g. "every morning pull X from the DB and post to Slack", "when a form is submitted, do Y") is NEVER no_build — Claude.ai cannot run on a schedule, hold connectors, or fire on triggers. That's a zep. Draft a brief.
+Only-wants-a-file-output (Word/Excel/PDF/CSV) as a one-off → kill; but a recurring report generation for a team is still a skill or zep.
+
+━━ ESCALATE (escalate_to_eng, modality eng_project) if ━━
+- It would touch every experience/tool/record (systemic reach); OR feeds/modifies a live production system; OR multiple teams must co-own it. If you're about to say "this needs an engineering team" in prose, call escalate_to_eng instead. Never call draft_brief for this.
+
+━━ BRIEF (draft_brief) if ━━
+- Repeated, affects more than one person/system, NOT Claude-native, NOT an eng_project. You've gathered: problem, users, frequency, 2–5 must-dos, 3+ won't-dos, modality + modalityReason, risk.
+
+━━ RISK ━━
+Blast radius and data sensitivity, not team size. high whenever it touches PII, financial data, or data owned by a compliance-relevant team (Legal, Procurement, Finance) needing sign-off — even if 100% internal. Only "customer-facing" if the actual end users are customers, not Headout staff.
+
+━━ DELPHI (beyond catalogue) ━━
+Catalogue near-misses above are settled — do NOT re-search the catalogue. When you need Headout facts beyond those rows (how a domain works, whether code already does this, Notion/Coda/GDocs, which repos own a concern), call Delphi (delphi_ask / delphi_search_docs / delphi_find_repos / delphi_analyze_code / delphi_classify / delphi_fetch_page). Ground kill/reshape/modality claims in what Delphi returns. Never invent catalogue cards from Delphi results. If Delphi is unavailable, say so briefly and continue with conversation judgment.
+
+━━ RULES ━━
+- End with EXACTLY ONE terminal call: draft_brief, recommend_kill, or escalate_to_eng. Never produce a brief/kill/pitch as chat text — always use the tool.
+- If the user signals they're done, disengaging, thanking you, or saying goodbye, do NOT trail into small talk or more questions — immediately make your best terminal call with what you have.
+- OFF-SCRIPT EXIT: if the user changes their mind or asks to leave scoping ("never mind", "forget it", "show me the registry instead", "search for X instead"), call end_scope with a short acknowledgement and, if their message carried a search/browse request, put it in forwardQuery. Do NOT call draft_brief/recommend_kill/escalate_to_eng for an exit.
+- Never invent information the user didn't provide. No markdown headers. One question mark per message.`;
+}
+
+// ─── Tool definitions ──────────────────────────────────────────────────────────
 
 const SEARCH_TOOL: Anthropic.Tool = {
   name: "search_catalogue",
   description:
-    "Search the internal Headout catalogue for tools matching a capability or problem. Returns the most relevant tools with id, name, type, one-liner and tags. Do NOT call this when the user has registration intent (e.g. 'add my tool', 'I built X', 'register my tool') — use start_registration instead.",
+    "Search the internal Headout catalogue for tools matching a capability or problem. Returns the most relevant tools with id, name, type, one-liner, description and tags. Do NOT call for registration intent — use start_registration.",
   input_schema: {
     type: "object",
     properties: {
       query: {
         type: "string",
-        description:
-          "A concise natural-language description of the capability or problem the user wants a tool for.",
+        description: "A concise natural-language description of the capability or problem the user wants a tool for.",
       },
     },
     required: ["query"],
@@ -245,20 +319,12 @@ const SEARCH_TOOL: Anthropic.Tool = {
 const VERIFY_CAPABILITY_TOOL: Anthropic.Tool = {
   name: "verify_capability",
   description:
-    "Check whether a named AI platform (e.g. Claude, ChatGPT) supports a specific capability by consulting the vendor's own documentation. Call this BEFORE asserting any negative capability claim (\"X can't do Y\", \"manual-only\", \"not supported\") about Claude or ChatGPT. Returns { supported: bool | \"unknown\", source, checked_at }. If supported === true, treat the capability as confirmed and do NOT assert the limitation. If supported === \"unknown\", fall back to the static baseline and flag the claim as unverified.",
+    'Check whether a named AI platform (Claude, ChatGPT) supports a capability by consulting the vendor docs. Call BEFORE asserting any negative capability claim ("X can\'t do Y", "manual-only"). Returns { supported: bool | "unknown", source, checked_at }. If supported===true, do NOT assert the limitation. If "unknown", fall back to the baseline and flag the claim as unverified.',
   input_schema: {
     type: "object",
     properties: {
-      platform: {
-        type: "string",
-        description:
-          "The AI platform to check (e.g. \"Claude\", \"ChatGPT\", \"OpenAI\", \"Anthropic\").",
-      },
-      capability: {
-        type: "string",
-        description:
-          "The specific capability to verify (e.g. \"generate Excel files\", \"browse the web\", \"execute code\").",
-      },
+      platform: { type: "string", description: 'The AI platform (e.g. "Claude", "ChatGPT", "OpenAI").' },
+      capability: { type: "string", description: 'The specific capability (e.g. "generate Excel files", "browse the web").' },
     },
     required: ["platform", "capability"],
   },
@@ -267,20 +333,12 @@ const VERIFY_CAPABILITY_TOOL: Anthropic.Tool = {
 const REGISTER_TOOL: Anthropic.Tool = {
   name: "start_registration",
   description:
-    "MUST be called (before search_catalogue) whenever the user signals they have already built or finished a tool and want it listed in the catalogue. Trigger phrases include — but are not limited to — 'I built X', 'how do I register this', 'register my tool', 'add my tool', 'add my tool to the catalogue', 'I just finished building something', 'what do I do now that I built this', or when the user pastes a URL to something they made. Do NOT call search_catalogue first. Do NOT ask a clarifying question first. Call this immediately, then tell the user registration happens right here.",
+    "MUST be called (before search_catalogue) whenever the user signals they already built/finished a tool and want it listed, OR asks to upload/add a Claude/Cursor skill. Trigger phrases: 'I built X', 'register my tool', 'add my tool', 'where do I upload my SKILL.md', 'I have a claude skill', or a pasted URL to something they made. Do NOT search or ask a question first — the UI only shows the SKILL.md upload control after this runs.",
   input_schema: {
     type: "object",
     properties: {
-      url: {
-        type: "string",
-        description:
-          "The URL the user provided for their tool, if any. Omit (or pass empty string) if no URL was given yet.",
-      },
-      name: {
-        type: "string",
-        description:
-          "The name of the tool the user mentioned, if any. Optional.",
-      },
+      url: { type: "string", description: "The URL the user provided, if any. Omit if none yet." },
+      name: { type: "string", description: "The tool name the user mentioned, if any. Optional." },
     },
     required: [],
   },
@@ -289,24 +347,13 @@ const REGISTER_TOOL: Anthropic.Tool = {
 const BROWSE_TOOL: Anthropic.Tool = {
   name: "browse_catalogue",
   description:
-    "List tools filtered by team and/or type when the user wants to browse or explore rather than search for a specific capability. Use for 'show me all data tools', 'what has the ops team built?', 'list all Claude skills'.",
+    "List tools filtered by team and/or type when the user wants to browse rather than search for a capability. Use for 'show me all data tools', 'what has the ops team built?', 'list all Claude skills'.",
   input_schema: {
     type: "object",
     properties: {
-      type: {
-        type: "string",
-        description:
-          "Filter by tool type. Valid values: app, skill, docs, mcp, plugin, script, slack-bot, zep. Omit to return all types.",
-      },
-      team: {
-        type: "string",
-        description:
-          "Filter by team name (Platform, Applied AI, Supply Ops, Growth, Content). Omit to return all teams.",
-      },
-      limit: {
-        type: "number",
-        description: "Maximum results to return. Defaults to 12.",
-      },
+      type: { type: "string", description: "Filter by type: app, skill, docs, mcp, plugin, script, slack-bot, zep. Omit for all." },
+      team: { type: "string", description: "Filter by team: Platform, Applied AI, Supply Ops, Growth, Content. Omit for all." },
+      limit: { type: "number", description: "Max results. Defaults to 12." },
     },
     required: [],
   },
@@ -315,15 +362,10 @@ const BROWSE_TOOL: Anthropic.Tool = {
 const DETAIL_TOOL: Anthropic.Tool = {
   name: "get_tool_details",
   description:
-    "Fetch full details about a specific tool when the user asks about it by name — 'how does X work?', 'who owns X?', 'what access level is X?'. Use the tool's ID from a prior search or browse.",
+    "Fetch full details about a specific tool when the user asks about it by name. Use the tool's ID from a prior search or browse.",
   input_schema: {
     type: "object",
-    properties: {
-      toolId: {
-        type: "string",
-        description: "The UUID of the tool to fetch details for.",
-      },
-    },
+    properties: { toolId: { type: "string", description: "The UUID of the tool." } },
     required: ["toolId"],
   },
 };
@@ -331,23 +373,13 @@ const DETAIL_TOOL: Anthropic.Tool = {
 const FLAG_TOOL: Anthropic.Tool = {
   name: "flag_tool",
   description:
-    "Report a problem with a tool on behalf of the user. Call when the user says a tool is broken, has a dead link, is outdated, or has incorrect information. Identify the tool ID from context or a prior search before calling.",
+    "Report a problem with a tool. Call when the user says a tool is broken, has a dead link, is outdated, or has wrong info. Identify the tool ID from context or a prior search first.",
   input_schema: {
     type: "object",
     properties: {
-      toolId: {
-        type: "string",
-        description: "The UUID of the tool being flagged.",
-      },
-      reason: {
-        type: "string",
-        enum: ["broken-link", "outdated", "wrong-info", "other"],
-        description: "The category of the problem.",
-      },
-      details: {
-        type: "string",
-        description: "Optional extra detail the user provided about the issue.",
-      },
+      toolId: { type: "string", description: "The UUID of the tool being flagged." },
+      reason: { type: "string", enum: ["broken-link", "outdated", "wrong-info", "other"], description: "Category of the problem." },
+      details: { type: "string", description: "Optional extra detail." },
     },
     required: ["toolId", "reason"],
   },
@@ -356,18 +388,12 @@ const FLAG_TOOL: Anthropic.Tool = {
 const ACCESS_TOOL: Anthropic.Tool = {
   name: "request_access",
   description:
-    "Submit an access request for a tool that requires approval (accessLevel is 'request' or 'sensitive'). Ask for the user's reason before calling if they haven't provided one.",
+    "Submit an access request for a tool requiring approval (accessLevel 'request' or 'sensitive'). Ask for the user's reason before calling if not provided.",
   input_schema: {
     type: "object",
     properties: {
-      toolId: {
-        type: "string",
-        description: "The UUID of the tool to request access for.",
-      },
-      reason: {
-        type: "string",
-        description: "Why the user needs access — what they will use the tool for.",
-      },
+      toolId: { type: "string", description: "The UUID of the tool." },
+      reason: { type: "string", description: "Why the user needs access." },
     },
     required: ["toolId", "reason"],
   },
@@ -376,93 +402,49 @@ const ACCESS_TOOL: Anthropic.Tool = {
 const UPDATE_TOOL_DEF: Anthropic.Tool = {
   name: "update_tool",
   description:
-    "Update a field on a tool the user owns. Only call after: (1) user confirmed the tool and field, (2) user confirmed the new value, (3) user provided their manage key. Never call before all three.",
+    "Update a field on a tool the user owns. Only after: (1) user confirmed tool + field, (2) confirmed new value, (3) provided their manage key. Never before all three.",
   input_schema: {
     type: "object",
     properties: {
-      toolId: {
-        type: "string",
-        description: "The UUID of the tool to update.",
-      },
-      field: {
-        type: "string",
-        enum: ["url", "title", "oneLiner", "description", "status"],
-        description: "The field to update.",
-      },
-      value: {
-        type: "string",
-        description: "The new value for the field.",
-      },
-      manageToken: {
-        type: "string",
-        description:
-          "The manage key the user provided. Issued when the tool was claimed.",
-      },
+      toolId: { type: "string", description: "The UUID of the tool." },
+      field: { type: "string", enum: ["url", "title", "oneLiner", "description", "status"], description: "The field to update." },
+      value: { type: "string", description: "The new value." },
+      manageToken: { type: "string", description: "The manage key the user provided." },
     },
     required: ["toolId", "field", "value", "manageToken"],
   },
 };
 
-const ALL_TOOLS: Anthropic.Tool[] = [
-  REGISTER_TOOL,
-  SEARCH_TOOL,
-  BROWSE_TOOL,
-  DETAIL_TOOL,
-  FLAG_TOOL,
-  ACCESS_TOOL,
-  UPDATE_TOOL_DEF,
-  VERIFY_CAPABILITY_TOOL,
-];
-
-// ─── Scope / Critique mode ────────────────────────────────────────────────────
-
 const DRAFT_BRIEF_TOOL: Anthropic.Tool = {
   name: "draft_brief",
   description:
-    "Call this once you have gathered enough information to write a requirements brief. Only call after the user has confirmed a genuine build need AND you have all required fields. Never call if recommend_kill is more appropriate.",
+    "Call once you have enough to write a requirements brief. Only after the user confirmed a genuine build need AND you have all required fields. Never if recommend_kill or escalate_to_eng is more appropriate.",
   input_schema: {
     type: "object",
     properties: {
-      title: {
-        type: "string",
-        description: "A short tool-style name for this tool, 2–4 words, title-cased. E.g. 'Experiment Compare', 'Report Compiler', 'Review Digest Bot'. NOT a sentence — a product name.",
-      },
+      title: { type: "string", description: "A short tool-style name, 2–4 words, title-cased (e.g. 'Experiment Compare', 'Review Digest Bot'). A product name, not a sentence." },
       problem: { type: "string", description: "One sentence: what problem does this solve?" },
       users: { type: "string", description: "Who uses it? (e.g. 'Supply Ops team, ~8 people')" },
       frequency: { type: "string", description: "How often? (e.g. 'daily', 'weekly', 'ad-hoc')" },
-      mustDo: {
-        type: "array",
-        items: { type: "string" },
-        description: "2–5 must-have capabilities. Be specific.",
-      },
-      wontDo: {
-        type: "array",
-        items: { type: "string" },
-        description: "3+ explicit out-of-scope items to keep scope tight.",
-      },
+      mustDo: { type: "array", items: { type: "string" }, description: "2–5 must-have capabilities. Be specific." },
+      wontDo: { type: "array", items: { type: "string" }, description: "3+ explicit out-of-scope items." },
       modality: {
         type: "string",
         enum: ["skill", "mcp", "zep", "script", "micro_app", "full_app"],
         description:
-          "The shape this should take — never 'no_build' or 'eng_project' here (those go through recommend_kill / escalate_to_eng instead, never draft_brief). " +
-          "skill = Claude skill: text-in, artifact-out, reusable, no hosting. " +
-          "mcp = machine-callable server exposing data/actions to agents — no UI, programmatic callers, typically high query volume, no human in the loop. " +
-          "zep = a Zep on Headout's Zeps platform: a no-code multi-step workflow agent that orchestrates connectors (Slack/GitHub/Notion/etc.) and runs on triggers (web/API/Slack/WhatsApp/webhook/cron), built by chatting — no code, self-serve. This is the DEFAULT for any workflow/automation need built from connectors + triggers, not just scheduled pushes. " +
-          "script = one-off or dev-side automation, not a persistent service. " +
-          "micro_app = small UI + backend, one job, small audience — only pick this over zep if you can say why Zeps can't do it (needs a real custom UI, not just connectors and triggers). " +
-          "full_app = multi-user UI + backend + multiple integrations — same caveat as micro_app.",
+          "The shape this takes — never 'no_build' or 'eng_project' (those go through recommend_kill / escalate_to_eng). " +
+          "zep = no-code workflow agent on Headout's Zeps platform, connectors + triggers, the DEFAULT for workflow/automation. " +
+          "mcp = machine-callable server, no UI, programmatic callers, high volume. " +
+          "skill = Claude skill, text-in/artifact-out, no hosting. " +
+          "script = one-off/dev-side automation. " +
+          "micro_app/full_app = only when Zeps genuinely can't (needs a real custom UI or multi-user surface).",
       },
-      modalityReason: {
-        type: "string",
-        description: "One sentence: why this modality and not another — cite the specific signal (who/what calls it, volume, interactivity, data sensitivity).",
-      },
+      modalityReason: { type: "string", description: "One sentence: why this modality and not another — cite the specific signal (who/what calls it, volume, interactivity, data sensitivity)." },
       risk: {
         type: "string",
         enum: ["low", "high"],
         description:
-          "high if the tool touches PII, financial data, or regulated/compliance-owned data (e.g. Legal, Procurement, Finance sign-off required), or is genuinely customer-facing. " +
-          "low = purely internal, non-sensitive data, small blast radius if it breaks. " +
-          "Never label an internal-only tool 'customer-facing' — check the actual audience before choosing high for that reason.",
+          "high if it touches PII, financial data, or regulated/compliance-owned data (Legal/Procurement/Finance sign-off), or is genuinely customer-facing. low = purely internal, non-sensitive, small blast radius. Never label an internal-only tool 'customer-facing'.",
       },
     },
     required: ["title", "problem", "users", "frequency", "mustDo", "wontDo", "modality", "modalityReason", "risk"],
@@ -472,22 +454,13 @@ const DRAFT_BRIEF_TOOL: Anthropic.Tool = {
 const RECOMMEND_KILL_TOOL: Anthropic.Tool = {
   name: "recommend_kill",
   description:
-    "Call this when the idea should NOT be built: one-off task, already solvable natively by Claude, too risky, or clearly out of scope. This is the no_build modality by definition. Provide a concrete actionable alternative the user can do RIGHT NOW instead.",
+    "Call when the idea should NOT be built: one-off task, already solvable natively by Claude, too risky, or out of scope. This is the no_build modality. Provide a concrete alternative the user can do RIGHT NOW.",
   input_schema: {
     type: "object",
     properties: {
-      reason: {
-        type: "string",
-        description: "Plain-language explanation of why a build is not the right call (this doubles as the no_build justification).",
-      },
-      alternative: {
-        type: "string",
-        description: "The specific thing they can do instead (e.g. 'Use Claude.ai — paste the data and ask it to summarise', 'Set up a Slack reminder', 'Use the existing Reporting Tool in the catalogue').",
-      },
-      alternativeUrl: {
-        type: "string",
-        description: "An optional URL for the alternative (catalogue link, Claude.ai, Slack, etc.).",
-      },
+      reason: { type: "string", description: "Why a build is not the right call (doubles as the no_build justification)." },
+      alternative: { type: "string", description: "The specific thing to do instead (e.g. 'Use Claude.ai — paste the data and ask it to summarise')." },
+      alternativeUrl: { type: "string", description: "Optional URL for the alternative." },
     },
     required: ["reason", "alternative"],
   },
@@ -496,158 +469,166 @@ const RECOMMEND_KILL_TOOL: Anthropic.Tool = {
 const ESCALATE_TOOL: Anthropic.Tool = {
   name: "escalate_to_eng",
   description:
-    "Call this when the idea is too large, too critical, or too load-bearing for any self-serve path (a Claude skill, an MCP server, a Zep, a micro app, or a full app) — e.g. it touches every experience/every X, feeds a live production system, or genuinely needs multiple teams to own it. This is the eng_project modality by definition. Produces a short project pitch instead of a self-serve repo. NEVER call draft_brief for this case — a self-serve repo for something that needs an engineering team is a contradiction.",
+    "Call when the idea is too large/critical/load-bearing for any self-serve path — touches every experience/record, feeds a live production system, or needs multiple teams to own it. This is the eng_project modality. Produces a project pitch, NOT a self-serve repo. NEVER call draft_brief for this.",
   input_schema: {
     type: "object",
     properties: {
       problem: { type: "string", description: "One sentence: what problem does this solve?" },
-      whyLoadBearing: {
-        type: "string",
-        description: "Why this needs an engineering team, not a self-serve build — be specific (scale, criticality, blast radius, who else depends on it).",
-      },
-      suggestedOwningTeams: {
-        type: "string",
-        description: "Which team(s) should own this (e.g. 'Pricing and Data Science').",
-      },
-      roughShape: {
-        type: "string",
-        description: "A rough one- or two-sentence shape of what it would look like, for the project pitch — not a full spec.",
-      },
+      whyLoadBearing: { type: "string", description: "Why this needs an engineering team, not self-serve — be specific (scale, criticality, blast radius, dependents)." },
+      suggestedOwningTeams: { type: "string", description: "Which team(s) should own this (e.g. 'Pricing and Data Science')." },
+      roughShape: { type: "string", description: "A rough one/two-sentence shape for the pitch — not a full spec." },
     },
     required: ["problem", "whyLoadBearing", "suggestedOwningTeams", "roughShape"],
   },
 };
 
+/** Anthropic-facing wrappers around Delphi MCP tools. Prefixed so they never collide with catalogue tools. */
+const DELPHI_ASK_TOOL: Anthropic.Tool = {
+  name: "delphi_ask",
+  description:
+    "Ask Delphi about Headout beyond the catalogue — repos, internal docs, org knowledge. Full pipeline (classify + code/docs/web). Do NOT use for catalogue listings; use search_catalogue for that. Never invent catalogue cards from the result.",
+  input_schema: {
+    type: "object",
+    properties: {
+      prompt: { type: "string", description: "The Headout question to ask." },
+      links: {
+        type: "array",
+        items: { type: "string" },
+        description: "Optional Notion/Coda/Google Docs URLs to include as context.",
+      },
+    },
+    required: ["prompt"],
+  },
+};
+
+const DELPHI_SEARCH_DOCS_TOOL: Anthropic.Tool = {
+  name: "delphi_search_docs",
+  description:
+    "RAG search across Headout Notion, Coda, and Google Docs. Use for policies, process, and product docs — not for catalogue tool search.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Documentation question or search query." },
+      pods: {
+        type: "array",
+        items: { type: "string" },
+        description: "Optional pod/team name filters.",
+      },
+    },
+    required: ["query"],
+  },
+};
+
+const DELPHI_ANALYZE_CODE_TOOL: Anthropic.Tool = {
+  name: "delphi_analyze_code",
+  description:
+    "Deep analysis of headout/* GitHub repos. Prefer delphi_find_repos first to scope repos, then call this with repo_names. Slow — use only when you need implementation detail.",
+  input_schema: {
+    type: "object",
+    properties: {
+      prompt: { type: "string", description: "Code question (e.g. where is pricing logic implemented?)." },
+      repo_names: {
+        type: "array",
+        items: { type: "string" },
+        description: "Optional headout/* repo names to scope the analysis.",
+      },
+    },
+    required: ["prompt"],
+  },
+};
+
+const DELPHI_CLASSIFY_TOOL: Anthropic.Tool = {
+  name: "delphi_classify",
+  description:
+    "Classify a Headout query into code/doc/web routing flags and identified repos. Cheap pre-step before delphi_ask / delphi_analyze_code / delphi_search_docs.",
+  input_schema: {
+    type: "object",
+    properties: {
+      prompt: { type: "string", description: "The query to classify." },
+    },
+    required: ["prompt"],
+  },
+};
+
+const DELPHI_FIND_REPOS_TOOL: Anthropic.Tool = {
+  name: "delphi_find_repos",
+  description:
+    "Embedding-based discovery of relevant headout/* repos for a query. Use after a weak/empty catalogue search when asking whether related *code* already exists. Results are repos, not catalogue cards.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "What capability or code area to find repos for." },
+      max_repos: { type: "number", description: "Max repos to return (default 3)." },
+    },
+    required: ["query"],
+  },
+};
+
+const DELPHI_FETCH_PAGE_TOOL: Anthropic.Tool = {
+  name: "delphi_fetch_page",
+  description:
+    "Fetch content from a Headout Notion, Coda, or Google Docs URL. Use when the user pastes such a link or Delphi returned one.",
+  input_schema: {
+    type: "object",
+    properties: {
+      url: { type: "string", description: "Notion, Coda, or Google Docs URL." },
+    },
+    required: ["url"],
+  },
+};
+
+const DELPHI_TOOLS: Anthropic.Tool[] = [
+  DELPHI_ASK_TOOL,
+  DELPHI_SEARCH_DOCS_TOOL,
+  DELPHI_ANALYZE_CODE_TOOL,
+  DELPHI_CLASSIFY_TOOL,
+  DELPHI_FIND_REPOS_TOOL,
+  DELPHI_FETCH_PAGE_TOOL,
+];
+
+const DELPHI_ANTHROPIC_NAMES = new Set(DELPHI_TOOLS.map((t) => t.name));
+
+/** Discovery/concierge tools — available when NOT in scope mode. */
+const CONCIERGE_TOOLS: Anthropic.Tool[] = [
+  REGISTER_TOOL,
+  SEARCH_TOOL,
+  BROWSE_TOOL,
+  DETAIL_TOOL,
+  FLAG_TOOL,
+  ACCESS_TOOL,
+  UPDATE_TOOL_DEF,
+  VERIFY_CAPABILITY_TOOL,
+  ...DELPHI_TOOLS,
+];
+
 const END_SCOPE_TOOL: Anthropic.Tool = {
   name: "end_scope",
   description:
-    "Call this when the user wants to leave the scoping session (e.g. 'never mind', 'show me the registry', 'search for X instead', 'forget it'). Provide a short acknowledgement and, if the user's message contained an actionable request, surface it in forwardQuery so the client can act on it.",
+    "Call when the user wants to LEAVE the scoping session without concluding — e.g. 'never mind', 'forget it', 'show me the registry instead', 'search for X instead', 'actually, let's look at existing tools'. Provide a short acknowledgement, and if their message carried an actionable request (a search/browse), surface it in forwardQuery so it can be handled outside scope.",
   input_schema: {
-    type: "object" as const,
+    type: "object",
     properties: {
-      reason: {
-        type: "string",
-        description: "One-sentence acknowledgement of the exit (e.g. 'Got it — stepping out of scope mode.').",
-      },
-      forwardQuery: {
-        type: "string",
-        description: "Optional: the actionable query from the user's message to forward to normal search (e.g. 'show me the registry'). Omit if there is no actionable request.",
-      },
+      reason: { type: "string", description: "One-sentence acknowledgement of the exit (e.g. 'Got it — stepping out of scoping.')." },
+      forwardQuery: { type: "string", description: "Optional: the actionable query from the user's message to forward to normal search/browse (e.g. 'show me the registry'). Omit if none." },
     },
     required: ["reason"],
   },
 };
 
-/** The three terminal (conclusive) outcomes — always available. end_scope is a fourth, off-script exit, kept separate (see TERMINAL_SCOPE_TOOLS vs SCOPE_TOOLS). */
+/** The three terminal outcomes — the conclusive exits from scope mode. */
 const TERMINAL_SCOPE_TOOLS: Anthropic.Tool[] = [DRAFT_BRIEF_TOOL, RECOMMEND_KILL_TOOL, ESCALATE_TOOL];
 
-const SCOPE_TOOLS: Anthropic.Tool[] = [...TERMINAL_SCOPE_TOOLS, END_SCOPE_TOOL];
+/** Scope-mode tools: NO search/browse (can't re-litigate reuse). Delphi for Headout facts beyond the catalogue. verify_capability for honest kills, end_scope for a graceful off-script exit. */
+const SCOPE_TOOLS: Anthropic.Tool[] = [
+  ...TERMINAL_SCOPE_TOOLS,
+  VERIFY_CAPABILITY_TOOL,
+  END_SCOPE_TOOL,
+  ...DELPHI_TOOLS,
+];
 
-function buildScopeSystemPrompt(
-  searchContext: { query: string; nearMisses: { name: string; oneLiner: string }[] },
-): string {
-  const nearMissLines =
-    searchContext.nearMisses.length > 0
-      ? searchContext.nearMisses
-          .map((t) => `  • ${t.name}: ${t.oneLiner}`)
-          .join("\n")
-      : "  (none — no close catalogue matches)";
+const MAX_SCOPE_QUESTIONS = 6;
 
-  return `You are a sharp Headout AI PM running a requirements critique session. The user searched the catalogue and found nothing adequate. Your job is to challenge the build idea, then land on exactly one of three outcomes: a tight requirements brief, a recommendation not to build it at all, or — if it's genuinely too big for self-serve — a project pitch for an engineering team.
-
-━━ SEARCH CONTEXT (do NOT ask the user to repeat this) ━━
-Original query: "${searchContext.query}"
-Near-misses from the catalogue:
-${nearMissLines}
-
-━━ YOUR APPROACH ━━
-1. OPEN WITH A CHALLENGE, not a data-gathering question. Your very first message must push back on the idea itself — kill it outright, propose reshaping it into something smaller, or point at a near-miss and ask why it doesn't already cover this. Only move to gathering requirements once the idea survives that pushback.
-2. From there, ask ONE focused question at a time — maximum 6 questions total across the whole session. This is a sharp challenge, not gate-by-gate requirements gathering. The cap is enforced for you: once you've asked 6, your next turn only offers draft_brief, recommend_kill, or escalate_to_eng — no more questions will be possible, so use the six wisely and don't burn one re-asking something already covered.
-3. After two justified pushbacks from the user ("no, that doesn't work because X"), concede and proceed.
-4. Be direct. Warm but honest. No sycophancy. If it's a one-off task, say so plainly.
-5. HANDLE NON-ANSWERS. If the user's reply doesn't actually address what you asked (they change topic, answer a different question, or say "not sure" / "doesn't matter"), do NOT ask the same question again. Make a reasonable, explicitly-stated assumption ("I'll assume weekly use since you didn't say") and move on to the next thing you need. Never ask the same question more than twice total, and prefer never repeating one at all.
-
-━━ MODALITY — figure out the actual shape, don't default to "an app" ━━
-Every brief must name a modality and justify it from a concrete signal in the conversation, not a guess. This is the single most important judgment call you make — a wrong modality (e.g. calling an MCP server a "micro app") hides the real shape of the work.
-
-zep is the FIRST thing to consider for any workflow or automation need — it's Headout's self-serve substrate for exactly this: a no-code multi-step workflow agent built by chatting, orchestrating connectors (Slack/GitHub/Notion/etc.) and running on triggers (web/API/Slack/WhatsApp/webhook/cron). If the need is "when X happens, do Y across these systems" with no bespoke UI required, it's a zep — don't reach for micro_app/full_app by default. Only pick micro_app or full_app when you can state WHY Zeps can't serve it — typically because it needs a real custom UI (e.g. a file-upload + results dashboard) or a persistent multi-user product surface, not just connectors and triggers.
-
-- Connector orchestration + triggers, no custom UI needed, "when X happens do Y" → zep (the default for workflow/automation asks)
-- Agents/pipelines calling it programmatically, no human in the loop, steady or high query volume, no UI at all → mcp
-- Same text-in, artifact-out steps repeated by one person or a small team, no persistent hosting needed → skill
-- A fixed one-off dataset, a migration, dev-side tooling that isn't a persistent service → script (usually pairs with recommend_kill if it's truly one-time)
-- A real custom UI (upload, dashboard, multi-step form) is required and Zeps genuinely can't cover it, for a small audience → micro_app
-- Multiple users, multiple integrations, an actual application surface, and Zeps genuinely can't cover it → full_app
-- It touches every X, feeds a live production system, or several teams would need to co-own it → eng_project (call escalate_to_eng, never draft_brief)
-Ask whatever question you need to pin down modality (who/what calls it, how often, human-in-the-loop or not, does it need a real UI) — this can be one of your six questions, it doesn't need its own budget.
-
-━━ KILL CRITERIA — call recommend_kill (modality: no_build) if ━━
-- The task happens less than twice a week OR is a genuine one-off
-- Claude.ai natively solves this with a good prompt (no build needed)
-- The user only wants a file output (Word, Excel, PDF, CSV) — Claude does this natively
-- The audience is one person and the frequency is low
-
-━━ ESCALATE CRITERIA — call escalate_to_eng (modality: eng_project) if ━━
-- It would touch every experience, every tool, or every record of some kind — broad, systemic reach, not a bounded slice
-- It feeds or modifies a live production system (e.g. the pricing engine, the booking pipeline) rather than sitting alongside it
-- Multiple teams would need to co-own it, or it's the kind of thing that needs a project pitch and a real engineering timeline, not a repo you can self-serve in a checklist
-- If you find yourself about to say "this needs an engineering team" in plain text, that is the signal to call escalate_to_eng instead of saying it and stopping — never leave this as prose with no tool call, and never call draft_brief for it (a self-serve repo for something that needs an eng team is a contradiction)
-
-━━ BRIEF CRITERIA — call draft_brief if ━━
-- The task is repeated, affects more than one person or system, AND is NOT solvable by Claude natively AND is NOT an eng_project
-- You have gathered: problem, users, frequency, 2–5 must-dos, 3+ won't-dos, modality + modalityReason, risk level
-
-━━ RISK ━━
-Risk is about blast radius and data sensitivity, not team size. Elevate to high whenever the tool touches PII, financial data, or data owned by a compliance-relevant team (Legal, Procurement, Finance) that requires their sign-off to expose — even if the tool itself is 100% internal-facing. Only call something "customer-facing" if the actual end users are customers, not Headout staff — an internal tool that happens to be important is not customer-facing.
-
-━━ OFF-SCRIPT INPUT ━━
-If the user says something that is clearly a mode-switch or off-topic (e.g. "show me the registry", "search for X instead", "never mind", "forget it"), call end_scope immediately. Do NOT call draft_brief, recommend_kill, or escalate_to_eng. Provide a short acknowledgement in the reason field and surface any actionable request in forwardQuery.
-
-━━ RULES ━━
-- End with EXACTLY ONE call: draft_brief, recommend_kill, or escalate_to_eng. No other outcome (unless off-script input, per above).
-- Cap the session at 12 turns. If you hit the cap without enough info, make your best call — never leave the session hanging with no tool call.
-- Never produce a brief, a kill verdict, or a project pitch as chat text — always use the matching tool.
-- Never invent information the user didn't provide.
-- No markdown headers. Short paragraphs. One question mark per message.
-- Only mention the platform team on Slack for API keys, credentials, or access provisioning — never for hosting, infra, architecture, or general build advice.`;
-}
-
-/**
- * The last user message that isn't the "let's scope it" meta-trigger — i.e.
- * the actual problem description to search/scope on, not the chip text that
- * requested scoping. Used so a click/typed "let's scope it" doesn't itself
- * become the search query.
- */
-function findMeaningfulUserMessage(history: ChatTurn[]): ChatTurn | undefined {
-  return [...history]
-    .reverse()
-    .find((t) => t.role === "user" && !/let['']?s?\s+scope/i.test(t.content));
-}
-
-/** Extract the search context from the chat history (last user query, no near-misses). */
-function extractSearchContext(
-  history: ChatTurn[],
-): { query: string; nearMisses: { name: string; oneLiner: string }[] } {
-  const lastUserMsg = findMeaningfulUserMessage(history);
-  return { query: lastUserMsg?.content.slice(0, 120) ?? "", nearMisses: [] };
-}
-
-function pickRecommended(found: Map<string, ApiTool>, message: string): ApiTool[] {
-  const lower = message.toLowerCase();
-  const named = [...found.values()].filter((t) =>
-    lower.includes(t.name.toLowerCase()),
-  );
-  return named;
-}
-
-function parseRegistration(rawArgs: unknown): { url: string | null } {
-  const parsed = (typeof rawArgs === "object" && rawArgs !== null ? rawArgs : {}) as Record<string, unknown>;
-  const url =
-    typeof parsed["url"] === "string" && parsed["url"].trim()
-      ? parsed["url"].trim()
-      : null;
-  return { url };
-}
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
 function buildResult(
   message: string,
@@ -677,16 +658,21 @@ function buildResult(
   };
 }
 
-/** The modalities draft_brief may legally claim — no_build/eng_project pair with the other two outcome tools, never this one. */
+function parseRegistration(rawArgs: unknown): { url: string | null } {
+  const parsed = (typeof rawArgs === "object" && rawArgs !== null ? rawArgs : {}) as Record<string, unknown>;
+  const url = typeof parsed["url"] === "string" && parsed["url"].trim() ? parsed["url"].trim() : null;
+  return { url };
+}
+
 const VALID_BRIEF_MODALITIES: Modality[] = ["skill", "mcp", "zep", "script", "micro_app", "full_app"];
 
 /**
- * Builds a BriefPayload from the model's draft_brief args, substituting a
- * clearly-marked default for any field that came back blank instead of
- * leaving it empty. draft_brief's JSON schema requires every field to be
- * *present*, not *non-empty* — a schema-compliant call can still hand back
- * "" or [] for a field the model didn't actually have an answer for. This is
- * the code-level backstop for "never draft an empty brief."
+ * Build a BriefPayload from the model's draft_brief args, substituting clearly
+ * marked defaults for any field that came back blank (the schema requires
+ * fields present, not non-empty). When modality is missing/invalid we default
+ * to `zep` — Headout's stated self-serve default — and say so explicitly,
+ * rather than silently mislabeling it `micro_app` (the old masked default,
+ * which was the exact "call an MCP a micro app" error to avoid).
  */
 function fillBriefDefaults(
   args: Record<string, unknown>,
@@ -695,9 +681,7 @@ function fillBriefDefaults(
 ): BriefPayload {
   const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
   const arr = (v: unknown): string[] =>
-    Array.isArray(v)
-      ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0)
-      : [];
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0) : [];
 
   const title = str(args.title) || undefined;
   const problem =
@@ -711,14 +695,13 @@ function fillBriefDefaults(
   const wontDo = arr(args.wontDo);
 
   const modalityRaw = str(args.modality);
-  const modality: Modality = VALID_BRIEF_MODALITIES.includes(modalityRaw as Modality)
-    ? (modalityRaw as Modality)
-    : "micro_app";
+  const modalityValid = VALID_BRIEF_MODALITIES.includes(modalityRaw as Modality);
+  const modality: Modality = modalityValid ? (modalityRaw as Modality) : "zep";
   const modalityReason =
     str(args.modalityReason) ||
-    (VALID_BRIEF_MODALITIES.includes(modalityRaw as Modality)
+    (modalityValid
       ? "Modality was named but not justified by the agent."
-      : "Defaulted to micro_app — insufficient signal in the conversation to classify modality confidently.");
+      : "Low confidence — insufficient signal to classify modality; defaulted to Zeps (Headout's self-serve default). Confirm the shape before building.");
 
   const risk: "low" | "high" = args.risk === "high" ? "high" : "low";
 
@@ -737,397 +720,54 @@ function fillBriefDefaults(
   };
 }
 
-/**
- * Patterns that unambiguously signal registration intent from the user's last
- * message. When matched on the first turn we force tool_choice to
- * start_registration so the LLM cannot accidentally call search_catalogue.
- */
-const REGISTRATION_PATTERNS: RegExp[] = [
-  /\badd\s+my\s+tool\b/i,
-  /\bregister\s+my\s+tool\b/i,
-  /\blist\s+my\s+tool\b/i,
-  /\bhow\s+do\s+I\s+register\b/i,
-  /\bI\s+(just\s+)?(built|made|finished(\s+building)?)\b/i,
-  /\badd\s+.+\s+to\s+the\s+catalogue\b/i,
-  /\bI\s+just\s+finished\s+building\b/i,
-  /\bwhat\s+do\s+I\s+do\s+next.{0,30}built\b/i,
-];
-
-function isRegistrationIntent(text: string): boolean {
-  return REGISTRATION_PATTERNS.some((re) => re.test(text));
-}
-
-/**
- * Patterns that signal the user wants to build something new, with enough
- * content to search on. Matched on the last user message to route straight
- * to a search-first-then-scope handoff instead of the concierge's own
- * scoping interview (there isn't one anymore — the critique agent owns it).
- */
-const BUILD_INTENT_PATTERNS: RegExp[] = [
-  /\bbuild\s+(?:me\b|a\b|an\b|my\b|our\b|some\b|something\b)/i,
-  /\bwant(?:ing)?\s+to\s+build\b/i,
-  /\btrying\s+to\s+build\b/i,
-  /\bscope\s+(?:an|the|my)\s+idea\b/i,
-  /\bnew\s+internal\s+tool\b/i,
-];
-
-/**
- * Fully generic build statements with no description of what's being built
- * (e.g. "I want to build something new"). These get one deterministic
- * clarifying question instead of a search — there's nothing to search on yet.
- */
-const VAGUE_BUILD_PATTERNS: RegExp[] = [
-  /^i(?:'m| am)\s+trying\s+to\s+build\s+something(?:\s+new)?\.?$/i,
-  /^i\s+want\s+to\s+build\s+something(?:\s+new)?\.?$/i,
-  /^i\s+want\s+to\s+build\s+(?:a|an)\s+(?:new\s+)?tool\.?$/i,
-  /^build\s+something\s+new\.?$/i,
-];
-
-/** Deterministic clarifier for a vague build statement — see VAGUE_BUILD_PATTERNS. */
-const BUILD_CLARIFIER_MESSAGE =
-  "What are you building? Give me a short description of the problem and I'll check whether something already covers it.";
-
-function isBuildIntent(text: string): boolean {
-  return BUILD_INTENT_PATTERNS.some((re) => re.test(text));
-}
-
-function isVagueBuildIntent(text: string): boolean {
-  return VAGUE_BUILD_PATTERNS.some((re) => re.test(text.trim()));
-}
-
-/** True when the turn right before the last user message was the deterministic build clarifier. */
-function followsBuildClarifier(history: ChatTurn[]): boolean {
-  if (history.length < 2) return false;
-  const prior = history[history.length - 2];
-  return prior.role === "assistant" && prior.content.trim() === BUILD_CLARIFIER_MESSAGE;
-}
-
-export type ChatUserContext = {
-  email?: string;
-  userId?: string;
-  conversationId?: string;
-  /** When 'scope', routes directly to the critique agent without regex history scan. */
-  mode?: "scope";
-  /** Near-miss tools from the last search — populated by the client when entering scope. */
-  searchContext?: { query: string; nearMisses: { name: string; oneLiner: string }[] };
-};
-
-const SCOPE_MAX_TURNS = 12;
-
-/**
- * Hard cap on assistant questions across the whole scope session, enforced in
- * code — not just prompt language. Counted from `history`, not an in-memory
- * counter, since each user message is a fresh runScopeChat call. Once this
- * many questions have already been asked, the NEXT call forces a terminal
- * tool call (draft_brief / recommend_kill / escalate_to_eng) instead of
- * letting the model ask a 7th question.
- */
-const MAX_SCOPE_QUESTIONS = 6;
-
-/** True when an assistant turn was a genuine question (ends in "?"), for the question-cap count. */
+/** True when an assistant turn was a genuine question (ends in "?"), for the scope question cap. */
 function isQuestionTurn(turn: ChatTurn): boolean {
   return turn.role === "assistant" && turn.content.trim().endsWith("?");
 }
 
-/**
- * Test-only seam: records the searchContext every runScopeChat call was
- * entered with, so tests can assert what travelled with a handoff without
- * depending on LLM phrasing. Untouched (null) in production.
- */
-export const _testOverrides: {
-  lastScopeSearchContext: { query: string; nearMisses: { name: string; oneLiner: string }[] } | null;
-} = { lastScopeSearchContext: null };
-
-/** Run the critique/scope loop when the user chose "Let's scope it." */
-async function runScopeChat(
-  history: ChatTurn[],
-  userContext?: ChatUserContext,
-): Promise<ChatResult> {
-  const searchContext = userContext?.searchContext ?? extractSearchContext(history);
-  _testOverrides.lastScopeSearchContext = searchContext;
-  const systemPrompt = buildScopeSystemPrompt(searchContext);
-
-  const messages: Anthropic.MessageParam[] = history.map((turn) => ({
-    role: turn.role,
-    content: turn.content,
-  }));
-
-  const questionsAskedSoFar = history.filter(isQuestionTurn).length;
-  const atQuestionCap = questionsAskedSoFar >= MAX_SCOPE_QUESTIONS;
-
-  for (let turn = 0; turn < SCOPE_MAX_TURNS; turn++) {
-    // Once the cap is hit, force a conclusive call — no more free-form
-    // questions, and end_scope isn't offered here since the cap forcing a
-    // conclusion takes priority over an off-script exit on this exact turn.
-    const tools = atQuestionCap ? TERMINAL_SCOPE_TOOLS : SCOPE_TOOLS;
-    const toolChoice: Anthropic.MessageCreateParams["tool_choice"] = atQuestionCap
-      ? { type: "any" }
-      : { type: "auto" };
-
-    let response: Awaited<ReturnType<typeof anthropic.messages.create>>;
-    try {
-      response = await anthropic.messages.create({
-        model: MODEL,
-        max_tokens: 4096,
-        system: systemPrompt,
-        tools,
-        tool_choice: toolChoice,
-        messages,
-        temperature: 0,
-      });
-    } catch {
-      return buildResult(
-        "Something went wrong with the critique session — let's try again.",
-        [],
-        null,
-        { stage: "scope" },
-      );
-    }
-
-    messages.push({ role: "assistant", content: response.content });
-
-    const toolUseBlocks = response.content.filter(
-      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
-    );
-
-    if (toolUseBlocks.length === 0) {
-      const textBlock = response.content.find(
-        (b): b is Anthropic.TextBlock => b.type === "text",
-      );
-      return buildResult(textBlock?.text ?? "", [], null, { stage: "scope" });
-    }
-
-    const toolResults: Anthropic.ToolResultBlockParam[] = [];
-
-    for (const block of toolUseBlocks) {
-      if (block.name === "draft_brief") {
-        const args = (block.input ?? {}) as Record<string, unknown>;
-        const brief: BriefPayload = fillBriefDefaults(args, userContext, searchContext);
-
-        const textBlock = response.content.find(
-          (b): b is Anthropic.TextBlock => b.type === "text",
-        );
-        const message =
-          textBlock?.text ||
-          "I've put together a requirements brief based on our conversation. Review and edit it, then click Create my repo when you're ready.";
-
-        return buildResult(message, [], null, {
-          stage: "brief",
-          briefPayload: brief,
-        });
-      }
-
-      if (block.name === "recommend_kill") {
-        const args = (block.input ?? {}) as Record<string, unknown>;
-        const kill: KillPayload = {
-          modality: "no_build",
-          reason:
-            typeof args.reason === "string" && args.reason
-              ? args.reason
-              : "This doesn't need a build.",
-          alternative:
-            typeof args.alternative === "string" && args.alternative
-              ? args.alternative
-              : "Use Claude.ai directly.",
-          alternativeUrl:
-            typeof args.alternativeUrl === "string" ? args.alternativeUrl : undefined,
-        };
-        const textBlock = response.content.find(
-          (b): b is Anthropic.TextBlock => b.type === "text",
-        );
-        const message =
-          textBlock?.text || `${kill.reason} Instead: ${kill.alternative}`;
-
-        return buildResult(message, [], null, {
-          stage: "kill",
-          killPayload: kill,
-        });
-      }
-
-      if (block.name === "escalate_to_eng") {
-        const args = (block.input ?? {}) as Record<string, unknown>;
-        const escalate: EscalatePayload = {
-          modality: "eng_project",
-          problem:
-            typeof args.problem === "string" && args.problem
-              ? args.problem
-              : searchContext.query || "Not specified — inferred from the conversation.",
-          whyLoadBearing:
-            typeof args.whyLoadBearing === "string" && args.whyLoadBearing
-              ? args.whyLoadBearing
-              : "Too broad or critical for a self-serve build — needs an engineering team's judgment.",
-          suggestedOwningTeams:
-            typeof args.suggestedOwningTeams === "string" && args.suggestedOwningTeams
-              ? args.suggestedOwningTeams
-              : "Not specified — the owning team wasn't identified in this conversation.",
-          roughShape:
-            typeof args.roughShape === "string" && args.roughShape
-              ? args.roughShape
-              : "Not specified — needs an engineering scoping pass.",
-        };
-        const textBlock = response.content.find(
-          (b): b is Anthropic.TextBlock => b.type === "text",
-        );
-        const message =
-          textBlock?.text ||
-          `This needs an engineering team, not a self-serve build. ${escalate.whyLoadBearing}`;
-
-        return buildResult(message, [], null, {
-          stage: "escalate",
-          escalatePayload: escalate,
-        });
-      }
-
-      if (block.name === "end_scope") {
-        const args = (block.input ?? {}) as Record<string, unknown>;
-        const reason =
-          typeof args.reason === "string" && args.reason
-            ? args.reason
-            : "Got it — stepping out of scope mode.";
-        const forwardQuery =
-          typeof args.forwardQuery === "string" && args.forwardQuery.trim()
-            ? args.forwardQuery.trim()
-            : null;
-        return buildResult(reason, [], null, { stage: "scope_exit", forwardQuery });
-      }
-
-      toolResults.push({
-        type: "tool_result",
-        tool_use_id: block.id,
-        content: JSON.stringify({ error: "Unknown tool" }),
-      });
-    }
-
-    messages.push({ role: "user", content: toolResults });
-  }
-
-  // Hit SCOPE_MAX_TURNS (the tool-round-trip safety valve, separate from the
-  // question cap above) without a terminal call — force a filled brief
-  // rather than leaving the session hanging with no outcome. fillBriefDefaults
-  // marks every field as unspecified since the model gave us nothing here.
-  return buildResult(
-    "We've been through quite a few questions. Let me put together a brief based on what you've told me.",
-    [],
-    null,
-    { stage: "brief", briefPayload: fillBriefDefaults({}, userContext, searchContext) },
-  );
-}
-
-/** Deterministic presentation of a reuse match — no LLM call, so there's nothing to non-deterministically skip. */
+/** Deterministic framing of a reuse match — cards carry name/one-liner/link. */
 function renderStrongMatchMessage(matches: ApiTool[]): string {
-  if (matches.length === 1) {
-    const m = matches[0];
-    return `**${m.name}** already does this — ${m.oneLiner} Does that cover what you need, or is there a gap it doesn't handle?`;
-  }
-  const lines = matches.map((t) => `- **${t.name}** — ${t.oneLiner}`).join("\n");
-  return `A few things in the catalogue already cover this:\n${lines}\n\nDo any of these work, or is there a gap they don't handle?`;
+  return matches.length === 1
+    ? "Something in the catalogue already looks like a fit — open the card for details and the link. Does that cover what you need, or is there a gap it doesn't handle?"
+    : "A few things in the catalogue already look relevant — cards below have the summaries and links. Do any of these work, or is there a gap they don't handle?";
 }
+
+// ─── Tool execution (shared by both modes) ─────────────────────────────────────
 
 /**
- * Deterministic routing for a build-shaped ask (typed build intent, the
- * clarifier follow-up, or the "let's scope it" chip/text trigger).
- *
- * Phase 1 fix: this used to run through the concierge's own agentic tool
- * loop with tool_choice forced to search_catalogue only on turn 0. That made
- * "hand off to scope" depend on the LLM's tool call actually landing the way
- * the code expected — fragile, and impossible to reason about as a contract.
- * Now the search is a direct code call, and the branch (reuse vs. handoff) is
- * decided in code too. The concierge LLM is never involved in this decision.
+ * Execute a single concierge tool_use block against the catalogue and return
+ * the tool_result content. Search/browse hits are recorded into `found` +
+ * `lastCatalogueHits` (via the returned patch) so cards can attach.
  */
-async function routeBuildShapedAsk(
-  history: ChatTurn[],
-  lastUserMessage: string,
+async function runConciergeToolLoop(
+  messages: Anthropic.MessageParam[],
   userContext: ChatUserContext | undefined,
+  onDelta?: OnDelta,
 ): Promise<ChatResult> {
-  const meaningful = findMeaningfulUserMessage(history);
-  const query = (meaningful?.content ?? lastUserMessage).trim();
-  const results = await searchCatalogue(query, 6);
-  const strong = results.filter((t) => (t.similarity ?? 0) >= MIN_MATCH_SIMILARITY);
-
-  if (strong.length === 0) {
-    return runScopeChat(history, {
-      ...userContext,
-      searchContext: {
-        query: query.slice(0, 120),
-        nearMisses: results.slice(0, 3).map((t) => ({ name: t.name, oneLiner: t.oneLiner })),
-      },
-    });
-  }
-
-  return buildResult(renderStrongMatchMessage(strong), strong, null, { stage: "chat" });
-}
-
-export async function runChat(history: ChatTurn[], userContext?: ChatUserContext): Promise<ChatResult> {
-  // ── Scope / critique mode — trust the explicit flag from the client ────────
-  if (userContext?.mode === "scope") {
-    return runScopeChat(history, userContext);
-  }
-
-  const lastUserMessage =
-    [...history].reverse().find((t) => t.role === "user")?.content ?? "";
-  const forceRegisterOnFirstTurn = isRegistrationIntent(lastUserMessage);
-
-  // Vague build statement with nothing to search on yet — ask the one
-  // deterministic clarifying question and stop. No LLM call needed.
-  if (
-    !forceRegisterOnFirstTurn &&
-    isVagueBuildIntent(lastUserMessage) &&
-    !followsBuildClarifier(history)
-  ) {
-    return buildResult(BUILD_CLARIFIER_MESSAGE, [], null, { stage: "chat" });
-  }
-
-  // Build-shaped ask (typed intent, or the answer to the clarifier above) —
-  // routed entirely in code (see routeBuildShapedAsk): search first, then
-  // either return a reuse match or hand off straight to the critique agent.
-  // The concierge LLM is never in the loop for this decision — see Phase 1
-  // in the consolidated agent fix for why (the old tool-forced-on-turn-0
-  // approach made the handoff depend on the LLM's tool call landing exactly
-  // as expected, which wasn't reliable).
-  const buildShaped =
-    !forceRegisterOnFirstTurn &&
-    (isBuildIntent(lastUserMessage) || followsBuildClarifier(history));
-
-  if (buildShaped) {
-    return routeBuildShapedAsk(history, lastUserMessage, userContext);
-  }
-
-  const messages: Anthropic.MessageParam[] = history.map((turn) => ({
-    role: turn.role,
-    content: turn.content,
-  }));
-
   const found = new Map<string, ApiTool>();
+  let lastCatalogueHits: ApiTool[] = [];
   let registration: { url: string | null } | null = null;
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const toolChoice: Anthropic.MessageCreateParams["tool_choice"] =
-      turn === 0 && forceRegisterOnFirstTurn
-        ? { type: "tool", name: "start_registration" }
-        : { type: "auto" };
-
-    const response = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 8192,
-      system: SYSTEM_PROMPT,
-      tools: ALL_TOOLS,
-      tool_choice: toolChoice,
-      messages,
-    });
-
-    messages.push({ role: "assistant", content: response.content });
-
-    const toolUseBlocks = response.content.filter(
-      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+    const response = await runModelTurn(
+      {
+        model: MODEL,
+        max_tokens: 8192,
+        system: BASE_SYSTEM_PROMPT,
+        tools: CONCIERGE_TOOLS,
+        tool_choice: { type: "auto" },
+        messages,
+      },
+      onDelta,
     );
 
+    messages.push({ role: "assistant", content: response.content });
+    const toolUseBlocks = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
+
     if (toolUseBlocks.length === 0) {
-      const textBlock = response.content.find(
-        (b): b is Anthropic.TextBlock => b.type === "text",
-      );
-      const message = textBlock?.text ?? "";
-      const recommended = registration ? [] : pickRecommended(found, message);
-      return buildResult(message, recommended, registration);
+      const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text ?? "";
+      const recommended = registration ? [] : lastCatalogueHits.length > 0 ? lastCatalogueHits : [...found.values()];
+      return buildResult(text, recommended, registration);
     }
 
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
@@ -1141,63 +781,34 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
           content: JSON.stringify({
             ok: true,
             note: registration.url
-              ? "Registration started with the provided URL. Write one warm sentence telling the user you've captured the link and will kick off registration right here in this conversation — no need to go anywhere else."
-              : "Registration flow started. Write one warm sentence telling the user that registration happens right here in this conversation — they can paste their tool's link and it will be added to the catalogue.",
+              ? "Registration started with the provided URL. Write one warm sentence: you've captured the link and will kick off registration right here — no need to go elsewhere."
+              : "Registration flow started. Write one warm sentence: paste a URL for apps, docs, Zeps, or MCPs; upload a SKILL.md only for Claude/Cursor skills. Do not suggest uploading PDFs or docs.",
           }),
         });
         continue;
       }
 
       if (block.name === "verify_capability") {
-        const args = block.input as { platform?: string; capability?: string };
-        const vcPlatform = typeof args.platform === "string" ? args.platform : "";
-        const vcCapability = typeof args.capability === "string" ? args.capability : "";
-        let vcResult: Awaited<ReturnType<typeof verifyCapability>>;
-        try {
-          vcResult = await verifyCapability(vcPlatform, vcCapability);
-        } catch {
-          vcResult = {
-            supported: "unknown",
-            source: "",
-            checked_at: new Date().toISOString(),
-          };
-        }
-        const note =
-          vcResult.supported === true
-            ? `The live docs confirm ${vcPlatform} DOES support "${vcCapability}". Do NOT assert this as a limitation. Treat it as a confirmed capability and route accordingly — do not recommend manual-only because of this.`
-            : vcResult.supported === false
-              ? `The live docs indicate ${vcPlatform} does NOT support "${vcCapability}" (source: ${vcResult.source}). You may note this limitation, citing the source.`
-              : `Live check inconclusive. Fall back to the static baseline for ${vcPlatform} and explicitly flag any claim about "${vcCapability}" as unverified: say "I'm not certain [platform] still can't do [X] — worth a quick check before we build around that assumption."`;
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: block.id,
-          content: JSON.stringify({ ...vcResult, note }),
-        });
+        toolResults.push(await runVerifyCapability(block));
+        continue;
+      }
+
+      if (DELPHI_ANTHROPIC_NAMES.has(block.name)) {
+        toolResults.push(await runDelphiTool(block));
         continue;
       }
 
       if (block.name === "browse_catalogue") {
-        const browseArgs = block.input as { type?: string; team?: string; limit?: number };
-        const browseResults = await listToolsByFilter({
-          type: browseArgs.type,
-          team: browseArgs.team,
-          limit: browseArgs.limit ?? 12,
-        });
-        for (const tool of browseResults) found.set(tool.id, tool);
+        const a = block.input as { type?: string; team?: string; limit?: number };
+        const results = await listToolsByFilter({ type: a.type, team: a.team, limit: a.limit ?? 12 });
+        lastCatalogueHits = results;
+        for (const t of results) found.set(t.id, t);
         toolResults.push({
           type: "tool_result",
           tool_use_id: block.id,
           content: JSON.stringify(
-            browseResults.length > 0
-              ? browseResults.map((t) => ({
-                  id: t.id,
-                  name: t.name,
-                  type: t.types[0],
-                  team: t.team,
-                  oneLiner: t.oneLiner,
-                  accessLevel: t.accessLevel,
-                  status: t.status,
-                }))
+            results.length > 0
+              ? results.map((t) => ({ id: t.id, name: t.name, type: t.types[0], team: t.team, oneLiner: t.oneLiner, description: t.description, accessLevel: t.accessLevel, status: t.status }))
               : { results: [], note: "No tools found matching those filters." },
           ),
         });
@@ -1205,153 +816,357 @@ export async function runChat(history: ChatTurn[], userContext?: ChatUserContext
       }
 
       if (block.name === "get_tool_details") {
-        const detailArgs = block.input as { toolId?: string };
-        const tool = detailArgs.toolId ? await getToolById(detailArgs.toolId) : null;
+        const a = block.input as { toolId?: string };
+        const tool = a.toolId ? await getToolById(a.toolId) : null;
         if (tool) found.set(tool.id, tool);
         toolResults.push({
           type: "tool_result",
           tool_use_id: block.id,
           content: tool
-            ? JSON.stringify({
-                id: tool.id,
-                name: tool.name,
-                type: tool.types[0],
-                team: tool.team,
-                oneLiner: tool.oneLiner,
-                description: tool.description,
-                accessLevel: tool.accessLevel,
-                status: tool.status,
-                owner: tool.owner.name,
-                link: tool.link,
-                tags: tool.tags,
-              })
+            ? JSON.stringify({ id: tool.id, name: tool.name, type: tool.types[0], team: tool.team, oneLiner: tool.oneLiner, description: tool.description, accessLevel: tool.accessLevel, status: tool.status, owner: tool.owner.name, link: tool.link, tags: tool.tags })
             : JSON.stringify({ error: "Tool not found." }),
         });
         continue;
       }
 
       if (block.name === "flag_tool") {
-        const flagArgs = block.input as { toolId?: string; reason?: string; details?: string };
-        let flagOk = false;
-        if (flagArgs.toolId && flagArgs.reason) {
+        const a = block.input as { toolId?: string; reason?: string; details?: string };
+        let ok = false;
+        if (a.toolId && a.reason) {
           try {
-            await insertToolFlag({
-              toolId: flagArgs.toolId,
-              reason: flagArgs.reason,
-              details: flagArgs.details,
-              reporterEmail: userContext?.email,
-            });
-            flagOk = true;
-          } catch { /* flagOk stays false */ }
+            await insertToolFlag({ toolId: a.toolId, reason: a.reason, details: a.details, reporterEmail: userContext?.email });
+            ok = true;
+          } catch { /* ok stays false */ }
         }
         toolResults.push({
           type: "tool_result",
           tool_use_id: block.id,
           content: JSON.stringify(
-            flagOk
-              ? { ok: true, note: "Flag submitted. Write a warm one-sentence confirmation — the issue has been logged and the platform team will review it." }
-              : { ok: false, note: "Flag could not be saved. Apologise briefly and ask them to report it directly on Slack." },
+            ok
+              ? { ok: true, note: "Flag submitted. Write a warm one-sentence confirmation — logged, the platform team will review." }
+              : { ok: false, note: "Flag could not be saved. Apologise briefly and ask them to report it on Slack." },
           ),
         });
         continue;
       }
 
       if (block.name === "request_access") {
-        const accessArgs = block.input as { toolId?: string; reason?: string };
-        let accessOk = false;
-        if (accessArgs.toolId && accessArgs.reason) {
+        const a = block.input as { toolId?: string; reason?: string };
+        let ok = false;
+        if (a.toolId && a.reason) {
           try {
-            await insertAccessRequest({
-              toolId: accessArgs.toolId,
-              reason: accessArgs.reason,
-              requesterEmail: userContext?.email,
-            });
-            accessOk = true;
-          } catch { /* accessOk stays false */ }
+            await insertAccessRequest({ toolId: a.toolId, reason: a.reason, requesterEmail: userContext?.email });
+            ok = true;
+          } catch { /* ok stays false */ }
         }
         toolResults.push({
           type: "tool_result",
           tool_use_id: block.id,
           content: JSON.stringify(
-            accessOk
-              ? { ok: true, note: "Access request submitted. Write a warm one-sentence confirmation — the request is logged and the tool owner will be in touch." }
-              : { ok: false, note: "Request could not be saved. Apologise briefly and ask them to reach out to the tool owner directly on Slack." },
+            ok
+              ? { ok: true, note: "Access request submitted. Warm one-sentence confirmation — logged, the owner will be in touch." }
+              : { ok: false, note: "Request could not be saved. Apologise briefly and ask them to reach the owner on Slack." },
           ),
         });
         continue;
       }
 
       if (block.name === "update_tool") {
-        const updateArgs = block.input as { toolId?: string; field?: string; value?: string; manageToken?: string };
-        let updateNote = "";
-        if (updateArgs.toolId && updateArgs.field && updateArgs.value && updateArgs.manageToken) {
-          const row = await getToolRowById(updateArgs.toolId);
-          if (!row) {
-            updateNote = "Tool not found. Ask the user to confirm the tool name.";
-          } else if (!verifyManageToken(row, updateArgs.manageToken)) {
-            updateNote = "The manage key is incorrect. Ask the user to check it and try again — it was issued when they first claimed the tool.";
-          } else {
+        const a = block.input as { toolId?: string; field?: string; value?: string; manageToken?: string };
+        let note = "";
+        if (a.toolId && a.field && a.value && a.manageToken) {
+          const row = await getToolRowById(a.toolId);
+          if (!row) note = "Tool not found. Ask the user to confirm the tool name.";
+          else if (!verifyManageToken(row, a.manageToken)) note = "The manage key is incorrect. Ask them to check it — it was issued when they claimed the tool.";
+          else {
             try {
-              await updateTool(updateArgs.toolId, { [updateArgs.field]: updateArgs.value });
-              updateNote = `Update applied. Write a warm one-sentence confirmation that the ${updateArgs.field} has been updated.`;
+              await updateTool(a.toolId, { [a.field]: a.value });
+              note = `Update applied. Warm one-sentence confirmation that the ${a.field} has been updated.`;
             } catch {
-              updateNote = "The update failed. Ask them to try again or contact the platform team on Slack.";
+              note = "The update failed. Ask them to try again or contact the platform team on Slack.";
             }
           }
-        } else {
-          updateNote = "Missing required arguments — need tool ID, field, new value, and manage key before calling update_tool.";
-        }
+        } else note = "Missing required arguments — need tool ID, field, new value, and manage key.";
+        toolResults.push({ type: "tool_result", tool_use_id: block.id, content: JSON.stringify({ note }) });
+        continue;
+      }
+
+      if (block.name === "search_catalogue") {
+        const a = block.input as { query?: string };
+        const query = typeof a.query === "string" ? a.query : "";
+        const results = await searchCatalogue(query, 6);
+        const strong = results.filter((t) => (t.similarity ?? 0) >= MIN_MATCH_SIMILARITY);
+        lastCatalogueHits = strong;
+        for (const t of strong) found.set(t.id, t);
         toolResults.push({
           type: "tool_result",
           tool_use_id: block.id,
-          content: JSON.stringify({ note: updateNote }),
+          content: JSON.stringify(
+            strong.length > 0
+              ? strong.map((t) => ({ id: t.id, name: t.name, type: t.types[0], oneLiner: t.oneLiner, description: t.description, tags: t.tags, similarity: Number((t.similarity ?? 0).toFixed(3)) }))
+              : { results: [], note: "No tool met the relevance threshold for this query. If the user needs Headout repos/docs/org knowledge beyond listed tools, call Delphi next; otherwise say nothing in the catalogue covers it." },
+          ),
         });
         continue;
       }
 
-      // Default: search_catalogue
-      const searchArgs = block.input as { query?: string };
-      const query = typeof searchArgs.query === "string" ? searchArgs.query : "";
-      const results = await searchCatalogue(query, 6);
-      const strong = results.filter(
-        (t) => (t.similarity ?? 0) >= MIN_MATCH_SIMILARITY,
-      );
-      for (const tool of strong) found.set(tool.id, tool);
       toolResults.push({
         type: "tool_result",
         tool_use_id: block.id,
-        content: JSON.stringify(
-          strong.length > 0
-            ? strong.map((t) => ({
-                id: t.id,
-                name: t.name,
-                type: t.types[0],
-                oneLiner: t.oneLiner,
-                tags: t.tags,
-                similarity: Number((t.similarity ?? 0).toFixed(3)),
-              }))
-            : { results: [], note: "No tool met the relevance threshold for this query." },
-        ),
+        content: JSON.stringify({ error: `Unknown tool: ${block.name}` }),
       });
     }
 
     messages.push({ role: "user", content: toolResults });
   }
 
-  // Exhausted turns without a clean final answer — surface what we found.
+  // Exhausted turns.
   if (registration) {
     return buildResult(
-      "Sure — paste your tool's link here and I'll add it to the catalogue.",
+      "Sure — paste a URL for apps, docs, Zeps, or MCPs. For a Claude/Cursor skill, upload a SKILL.md below (not a PDF or doc).",
       [],
       registration,
     );
   }
-  const fallback = [...found.values()].slice(0, 3);
+  const fallback = lastCatalogueHits.length > 0 ? lastCatalogueHits.slice(0, 12) : [...found.values()].slice(0, 3);
   return buildResult(
     fallback.length > 0
-      ? "Here are the closest matches I found."
+      ? "Here are the closest matches I found — open a card for details and the link."
       : "I couldn't find a tool for that in the catalogue yet. Tell me a bit more about what you need and I'll help you scope it.",
     fallback,
     null,
   );
+}
+
+async function runVerifyCapability(block: Anthropic.ToolUseBlock): Promise<Anthropic.ToolResultBlockParam> {
+  const args = block.input as { platform?: string; capability?: string };
+  const platform = typeof args.platform === "string" ? args.platform : "";
+  const capability = typeof args.capability === "string" ? args.capability : "";
+  let result: Awaited<ReturnType<typeof verifyCapability>>;
+  try {
+    result = await verifyCapability(platform, capability);
+  } catch {
+    result = { supported: "unknown", source: "", checked_at: new Date().toISOString() };
+  }
+  const note =
+    result.supported === true
+      ? `The live docs confirm ${platform} DOES support "${capability}". Do NOT assert this as a limitation — treat it as confirmed and route accordingly.`
+      : result.supported === false
+        ? `The live docs indicate ${platform} does NOT support "${capability}" (source: ${result.source}). You may note this limitation, citing the source.`
+        : `Live check inconclusive. Fall back to the static baseline for ${platform} and flag any claim about "${capability}" as unverified.`;
+  return { type: "tool_result", tool_use_id: block.id, content: JSON.stringify({ ...result, note }) };
+}
+
+function delphiMcpName(anthropicName: string): DelphiToolName | null {
+  if (!anthropicName.startsWith("delphi_")) return null;
+  const mcp = anthropicName.slice("delphi_".length);
+  return (DELPHI_TOOL_NAMES as readonly string[]).includes(mcp) ? (mcp as DelphiToolName) : null;
+}
+
+function delphiArgsFromInput(mcpName: DelphiToolName, input: unknown): Record<string, unknown> {
+  const a = (input ?? {}) as Record<string, unknown>;
+  switch (mcpName) {
+    case "ask": {
+      const out: Record<string, unknown> = {
+        prompt: typeof a.prompt === "string" ? a.prompt : "",
+      };
+      if (Array.isArray(a.links)) out.links = a.links.filter((u): u is string => typeof u === "string");
+      return out;
+    }
+    case "search_docs": {
+      const out: Record<string, unknown> = {
+        query: typeof a.query === "string" ? a.query : "",
+      };
+      if (Array.isArray(a.pods)) out.pods = a.pods.filter((p): p is string => typeof p === "string");
+      return out;
+    }
+    case "analyze_code": {
+      const out: Record<string, unknown> = {
+        prompt: typeof a.prompt === "string" ? a.prompt : "",
+      };
+      if (Array.isArray(a.repo_names)) {
+        out.repo_names = a.repo_names.filter((r): r is string => typeof r === "string");
+      }
+      return out;
+    }
+    case "classify":
+      return { prompt: typeof a.prompt === "string" ? a.prompt : "" };
+    case "find_repos": {
+      const out: Record<string, unknown> = {
+        query: typeof a.query === "string" ? a.query : "",
+      };
+      if (typeof a.max_repos === "number" && Number.isFinite(a.max_repos)) out.max_repos = a.max_repos;
+      return out;
+    }
+    case "fetch_page":
+      return { url: typeof a.url === "string" ? a.url : "" };
+    default: {
+      const _exhaustive: never = mcpName;
+      return _exhaustive;
+    }
+  }
+}
+
+async function runDelphiTool(block: Anthropic.ToolUseBlock): Promise<Anthropic.ToolResultBlockParam> {
+  const mcpName = delphiMcpName(block.name);
+  if (!mcpName) {
+    return {
+      type: "tool_result",
+      tool_use_id: block.id,
+      content: JSON.stringify({ ok: false, error: `Unknown Delphi tool: ${block.name}` }),
+    };
+  }
+  const result = await callDelphiTool(mcpName, delphiArgsFromInput(mcpName, block.input));
+  if (!result.ok) {
+    return {
+      type: "tool_result",
+      tool_use_id: block.id,
+      content: JSON.stringify({
+        ok: false,
+        unavailable: result.unavailable === true,
+        error: result.error,
+        note: result.unavailable
+          ? "Delphi is not configured. Continue with catalogue-only judgment; do not invent Headout facts."
+          : "Delphi call failed. Continue without inventing facts; you may retry with a narrower question once.",
+      }),
+    };
+  }
+  return {
+    type: "tool_result",
+    tool_use_id: block.id,
+    content: JSON.stringify({
+      ok: true,
+      source: "delphi",
+      data: result.data,
+      note: "This is Headout knowledge / repos / docs — NOT a Storefront catalogue listing. Do not invent catalogue cards from it.",
+    }),
+  };
+}
+
+// ─── Scope / critique loop ─────────────────────────────────────────────────────
+
+async function runScopeChat(messages: Anthropic.MessageParam[], history: ChatTurn[], userContext?: ChatUserContext, onDelta?: OnDelta): Promise<ChatResult> {
+  const searchContext = userContext?.searchContext ?? {
+    query: [...history].reverse().find((t) => t.role === "user")?.content.slice(0, 120) ?? "",
+    nearMisses: [],
+  };
+  const system = BASE_SYSTEM_PROMPT + scopeSection(searchContext);
+
+  const questionsAsked = history.filter(isQuestionTurn).length;
+  const atCap = questionsAsked >= MAX_SCOPE_QUESTIONS;
+  const tools = atCap ? TERMINAL_SCOPE_TOOLS : SCOPE_TOOLS;
+  const toolChoice: Anthropic.MessageCreateParams["tool_choice"] = atCap ? { type: "any" } : { type: "auto" };
+
+  for (let turn = 0; turn < MAX_TURNS; turn++) {
+    let response: Anthropic.Message;
+    try {
+      response = await runModelTurn(
+        {
+          model: MODEL,
+          max_tokens: 4096,
+          system,
+          tools,
+          tool_choice: toolChoice,
+          messages,
+          temperature: 0,
+        },
+        onDelta,
+      );
+    } catch {
+      return buildResult("Something went wrong with the critique session — let's try again.", [], null, { stage: "scope" });
+    }
+
+    messages.push({ role: "assistant", content: response.content });
+    const toolUseBlocks = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
+
+    if (toolUseBlocks.length === 0) {
+      const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text ?? "";
+      return buildResult(text, [], null, { stage: "scope" });
+    }
+
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+    for (const block of toolUseBlocks) {
+      if (block.name === "draft_brief") {
+        const brief = fillBriefDefaults((block.input ?? {}) as Record<string, unknown>, userContext, searchContext);
+        const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;
+        return buildResult(
+          text || "I've put together a requirements brief based on our conversation. Review and edit it, then click Create my repo when you're ready.",
+          [],
+          null,
+          { stage: "brief", briefPayload: brief },
+        );
+      }
+      if (block.name === "recommend_kill") {
+        const a = (block.input ?? {}) as Record<string, unknown>;
+        const kill: KillPayload = {
+          modality: "no_build",
+          reason: typeof a.reason === "string" && a.reason ? a.reason : "This doesn't need a build.",
+          alternative: typeof a.alternative === "string" && a.alternative ? a.alternative : "Use Claude.ai directly.",
+          alternativeUrl: typeof a.alternativeUrl === "string" ? a.alternativeUrl : undefined,
+        };
+        const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;
+        return buildResult(text || `${kill.reason} Instead: ${kill.alternative}`, [], null, { stage: "kill", killPayload: kill });
+      }
+      if (block.name === "escalate_to_eng") {
+        const a = (block.input ?? {}) as Record<string, unknown>;
+        const escalate: EscalatePayload = {
+          modality: "eng_project",
+          problem: typeof a.problem === "string" && a.problem ? a.problem : searchContext.query || "Not specified — inferred from the conversation.",
+          whyLoadBearing: typeof a.whyLoadBearing === "string" && a.whyLoadBearing ? a.whyLoadBearing : "Too broad or critical for a self-serve build — needs an engineering team's judgment.",
+          suggestedOwningTeams: typeof a.suggestedOwningTeams === "string" && a.suggestedOwningTeams ? a.suggestedOwningTeams : "Not specified — the owning team wasn't identified.",
+          roughShape: typeof a.roughShape === "string" && a.roughShape ? a.roughShape : "Not specified — needs an engineering scoping pass.",
+        };
+        const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;
+        return buildResult(text || `This needs an engineering team, not a self-serve build. ${escalate.whyLoadBearing}`, [], null, { stage: "escalate", escalatePayload: escalate });
+      }
+      if (block.name === "end_scope") {
+        const a = (block.input ?? {}) as Record<string, unknown>;
+        const reason = typeof a.reason === "string" && a.reason ? a.reason : "Got it — stepping out of scoping.";
+        const forwardQuery = typeof a.forwardQuery === "string" && a.forwardQuery.trim() ? a.forwardQuery.trim() : null;
+        return buildResult(reason, [], null, { stage: "scope_exit", forwardQuery });
+      }
+      if (block.name === "verify_capability") {
+        toolResults.push(await runVerifyCapability(block));
+        continue;
+      }
+      if (DELPHI_ANTHROPIC_NAMES.has(block.name)) {
+        toolResults.push(await runDelphiTool(block));
+        continue;
+      }
+      toolResults.push({ type: "tool_result", tool_use_id: block.id, content: JSON.stringify({ error: "Unknown tool" }) });
+    }
+    messages.push({ role: "user", content: toolResults });
+  }
+
+  // Exhausted turns without a terminal call — force a filled brief.
+  return buildResult(
+    "We've been through quite a few questions. Let me put together a brief based on what you've told me.",
+    [],
+    null,
+    { stage: "brief", briefPayload: fillBriefDefaults({}, userContext, searchContext) },
+  );
+}
+
+// ─── Entry point ────────────────────────────────────────────────────────────
+
+export async function runChat(
+  history: ChatTurn[],
+  userContext?: ChatUserContext,
+  onDelta?: OnDelta,
+): Promise<ChatResult> {
+  const messages: Anthropic.MessageParam[] = history.map((turn) => ({ role: turn.role, content: turn.content }));
+
+  // Build-critique mode: the client has flagged that the user entered the scope
+  // loop. The agent gathers requirements and concludes with a terminal tool; it
+  // has NO search/browse tools, so it cannot re-surface a match it already ruled
+  // out. This is the structural fix for the old flip-flopping.
+  if (userContext?.mode === "scope") {
+    return runScopeChat(messages, history, userContext, onDelta);
+  }
+
+  // Otherwise: the unified discovery/concierge agent handles search, browse,
+  // details, registration, flag, access, update, and capability checks. When
+  // nothing fits it says so plainly (stage chat, noMatch true) and the client's
+  // next turn enters scope.
+  return runConciergeToolLoop(messages, userContext, onDelta);
 }

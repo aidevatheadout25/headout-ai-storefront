@@ -1,87 +1,178 @@
-import * as oidc from "openid-client";
-import { type Request, type Response, type NextFunction } from "express";
-import type { AuthUser } from "@workspace/api-zod";
 import {
-  clearSession,
-  getOidcConfig,
-  getSessionId,
-  getSession,
-  updateSession,
-  type SessionData,
+  type Request,
+  type Response,
+  type NextFunction,
+  type RequestHandler,
+} from "express";
+import { GuardianError } from "../downstreams/guardian/client";
+import { whoami } from "../downstreams/guardian/endpoints";
+import {
+  AUTH_BYPASS_GUARDIAN_USER,
+  AUTH_BYPASS_USER,
+  ensureAuthUserRow,
+  guardianUserToAuthUser,
+  isAuthBypassEnabled,
 } from "../lib/auth";
+import {
+  getOrySessionCookieName,
+  resolveOrySessionCookie,
+} from "../lib/guardian-config";
 
-declare global {
-  namespace Express {
-    interface User extends AuthUser {}
-
-    interface Request {
-      isAuthenticated(): this is AuthedRequest;
-
-      user?: User | undefined;
-    }
-
-    export interface AuthedRequest {
-      user: User;
-    }
-  }
+async function attachBypassUser(req: Request): Promise<void> {
+  await ensureAuthUserRow(AUTH_BYPASS_USER);
+  req.user = AUTH_BYPASS_USER;
+  req.rawCookie = "auth_bypass=1";
+  req.auth = {
+    user: AUTH_BYPASS_GUARDIAN_USER,
+    rawCookie: "auth_bypass=1",
+  };
+  req.isAuthenticated = function (this: Request) {
+    return this.user != null;
+  } as Request["isAuthenticated"];
 }
 
-async function refreshIfExpired(
-  sid: string,
-  session: SessionData,
-): Promise<SessionData | null> {
-  const now = Math.floor(Date.now() / 1000);
-  if (!session.expires_at || now <= session.expires_at) return session;
-
-  if (!session.refresh_token) return null;
-
-  try {
-    const config = await getOidcConfig();
-    const tokens = await oidc.refreshTokenGrant(
-      config,
-      session.refresh_token,
-    );
-    session.access_token = tokens.access_token;
-    session.refresh_token = tokens.refresh_token ?? session.refresh_token;
-    session.expires_at = tokens.expiresIn()
-      ? now + tokens.expiresIn()!
-      : session.expires_at;
-    await updateSession(sid, session);
-    return session;
-  } catch {
-    return null;
-  }
+async function attachGuardianUser(
+  req: Request,
+  rawCookie: string,
+): Promise<void> {
+  const guardianUser = await whoami(rawCookie);
+  const user = guardianUserToAuthUser(guardianUser);
+  await ensureAuthUserRow(user);
+  req.user = user;
+  req.rawCookie = rawCookie;
+  req.auth = { user: guardianUser, rawCookie };
+  req.isAuthenticated = function (this: Request) {
+    return this.user != null;
+  } as Request["isAuthenticated"];
 }
 
+/**
+ * Soft hydrate: if an Ory session cookie is present, resolve it via Guardian
+ * and attach `req.user` / `req.rawCookie` / `req.auth`. Missing or invalid
+ * cookies leave the request unauthenticated (no 401) — used for the soft
+ * landing page and optional reporter identity on public-ish routes.
+ *
+ * When AUTH_BYPASS=true and there is no session cookie, attach a synthetic
+ * user so the app is usable before custom-domain SSO works.
+ */
 export async function authMiddleware(
   req: Request,
-  res: Response,
+  _res: Response,
   next: NextFunction,
 ) {
   req.isAuthenticated = function (this: Request) {
     return this.user != null;
   } as Request["isAuthenticated"];
 
-  const sid = getSessionId(req);
-  if (!sid) {
+  const sessionCookie = resolveOrySessionCookie(req.cookies);
+  if (!sessionCookie) {
+    if (isAuthBypassEnabled()) {
+      try {
+        await attachBypassUser(req);
+      } catch (err) {
+        req.log?.error?.({ err }, "AUTH_BYPASS user upsert failed");
+      }
+    }
     next();
     return;
   }
 
-  const session = await getSession(sid);
-  if (!session?.user?.id) {
-    await clearSession(res, sid);
-    next();
-    return;
-  }
+  const rawCookie = `${sessionCookie.name}=${sessionCookie.value}`;
 
-  const refreshed = await refreshIfExpired(sid, session);
-  if (!refreshed) {
-    await clearSession(res, sid);
+  try {
+    await attachGuardianUser(req, rawCookie);
     next();
-    return;
+  } catch (err) {
+    if (err instanceof GuardianError && err.status === 401) {
+      if (isAuthBypassEnabled()) {
+        try {
+          await attachBypassUser(req);
+        } catch (bypassErr) {
+          req.log?.error?.(
+            { err: bypassErr },
+            "AUTH_BYPASS user upsert failed after 401",
+          );
+        }
+      }
+      next();
+      return;
+    }
+    req.log?.error?.({ err }, "Guardian whoami failed during auth hydrate");
+    if (isAuthBypassEnabled()) {
+      try {
+        await attachBypassUser(req);
+      } catch (bypassErr) {
+        req.log?.error?.(
+          { err: bypassErr },
+          "AUTH_BYPASS user upsert failed after Guardian error",
+        );
+      }
+    }
+    next();
   }
-
-  req.user = refreshed.user;
-  next();
 }
+
+/**
+ * Hard gate (starter-kit pattern): require a configured cookie name, call
+ * Guardian whoami, populate `req.auth` + `req.user`. Use on routers that
+ * must reject anonymous callers.
+ *
+ * AUTH_BYPASS short-circuits to the synthetic user when set.
+ */
+export const requireAuth: RequestHandler = async (req, res, next) => {
+  // Soft hydrate may already have validated this request via Guardian.
+  if (req.auth && req.user) {
+    next();
+    return;
+  }
+
+  if (isAuthBypassEnabled()) {
+    try {
+      await attachBypassUser(req);
+      next();
+    } catch (err) {
+      req.log?.error?.({ err }, "AUTH_BYPASS user upsert failed in requireAuth");
+      res.status(500).json({ error: "Auth bypass failed", code: "INTERNAL" });
+    }
+    return;
+  }
+
+  let cookieName: string;
+  try {
+    cookieName = getOrySessionCookieName();
+  } catch (err) {
+    req.log?.error?.({ err }, "requireAuth misconfigured");
+    res.status(500).json({ error: "Server misconfigured", code: "INTERNAL" });
+    return;
+  }
+
+  const cookieValue = req.cookies?.[cookieName];
+  if (!cookieValue || typeof cookieValue !== "string") {
+    res.status(401).json({
+      error: "invalid or missing session",
+      errorCode: "INVALID_SESSION",
+      code: "UNAUTHORIZED",
+    });
+    return;
+  }
+
+  const rawCookie = `${cookieName}=${cookieValue}`;
+
+  try {
+    await attachGuardianUser(req, rawCookie);
+    next();
+  } catch (err) {
+    if (err instanceof GuardianError && err.status === 401) {
+      res.status(401).json({
+        error: "invalid or missing session",
+        errorCode: "INVALID_SESSION",
+        code: "UNAUTHORIZED",
+      });
+      return;
+    }
+    req.log?.error?.({ err }, "requireAuth: Guardian failed");
+    res
+      .status(502)
+      .json({ error: "Guardian request failed", code: "BAD_GATEWAY" });
+  }
+};

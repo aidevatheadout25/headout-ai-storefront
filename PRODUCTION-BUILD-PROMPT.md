@@ -1,6 +1,26 @@
-# Production build — one Next.js app, fully on the Vercel AI SDK, off Replit
+# Production build — SUPERSEDED (Next.js + Vercel AI SDK migration dropped)
 
-This is the definitive build prompt. Goal: take the validated prototype to production as a single Next.js (App Router) application built entirely on the Vercel AI SDK stack — `ai` (server core) + `@ai-sdk/react` (`useChat`) + `@ai-sdk/anthropic` + **AI Elements** (chat UI) — with no Replit or Vite/Express remnants. One unified Next.js app replaces the current Vite storefront + Express api-server split.
+> **⚠️ SUPERSEDED — do not execute this plan.** The Next.js + Vercel AI SDK re-platform
+> described below has been **dropped** as unnecessary engineering effort. The AI SDK is a
+> transport/UI layer; it fixes none of the agent's conversation-quality problems and is not a
+> launch blocker. Production stays on the **current stack**: Express + raw `@anthropic-ai/sdk`
+> + Vite storefront + Postgres/pgvector on Railway (already deployed, with Guardian auth).
+>
+> The active plan is **conversation-quality improvement on the current stack** — unify the
+> two-agent split into one tool-driven agent, fix context flow, add a real (simulated-user +
+> LLM-judge) eval, ground modality calls in Delphi, and add streaming via
+> `anthropic.messages.stream()` + Express SSE (no AI SDK needed). See `CLAUDE.md` →
+> "Current state & direction."
+>
+> **What's still worth keeping from below:** the chat-UX wishlist in old Phase 5 (persistent
+> new-chat, copy-message/conversation, natural autoscroll + scroll-to-bottom, sticky streaming
+> input) and the streaming requirement — implement those on the current Vite/Express stack.
+> Everything else (Next.js scaffold, AI SDK core port, AI Elements, old-stack deletion) is
+> obsolete.
+
+<details><summary>Original (obsolete) re-platform plan — kept for reference only</summary>
+
+Goal: take the validated prototype to production as a single Next.js (App Router) application built entirely on the Vercel AI SDK stack — `ai` (server core) + `@ai-sdk/react` (`useChat`) + `@ai-sdk/anthropic` + **AI Elements** (chat UI) — with no Replit or Vite/Express remnants. One unified Next.js app replaces the current Vite storefront + Express api-server split.
 
 **Terminology (so "everything on the AI SDK" is unambiguous):** the AI SDK is not a UI framework. AI Elements (Vercel's shadcn-based chat components) provides the standardized UI (message list, prompt input, copy/regenerate/actions, streaming); `@ai-sdk/react` provides the client data layer (`useChat`); `ai` core runs the agent server-side. The whole stack together is the target.
 
@@ -45,9 +65,11 @@ Remove: the Vite storefront, Express api-server, `mockup-sandbox`, `@replit/vite
 
 ## Guardrails
 - **Behavior parity is the bar.** The eval report after Phase 4 and Phase 5 must be behaviorally identical to before. Drift = bug.
-- **Don't touch the scaffolding taxonomy** (categories / subcategories / templates) — another team member owns that track.
+- **Don't touch the scaffold monorepo** (`SCAFFOLD-MONOREPO.md` — presets / modules / generator) — another team member owns that track.
 - If Phase 4 (agent → AI SDK core) is bigger than it looks, stop and summarize before continuing.
 - Where the app must run (evals, dev), it needs `DATABASE_URL` + `ANTHROPIC_API_KEY` in the environment — confirm they're present before running; don't report false failures against a missing env.
 
 ## Acceptance
 One Next.js app, no Replit and no Vite/Express remnants; LLM via AI SDK core; chat UI via AI Elements + `useChat` (streaming, copy, persistent new-chat, clean scroll); Guardian-ready auth seam; Drizzle/pgvector data layer intact; all three journeys work by hand; and an eval report behaviorally identical to before the rebuild.
+
+</details>

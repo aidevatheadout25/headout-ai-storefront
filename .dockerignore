@@ -1,0 +1,20 @@
+# Keep the build context lean and reproducible. Do NOT exclude any pnpm
+# workspace package directory — a frozen install expects every member present.
+**/node_modules
+.git
+.gitignore
+**/dist
+**/*.tsbuildinfo
+.migration-backup
+.cache
+.local
+.replit
+.replitignore
+.agents
+.claude
+.guardian-refs
+.guardian-kit-tmp
+.headauth-tmp
+.codex
+*.log
+*.docx

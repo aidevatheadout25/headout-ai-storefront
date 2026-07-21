@@ -3,7 +3,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { embedMany, warmEmbeddings } from "./embeddings";
 import { toolEmbeddingText, countTools } from "./catalogue";
 import { normalizeUrl } from "./normalizeUrl";
-import { SEED_TOOLS } from "./seedData";
+import { ALL_REAL_SEED_TOOLS } from "./realSeedData";
 import { logger } from "./logger";
 
 /**
@@ -67,8 +67,8 @@ export async function seedCatalogueIfEmpty(): Promise<void> {
     return;
   }
 
-  logger.info({ count: SEED_TOOLS.length }, "Seeding catalogue…");
-  const texts = SEED_TOOLS.map((tool) =>
+  logger.info({ count: ALL_REAL_SEED_TOOLS.length }, "Seeding catalogue…");
+  const texts = ALL_REAL_SEED_TOOLS.map((tool) =>
     toolEmbeddingText({
       title: tool.title,
       oneLiner: tool.oneLiner ?? undefined,
@@ -78,7 +78,7 @@ export async function seedCatalogueIfEmpty(): Promise<void> {
     }),
   );
   const embeddings = await embedMany(texts);
-  const rows = SEED_TOOLS.map((tool, i) => ({
+  const rows = ALL_REAL_SEED_TOOLS.map((tool, i) => ({
     ...tool,
     // Curated seed entries are trusted/owned, so they are verified out of the box.
     verified: true,

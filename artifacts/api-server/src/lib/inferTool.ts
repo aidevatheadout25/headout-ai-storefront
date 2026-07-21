@@ -3,6 +3,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { InsertTool } from "@workspace/db";
 import { safeFetch } from "./urlGuard";
 import { fetchTagVocabulary } from "./catalogue";
+import { parseSkillMd, type ParsedSkillMd } from "./parseSkillMd";
 import {
   MAX_TAGS,
   MIN_TAGS,
@@ -270,6 +271,130 @@ export async function inferToolFromUrl(url: string): Promise<InferToolResult> {
   return {
     preview,
     lowConfidence: !usableSignal || (parsed.lowConfidence ?? false) || belowMin,
+  };
+}
+
+/**
+ * Infer catalogue metadata from an uploaded SKILL.md. Frontmatter supplies
+ * name/description; the LLM fills team/tags/one-liner and keeps type pinned
+ * to `skill`. No URL is required — skills often live only in a local agents
+ * folder until someone PRs them into HeadoutAgentsConfig.
+ */
+export async function inferToolFromSkillMarkdown(
+  markdown: string,
+  opts?: { url?: string },
+): Promise<InferToolResult> {
+  const skill = parseSkillMd(markdown);
+  return inferToolFromParsedSkill(skill, opts?.url?.trim() ?? "");
+}
+
+async function inferToolFromParsedSkill(
+  skill: ParsedSkillMd,
+  url: string,
+): Promise<InferToolResult> {
+  const vocabulary = await fetchTagVocabulary();
+  const bodyExcerpt = skill.body.slice(0, 6000);
+
+  const response = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: 8192,
+    tools: [INFER_TOOL_DEF],
+    tool_choice: { type: "tool", name: "tool_metadata" },
+    system:
+      "You catalogue internal Claude/Cursor skills for Headout. The source is a " +
+      "SKILL.md file the teammate uploaded. Type MUST be \"skill\". Prefer the " +
+      "frontmatter name and description; use the body only to sharpen the one-liner, " +
+      "longer description, and tags. Do not invent capabilities the file does not " +
+      "state. If unsure of the team, choose Platform. Set lowConfidence false when " +
+      "frontmatter name+description are present and usable.\n\n" +
+      TAG_POLICY_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content:
+          `Skill frontmatter name: ${skill.name || "(missing)"}\n` +
+          `Skill frontmatter description: ${skill.description || "(missing)"}\n` +
+          (url ? `Optional install/docs URL: ${url}\n` : "") +
+          `Existing catalogue tags (reuse these before inventing new ones): ${renderTagVocabulary(
+            vocabulary,
+          )}\n` +
+          `Skill body excerpt:\n${bodyExcerpt || "(empty body)"}`,
+      },
+    ],
+  });
+
+  const toolBlock = response.content.find(
+    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === "tool_metadata",
+  );
+
+  const parsed = (toolBlock?.input ?? {}) as {
+    type?: string;
+    title?: string;
+    oneLiner?: string;
+    description?: string;
+    tags?: string[];
+    team?: string;
+    lowConfidence?: boolean;
+  };
+
+  const fallbackTitle = skill.name || "Untitled skill";
+  const fallbackOneLiner =
+    skill.description.split(/(?<=[.!?])\s+/)[0]?.trim().slice(0, 160) ||
+    skill.description.slice(0, 160);
+  const fallbackDescription =
+    skill.description ||
+    (skill.body ? skill.body.slice(0, 800) : "Claude skill uploaded via Storefront.");
+
+  const { tags, belowMin } = await resolveInferredTags(parsed.tags ?? [], async () => {
+    const regen = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 8192,
+      tools: [TAGS_TOOL_DEF],
+      tool_choice: { type: "tool", name: "tool_tags" },
+      system:
+        "You assign catalogue tags for an internal Headout Claude skill. Return ONLY tags. " +
+        `You MUST return between ${MIN_TAGS} and ${MAX_TAGS} SPECIFIC facet tags — never the banned generic words. ` +
+        "Prefer existing vocabulary.\n\n" +
+        TAG_POLICY_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content:
+            `Title: ${parsed.title ?? fallbackTitle}\n` +
+            `One-liner: ${parsed.oneLiner ?? fallbackOneLiner}\n` +
+            `Description: ${parsed.description ?? fallbackDescription}\n` +
+            `Existing catalogue tags: ${renderTagVocabulary(vocabulary)}\n` +
+            `Skill body excerpt:\n${bodyExcerpt || "(empty)"}`,
+        },
+      ],
+    });
+    const tagBlock = regen.content.find(
+      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === "tool_tags",
+    );
+    return ((tagBlock?.input as { tags?: string[] } | undefined)?.tags ?? []) as string[];
+  });
+
+  const preview: InferredTool = {
+    type: "skill",
+    title: (parsed.title ?? fallbackTitle).trim() || fallbackTitle,
+    oneLiner: (parsed.oneLiner ?? fallbackOneLiner).trim() || fallbackOneLiner,
+    description: (parsed.description ?? fallbackDescription).trim() || fallbackDescription,
+    tags,
+    team: parsed.team ?? "Platform",
+    url,
+    ownerName: "",
+    ownerSlackId: "",
+    verified: false,
+    source: "manual",
+    visibility: "org",
+    status: "live",
+    accessLevel: "open",
+  };
+
+  const thinFrontmatter = !skill.name || !skill.description;
+  return {
+    preview,
+    lowConfidence: thinFrontmatter || (parsed.lowConfidence ?? false) || belowMin,
   };
 }
 

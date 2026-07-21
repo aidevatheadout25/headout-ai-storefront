@@ -36,7 +36,13 @@ export const briefsTable = pgTable(
     wontDo: jsonb("wont_do")
       .notNull()
       .default(sql`'[]'::jsonb`),
-    appClass: text("app_class").notNull().default("micro"),
+    // Maps to the legacy `app_class` DB column (kept to avoid a migration). Holds
+    // a Modality value ("zep" | "mcp" | "skill" | "script" | "micro_app" | "full_app").
+    modality: text("app_class").notNull().default("micro"),
+    // NOTE: new column — requires `drizzle-kit push` on any DB before the briefs
+    // create/read route works there. The route already writes this field; the
+    // column was simply never added (pre-existing incomplete migration).
+    modalityReason: text("modality_reason").notNull().default(""),
     risk: text("risk").notNull().default("low"),
     state: text("state").notNull().default("draft"),
     createdAt: timestamp("created_at").notNull().defaultNow(),

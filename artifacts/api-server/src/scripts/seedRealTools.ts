@@ -1,15 +1,10 @@
 /**
- * One-off, run-it-yourself script: replaces every row in the catalogue with
- * the real, GitHub-audited Headout tools in lib/realSeedData.ts. Unlike
- * seedCatalogueIfEmpty() (which only seeds an empty table on app boot), this
- * always wipes first — it exists specifically to cut a DB that already holds
- * the fictional demo catalogue (lib/seedData.ts) over to real data.
- *
- * Deliberately does NOT touch lib/seedData.ts / seed.ts: those fictional rows
- * are also the eval harness's regression fixtures (see
- * eval/catalogueQuality.test.ts, which asserts retrieval quality by exact
- * fictional tool name). Swapping that wiring is a separate, deliberate change
- * — not something to fold into a data-seeding script.
+ * Destructive-refresh script: replaces every row in the catalogue with the
+ * real, GitHub-audited Headout tools in lib/realSeedData.ts. Shares the same
+ * data source as boot seeding (seedCatalogueIfEmpty() in lib/seed.ts also seeds
+ * ALL_REAL_SEED_TOOLS) — the difference is intent: boot is idempotent
+ * seed-if-empty, this always wipes first so it can refresh a DB that already
+ * holds an older/stale catalogue.
  *
  * Run from artifacts/api-server: `pnpm run seed:real`
  * Requires DATABASE_URL to point at the target Postgres instance.

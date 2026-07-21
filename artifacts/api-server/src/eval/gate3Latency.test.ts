@@ -12,13 +12,16 @@
  * network latency while still catching runaway loops or infinite hangs.
  *
  * Run with: `pnpm --filter @workspace/api-server run test`
- * Requires: DATABASE_URL (seeded) + AI_INTEGRATIONS_ANTHROPIC_BASE_URL
+ * Requires: DATABASE_URL (seeded) + ANTHROPIC_API_KEY
  */
 import { test, before, describe } from "node:test";
 import assert from "node:assert/strict";
 import { seedCatalogueIfEmpty } from "../lib/seed";
 
-const AI_READY = !!process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL;
+const AI_READY = !!(
+  process.env.ANTHROPIC_API_KEY ||
+  process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY
+);
 
 /** Maximum wall-clock time (ms) allowed for a single verifyCapability call. */
 const VERIFY_CAPABILITY_TIMEOUT_MS = 20_000;
@@ -33,7 +36,7 @@ before(async () => {
 
 describe(
   "verify_capability latency",
-  { skip: AI_READY ? false : "OPENAI_API_KEY not set" },
+  { skip: AI_READY ? false : "ANTHROPIC_API_KEY not set" },
   () => {
     test(
       `verifyCapability completes within ${VERIFY_CAPABILITY_TIMEOUT_MS / 1000}s`,
@@ -80,7 +83,7 @@ describe(
 
 describe(
   "Gate 3 turn latency",
-  { skip: AI_READY ? false : "OPENAI_API_KEY not set" },
+  { skip: AI_READY ? false : "ANTHROPIC_API_KEY not set" },
   () => {
     let runChat: typeof import("../lib/chatAgent").runChat;
 

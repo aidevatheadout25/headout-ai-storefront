@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
 } from "react";
@@ -23,6 +24,7 @@ import {
   createTool,
   fetchConversation,
   sendChat,
+  sendChatStream,
   type AddChatTurn,
   type BriefPayload,
   type BuilderId,
@@ -37,6 +39,8 @@ import {
 } from "@/lib/api";
 import { useAuthContext } from "@/lib/auth-context";
 import { useConversationsContext } from "@/lib/conversations-context";
+import { isMatchRejection, isOffScopeRedirect, isScopeAffirm } from "@/lib/scopeIntent";
+import { isSkillUploadFilename, readSkillUpload } from "@/lib/readSkillUpload";
 import {
   builderUrl,
   isManualPath,
@@ -46,16 +50,26 @@ import {
 import type { Tool } from "@/lib/types";
 
 const STARTER_PROMPTS = [
-  "My team spends hours each week manually compiling reports — is there a better way?",
-  "I want to build something that sends a weekly digest from our internal data",
-  "Is there anything that can draft responses to customer complaints?",
-  "I just built a tool — how do I get it added to the platform?",
+  "Weekly reports take hours — better way?",
+  "Draft replies to customer complaints",
 ] as const;
 
 const SCOPE_LAUNCHERS = [
-  { label: "🔍 Find an existing tool", text: "I need to find an existing tool" },
-  { label: "🔨 Build something new", text: "I want to scope an idea for a new internal tool" },
-  { label: "➕ Register a tool I built", text: "I just built a tool and want to add it to the catalogue" },
+  {
+    label: "Find an existing tool",
+    text: "I need to find an existing tool",
+    icon: "search" as const,
+  },
+  {
+    label: "Build something new",
+    text: "I want to scope an idea for a new internal tool",
+    icon: "bulb" as const,
+  },
+  {
+    label: "Register a tool I built",
+    text: "I just built a tool and want to add it to the catalogue",
+    icon: "checkmark" as const,
+  },
 ] as const;
 
 const JOURNEY_PILL_LABELS: Partial<Record<FunnelStage, string>> = {
@@ -68,6 +82,22 @@ const JOURNEY_PILL_LABELS: Partial<Record<FunnelStage, string>> = {
 };
 
 type JourneyPhase = "brief" | "scaffold" | "checklist" | "review" | "live" | null;
+
+const JOURNEY_STEP_LABELS: Record<Exclude<JourneyPhase, null>, string> = {
+  brief: "Brief",
+  scaffold: "Repo",
+  checklist: "Checklist",
+  review: "Review",
+  live: "Live",
+};
+
+const JOURNEY_STEP_ORDER = [
+  "brief",
+  "scaffold",
+  "checklist",
+  "review",
+  "live",
+] as const satisfies ReadonlyArray<Exclude<JourneyPhase, null>>;
 
 type ChatMessage = {
   id: string;
@@ -176,6 +206,7 @@ export function HomeChat() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const seededRef = useRef(false);
   const loadedConvRef = useRef<string | null>(null);
+  const stickToBottomRef = useRef(true);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -190,6 +221,7 @@ export function HomeChat() {
   const [addDraft, setAddDraft] = useState<ToolPreview | null>(null);
   const [addTurns, setAddTurns] = useState<AddChatTurn[]>([]);
   const [addConfirming, setAddConfirming] = useState(false);
+  const skillFileInputRef = useRef<HTMLInputElement>(null);
 
   // ── Tool detail overlay ───────────────────────────────────────────────────
   const [detailToolId, setDetailToolId] = useState<string | null>(null);
@@ -201,8 +233,17 @@ export function HomeChat() {
   const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null);
   /** True while the critique/scope agent is active. Cleared on brief/kill/continuation. */
   const [inScopeMode, setInScopeMode] = useState(false);
+  /**
+   * After the user rejects catalogue cards, the next scope/build affirm should
+   * enter critique immediately (same as the fork chip) — don't wait for another click.
+   */
+  const rejectedMatchesRef = useRef<{ name: string; oneLiner: string }[]>([]);
+  const rejectedQueryRef = useRef("");
 
   const started = messages.length > 0;
+  const hasToolResults = messages.some(
+    (message) => message.tools && message.tools.length > 0,
+  );
 
   const scrollToEnd = useCallback(() => {
     requestAnimationFrame(() => {
@@ -213,9 +254,18 @@ export function HomeChat() {
     });
   }, []);
 
+  const handleThreadScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distanceFromBottom < 96;
+  }, []);
+
   useEffect(() => {
-    scrollToEnd();
-  }, [messages, sending, journeyPhase, scrollToEnd]);
+    if (stickToBottomRef.current) {
+      scrollToEnd();
+    }
+  }, [messages, sending, journeyPhase, addMode, addDraft, scrollToEnd]);
 
   // Auto-grow the composer with its content, up to a max height (then scroll).
   useLayoutEffect(() => {
@@ -232,7 +282,7 @@ export function HomeChat() {
       setError(null);
       try {
         // First add-mode message: treat text as the URL
-        if (!addUrl) {
+        if (!addDraft) {
           const url = text.trim();
           const result = await addToolChat({ url });
           if ("duplicate" in result && result.duplicate) {
@@ -319,6 +369,85 @@ export function HomeChat() {
     [addUrl, addDraft, addTurns],
   );
 
+  const runAddSkillUpload = useCallback(
+    async (markdown: string, fileName: string) => {
+      setSending(true);
+      setError(null);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: msgId(),
+          role: "user",
+          text: `Uploaded skill: ${fileName}`,
+        },
+      ]);
+      try {
+        const result = await addToolChat({ skillMarkdown: markdown });
+        if ("duplicate" in result && result.duplicate) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: msgId(),
+              role: "assistant",
+              text: `**${result.tool.name}** is already in the catalogue. [View it →](/tools/${result.tool.id})`,
+            },
+          ]);
+          setAddMode(false);
+          return;
+        }
+        const r = result as Extract<typeof result, { ready: boolean }>;
+        setAddUrl(r.preview.url ?? "");
+        setAddDraft(r.preview);
+        const openingTurn: AddChatTurn = { role: "assistant", content: r.message };
+        setAddTurns([openingTurn]);
+        setMessages((prev) => [
+          ...prev,
+          { id: msgId(), role: "assistant", text: r.message },
+        ]);
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Couldn't read that skill file — try again.",
+        );
+      } finally {
+        setSending(false);
+      }
+    },
+    [],
+  );
+
+  const handleSkillFileChange = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      // Reset so selecting the same file again still fires onChange.
+      event.target.value = "";
+      if (!file) return;
+      if (sending || addConfirming) return;
+      if (addDraft) {
+        setError("Finish or cancel the current draft before uploading another skill.");
+        return;
+      }
+
+      if (!isSkillUploadFilename(file.name)) {
+        setError(
+          "Upload a .skill package (e.g. prd-writer.skill) or a SKILL.md file.",
+        );
+        return;
+      }
+
+      try {
+        const text = await readSkillUpload(file);
+        await runAddSkillUpload(text, file.name);
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Couldn't read that skill file — try again.",
+        );
+      }
+    },
+    [addConfirming, addDraft, runAddSkillUpload, sending],
+  );
+
   // Stable ref so runChat can trigger the add-tool flow without a circular dep.
   const runAddChatRef = useRef(runAddChat);
   useEffect(() => {
@@ -342,10 +471,32 @@ export function HomeChat() {
           .map((m) => ({ role: m.role, content: m.text }));
         turns.push({ role: "user", content: text });
 
-        const result = await sendChat(turns, conversationId, opts);
-        const newMsg: ChatMessage = {
-          id: msgId(),
-          role: "assistant",
+        // Stream the assistant text into a live placeholder; fall back to the
+        // blocking endpoint if the SSE stream fails (e.g. proxy buffering).
+        let streamId: string | null = null;
+        let result: Awaited<ReturnType<typeof sendChat>>;
+        try {
+          streamId = msgId();
+          const placeholderId = streamId;
+          setMessages((prev) => [
+            ...prev,
+            { id: placeholderId, role: "assistant", text: "", userQuery: text },
+          ]);
+          result = await sendChatStream(turns, conversationId, opts, (delta) => {
+            setMessages((prev) =>
+              prev.map((m) => (m.id === placeholderId ? { ...m, text: m.text + delta } : m)),
+            );
+          });
+        } catch {
+          if (streamId) {
+            const removeId = streamId;
+            setMessages((prev) => prev.filter((m) => m.id !== removeId));
+          }
+          streamId = null;
+          result = await sendChat(turns, conversationId, opts);
+        }
+
+        const finalFields = {
           text: result.message,
           tools: result.tools,
           noMatch: result.noMatch,
@@ -358,7 +509,14 @@ export function HomeChat() {
           escalatePayload: result.escalatePayload,
           userQuery: text,
         };
-        setMessages((prev) => [...prev, newMsg]);
+        if (streamId) {
+          const finalizeId = streamId;
+          setMessages((prev) =>
+            prev.map((m) => (m.id === finalizeId ? { ...m, ...finalFields } : m)),
+          );
+        } else {
+          setMessages((prev) => [...prev, { id: msgId(), role: "assistant", ...finalFields }]);
+        }
 
         if (result.conversationId && result.conversationId !== conversationId) {
           loadedConvRef.current = result.conversationId;
@@ -508,7 +666,7 @@ export function HomeChat() {
       }
       if (addMode && !overrideOpts?.forceChat) {
         // First add-mode message: validate it looks like a URL before calling addToolChat.
-        if (!addUrl) {
+        if (!addDraft) {
           const looksLikeUrl =
             !trimmed.includes(" ") &&
             (trimmed.includes(".") || trimmed.startsWith("http"));
@@ -519,7 +677,7 @@ export function HomeChat() {
               {
                 id: msgId(),
                 role: "assistant" as const,
-                text: "That doesn't look like a link — what would you like to do?",
+                text: "That doesn't look like a link. Paste a URL for apps, docs, Zeps, or MCPs — or upload a SKILL.md for Claude/Cursor skills.",
                 addDisambiguation: true,
                 addDisambiguationText: trimmed,
               },
@@ -529,19 +687,81 @@ export function HomeChat() {
         }
         setMessages((prev) => [...prev, userMessage]);
         void runAddChat(trimmed);
-      } else {
-        const chatOpts =
-          overrideOpts?.forceChat
-            ? undefined
-            : overrideOpts ?? (inScopeMode ? { mode: "scope" as const } : undefined);
+        return;
+      }
+
+      // After a catalogue gap / rejected matches, the next real reply enters
+      // critique — "I am ready", "what next", or describing the tool. Don't
+      // wait for the fork chip or re-search Product OS.
+      const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+      const priorTools = lastAssistant?.tools ?? [];
+      if (
+        !overrideOpts?.forceChat &&
+        !overrideOpts?.mode &&
+        !inScopeMode &&
+        isMatchRejection(trimmed) &&
+        priorTools.length > 0
+      ) {
+        rejectedMatchesRef.current = priorTools.map((t) => ({
+          name: t.name,
+          oneLiner: t.oneLiner,
+        }));
+        rejectedQueryRef.current =
+          lastAssistant?.userQuery ?? lastAssistant?.text?.slice(0, 120) ?? "";
+      }
+
+      const afterGap =
+        Boolean(lastAssistant?.noMatch) || rejectedMatchesRef.current.length > 0;
+      const continuingAfterGap =
+        afterGap &&
+        !isOffScopeRedirect(trimmed) &&
+        trimmed.length > 1;
+      const shouldEnterScope =
+        !overrideOpts?.forceChat &&
+        !overrideOpts?.mode &&
+        !inScopeMode &&
+        !isOffScopeRedirect(trimmed) &&
+        (isScopeAffirm(trimmed) || continuingAfterGap || isMatchRejection(trimmed)) &&
+        (afterGap || priorTools.length > 0 || isScopeAffirm(trimmed));
+
+      if (shouldEnterScope && messages.length > 0) {
+        const nearMisses =
+          rejectedMatchesRef.current.length > 0
+            ? rejectedMatchesRef.current
+            : (lastAssistant?.tools ?? []).map((t) => ({
+                name: t.name,
+                oneLiner: t.oneLiner,
+              }));
+        const query =
+          rejectedQueryRef.current ||
+          lastAssistant?.userQuery ||
+          lastAssistant?.text?.slice(0, 120) ||
+          trimmed;
+        rejectedMatchesRef.current = [];
+        rejectedQueryRef.current = "";
+        setInScopeMode(true);
         setMessages((prev) => {
           const next = [...prev, userMessage];
-          void runChat(trimmed, prev, chatOpts);
+          void runChat(trimmed, prev, {
+            mode: "scope",
+            searchContext: { query, nearMisses },
+          });
           return next;
         });
+        return;
       }
+
+      const chatOpts =
+        overrideOpts?.forceChat
+          ? undefined
+          : overrideOpts ?? (inScopeMode ? { mode: "scope" as const } : undefined);
+      setMessages((prev) => {
+        const next = [...prev, userMessage];
+        void runChat(trimmed, prev, chatOpts);
+        return next;
+      });
     },
-    [addMode, addUrl, inScopeMode, journeyPhase, runAddChat, runChat, sending],
+    [addMode, addDraft, inScopeMode, journeyPhase, messages, runAddChat, runChat, sending],
   );
 
   useEffect(() => {
@@ -557,6 +777,7 @@ export function HomeChat() {
 
     if (!c) {
       loadedConvRef.current = null;
+      stickToBottomRef.current = true;
       setConversationId(null);
       setMessages([]);
       setAddMode(false);
@@ -573,6 +794,7 @@ export function HomeChat() {
     }
 
     loadedConvRef.current = c;
+    stickToBottomRef.current = true;
     setLoadingConv(true);
     setError(null);
     fetchConversation(c)
@@ -701,40 +923,36 @@ export function HomeChat() {
 
   const currentPillLabel = pillLabel(messages);
 
-  const inputPlaceholder = addMode && !addUrl
-    ? "Paste a link — e.g. https://…"
+  const inputPlaceholder = addMode && !addDraft
+    ? "Paste a URL for apps, docs, Zeps, MCPs…"
     : addMode
       ? "Reply…"
       : 'Describe a task, e.g. \u201csummarise customer reviews\u201d\u2026';
 
   const isJourneyActive = journeyPhase !== null;
 
+  const typingLabel = addMode
+    ? "Thinking…"
+    : inScopeMode || isJourneyActive
+      ? "Thinking…"
+      : "Searching the catalogue…";
+
+  const journeyStepIndex = journeyPhase
+    ? JOURNEY_STEP_ORDER.indexOf(journeyPhase)
+    : -1;
+
   return (
-    <div className="home-chat">
-      {isAuthenticated && (
+    <div className={`home-chat${hasToolResults ? " home-chat--wide" : ""}`}>
+      {isAuthenticated && currentPillLabel && (
         <div className="home-chat__header">
-          {currentPillLabel && (
-            <span className="home-chat__mode-pill t-label-xs">{currentPillLabel}</span>
-          )}
-          <a href="/" className="home-chat__new-chat-btn" title="New chat" aria-label="New chat">
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M12 20h9" />
-              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
-            </svg>
-          </a>
+          <span className="home-chat__mode-pill t-label-xs">{currentPillLabel}</span>
         </div>
       )}
-      <div className="home-chat__thread" ref={scrollRef}>
+      <div
+        className="home-chat__thread"
+        ref={scrollRef}
+        onScroll={handleThreadScroll}
+      >
         {!started && !loadingConv && (
           <div className="home-chat__empty">
             <h1 className="home-chat__heading t-display-xs">
@@ -742,8 +960,27 @@ export function HomeChat() {
             </h1>
             <p className="home-chat__intro t-para-md">
               Tell me what you need and I&apos;ll find the right internal tool — or
-              help you figure out if anything needs building at all.
+              help you figure out if anything needs building at all. Use the
+              composer below, or pick a path.
             </p>
+            <div className="home-chat__launchers">
+              {SCOPE_LAUNCHERS.map((launcher) => (
+                <button
+                  key={launcher.label}
+                  type="button"
+                  className="home-chat__launcher t-label-sm"
+                  onClick={() => submitText(launcher.text)}
+                >
+                  <Icon
+                    name={launcher.icon}
+                    size={16}
+                    className="home-chat__launcher-icon"
+                  />
+                  {launcher.label}
+                </button>
+              ))}
+            </div>
+            <p className="home-chat__starters-label t-label-xs">Try an example</p>
             <div className="home-chat__starters">
               {STARTER_PROMPTS.map((prompt) => (
                 <button
@@ -753,18 +990,6 @@ export function HomeChat() {
                   onClick={() => submitText(prompt)}
                 >
                   {prompt}
-                </button>
-              ))}
-            </div>
-            <div className="home-chat__launchers">
-              {SCOPE_LAUNCHERS.map((l) => (
-                <button
-                  key={l.label}
-                  type="button"
-                  className="home-chat__launcher t-label-sm"
-                  onClick={() => submitText(l.text)}
-                >
-                  {l.label}
                 </button>
               ))}
             </div>
@@ -890,7 +1115,8 @@ export function HomeChat() {
                         submitText(message.addDisambiguationText ?? "", { forceChat: true });
                       }}
                     >
-                      🔍 Search for this
+                      <Icon name="search" size={16} />
+                      Search for this
                     </Button>
                     <ButtonLink href="/registry" variant="secondary" size="sm">
                       Browse the catalogue
@@ -905,7 +1131,20 @@ export function HomeChat() {
                         )
                       }
                     >
-                      Paste a link instead
+                      Paste a URL instead
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        setMessages((prev) =>
+                          prev.filter((m) => !m.addDisambiguation),
+                        );
+                        skillFileInputRef.current?.click();
+                      }}
+                    >
+                      Upload skill (.skill / SKILL.md)
                     </Button>
                   </div>
                 )}
@@ -924,7 +1163,8 @@ export function HomeChat() {
                         submitText(message.journeyDisambiguationText ?? "", { forceChat: true });
                       }}
                     >
-                      🔍 Do that instead
+                      <Icon name="search" size={16} />
+                      Do that instead
                     </Button>
                     <Button
                       type="button"
@@ -946,11 +1186,52 @@ export function HomeChat() {
             {sending && (
               <li className="chat-bubble chat-bubble--assistant">
                 <div className="chat-bubble__body chat-bubble__body--typing t-para-md">
-                  {addMode ? "Thinking…" : "Searching the catalogue…"}
+                  {typingLabel}
                 </div>
               </li>
             )}
           </ul>
+        )}
+
+        {/* Registration: in-thread upload panel — composer-only was easy to miss */}
+        {addMode && !addDraft && !sending && (
+          <div
+            className="home-chat__register-panel"
+            role="region"
+            aria-label="Add a tool to the catalogue"
+          >
+            <p className="home-chat__register-panel-title t-heading-sm">
+              Add it to the catalogue
+            </p>
+            <p className="home-chat__register-panel-body t-para-sm">
+              Claude or Cursor skill? Upload the <code>.skill</code> package
+              (e.g. <code>prd-writer.skill</code>) or a bare <code>SKILL.md</code>.
+              Apps, docs, Zeps, or MCPs — paste their URL in the box below.
+            </p>
+            <div className="home-chat__register-panel-actions">
+              <label
+                htmlFor="home-chat-skill-upload"
+                className={`home-chat__upload-label${addConfirming || sending ? " home-chat__upload-label--disabled" : ""}`}
+              >
+                Upload skill
+              </label>
+            </div>
+          </div>
+        )}
+
+        {/* Always mount the file input while registering. Accept .skill (zip
+            packages) — filtering to .md alone hides them on macOS. */}
+        {addMode && !addDraft && (
+          <input
+            id="home-chat-skill-upload"
+            ref={skillFileInputRef}
+            type="file"
+            accept=".skill,.zip,.md,.markdown,.txt"
+            className="home-chat__skill-file-input"
+            disabled={sending || addConfirming}
+            onChange={(e) => void handleSkillFileChange(e)}
+            aria-label="Upload a .skill package or SKILL.md file"
+          />
         )}
 
         {/* Nothing fits → scope fork chip */}
@@ -975,7 +1256,8 @@ export function HomeChat() {
                 });
               }}
             >
-              🔨 Nothing fits — let&apos;s scope it
+              <Icon name="bulb" size={16} />
+              Nothing fits — let&apos;s scope it
             </button>
           </div>
         )}
@@ -1021,7 +1303,7 @@ export function HomeChat() {
             {/* Phase 5: Live ceremony */}
             {journeyPhase === "live" && reviewResult && (
               <div className="home-chat__live-banner">
-                <span className="t-heading-sm">🎉 Your tool is live!</span>
+                <span className="t-heading-sm">Your tool is live!</span>
                 <div className="home-chat__live-actions">
                   <ButtonLink href={`/tools/${reviewResult.toolId}`} variant="primary" size="sm">
                     View {reviewResult.toolName} →
@@ -1047,7 +1329,8 @@ export function HomeChat() {
                       setInScopeMode(false);
                     }}
                   >
-                    🔍 Search again
+                    <Icon name="search" size={16} />
+                    Search again
                   </button>
                   <button
                     type="button"
@@ -1061,7 +1344,7 @@ export function HomeChat() {
                       router.push("/registry");
                     }}
                   >
-                    📚 Browse the catalogue
+                    Browse the catalogue
                   </button>
                 </div>
               </div>
@@ -1090,16 +1373,20 @@ export function HomeChat() {
 
       <div className="home-chat__footer">
         {/* Journey phase pill */}
-        {isJourneyActive && (
+        {isJourneyActive && journeyPhase && (
           <div className="home-chat__journey-phase">
-            {(["brief", "scaffold", "checklist", "review", "live"] as JourneyPhase[]).map((phase, i) => (
-              <span
-                key={phase}
-                className={`home-chat__journey-step ${journeyPhase === phase ? "home-chat__journey-step--active" : ""} ${["scaffold", "checklist", "review", "live"].slice(0, ["scaffold", "checklist", "review", "live"].indexOf(journeyPhase as string)).includes(phase ?? "") ? "home-chat__journey-step--done" : ""}`}
-              >
-                {i + 1}. {phase}
-              </span>
-            ))}
+            {JOURNEY_STEP_ORDER.map((phase, i) => {
+              const isActive = journeyPhase === phase;
+              const isDone = journeyStepIndex > i;
+              return (
+                <span
+                  key={phase}
+                  className={`home-chat__journey-step${isActive ? " home-chat__journey-step--active" : ""}${isDone ? " home-chat__journey-step--done" : ""}`}
+                >
+                  {i + 1}. {JOURNEY_STEP_LABELS[phase]}
+                </span>
+              );
+            })}
           </div>
         )}
         <form className="home-chat__composer" onSubmit={handleSubmit}>
@@ -1120,6 +1407,16 @@ export function HomeChat() {
               Send
             </Button>
           </div>
+          {addMode && !addDraft && (
+            <div className="home-chat__add-upload">
+              <p className="home-chat__add-upload-lead t-label-xs">
+                Or paste a public URL above for apps, docs, Zeps, and MCPs.
+                {" "}
+                Prefer the <strong>Upload skill</strong> button above for{" "}
+                <code>.skill</code> / <code>SKILL.md</code>.
+              </p>
+            </div>
+          )}
         </form>
       </div>
 
