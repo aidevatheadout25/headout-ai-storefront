@@ -239,9 +239,11 @@ describe(
       );
     });
 
-    // (a) A typed build ask for something not in the catalogue reaches scope
-    // mode directly — no four-gate interview, no handoff card.
-    test("(a) 'build a tool for X not in the catalogue' reaches stage 'scope' on the first reply", async () => {
+    // (a) In the unified agent a typed build ask is SEARCHED FIRST. When the
+    // catalogue has no fit, the first reply acknowledges the gap in `chat`
+    // (noMatch true — the client then renders the fork chip); scoping happens on
+    // the next turn (mode:"scope"), not on this one. No handoff card ever.
+    test("(a) 'build a tool for X not in the catalogue' acknowledges the gap in chat on the first reply", async () => {
       const res = await runChat([
         {
           role: "user",
@@ -251,18 +253,19 @@ describe(
       ]);
       assert.equal(
         res.stage,
-        "scope",
-        `an off-catalogue build ask should route straight to the critique agent — got stage "${res.stage}", message: ${res.message}`,
+        "chat",
+        `an off-catalogue build ask should be searched first and come back as a chat gap-acknowledgement, not jump straight into scope — got stage "${res.stage}", message: ${res.message}`,
       );
+      assert.equal(res.noMatch, true, `the gap acknowledgement must set noMatch so the client shows the fork chip — message: ${res.message}`);
       assert.notEqual(res.stage, "handoff", "the deprecated handoff stage must never appear");
       assert.equal(res.recommendedBuilder, null);
     });
 
     // (b) The two-turn vague case: a build statement with nothing to search on
-    // gets one deterministic clarifying question, and the follow-up — which
-    // doesn't itself match any build-intent pattern — must still route to
-    // scope because the prior assistant turn was the clarifier.
-    test("(b) vague build statement clarifies once, then the follow-up reaches scope", async () => {
+    // gets one clarifying question (chat), and the follow-up describing the need
+    // is SEARCHED (reuse-check first) — it comes back as a chat gap
+    // acknowledgement, not an immediate scope handoff. Scoping is the next turn.
+    test("(b) vague build statement clarifies once, then the described need is searched (chat), not auto-scoped", async () => {
       const turn1History = [
         { role: "user" as const, content: "I am trying to build something new" },
       ];
@@ -286,8 +289,8 @@ describe(
       const turn2 = await runChat(turn2History);
       assert.equal(
         turn2.stage,
-        "scope",
-        `the answer to the build clarifier should route to scope even without matching a build-intent pattern itself — message: ${turn2.message}`,
+        "chat",
+        `the described need should be searched first (reuse-check), returning a chat result — not jump straight to scope — message: ${turn2.message}`,
       );
       assert.notEqual(turn2.stage, "handoff");
     });
@@ -349,8 +352,8 @@ describe(
       ]);
       assert.equal(
         res.stage,
-        "scope",
-        `an off-catalogue infra-heavy build ask should route straight to the critique agent — got stage "${res.stage}", message: ${res.message}`,
+        "chat",
+        `an off-catalogue infra-heavy build ask is searched first and comes back as a chat gap-acknowledgement (scoping is the next turn) — got stage "${res.stage}", message: ${res.message}`,
       );
       const lower = res.message.toLowerCase();
       if (lower.includes("platform team")) {

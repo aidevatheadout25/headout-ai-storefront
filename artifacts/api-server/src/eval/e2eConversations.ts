@@ -1,32 +1,41 @@
 /**
- * E2E conversation eval harness.
+ * E2E conversation eval harness — simulated-user + LLM-judge edition.
  *
- * Runs a fixed set of scripted, multi-turn conversations through the real
- * `runChat` pipeline (the same function `routes/chat.ts` calls) and writes a
- * structured markdown report. This replaces manually paste-testing one turn
- * at a time — fixes should come from reading this report, not from guessing
- * turn-by-turn.
+ * The old harness sent a FIXED script: a pre-written list of user messages
+ * replayed regardless of what the agent actually asked. That structurally
+ * manufactured non-answers (the agent asks "where does the data live?" and the
+ * next scripted line is "the whole team, daily") and could only grade the final
+ * stage — never whether the conversation was coherent, remembered what the user
+ * said, or pushed back well.
  *
- * This is a MEASUREMENT tool only. It does not fix anything it finds.
+ * This version drives each scenario with a **simulated user**: an LLM given a
+ * persona, a goal, and a set of hidden facts it reveals only when the agent
+ * actually asks for them. It answers whatever the agent asks, in character. The
+ * resulting transcript is then scored by an **LLM judge** on a conversation
+ * rubric (coherence, context retention, no self-contradiction, pushback
+ * quality, gap-note honesty, concision), on top of the existing hard structural
+ * checks (terminal stage / modality / risk / brief completeness).
  *
- * Read-only against the catalogue: `runChat`'s registration path
- * (start_registration) only ever sets `result.registration` — the actual
- * `insertTool` call lives in a separate route triggered by the client after
- * the user confirms the draft (BriefCard/handleAddConfirm), which this
- * harness never calls. flag_tool / request_access / update_tool are the only
- * other mutating tools `runChat` exposes, and no scripted message below
- * triggers them. search_catalogue / browse_catalogue / get_tool_details are
- * read-only. embed() and the Anthropic calls still hit the real network.
+ * This is a MEASUREMENT tool only. It does not fix anything it finds, and it is
+ * deliberately NOT in the `test` glob (src/eval/*.test.ts) — it hits the network
+ * (Anthropic for the agent, the simulated user, and the judge) and is
+ * non-deterministic. Run it to produce a report, read the report, then make one
+ * scoped fix pass elsewhere.
  *
- * Run with (Replit only — needs DATABASE_URL + the Anthropic integration):
+ * Run with (needs DATABASE_URL + an Anthropic key in the environment):
  *   tsx src/eval/e2eConversations.ts
  *
- * Do NOT add this to the `test` script glob (src/eval/*.test.ts) — it's a
- * manual report generator, not a pass/fail regression test.
+ * Read-only against the catalogue, same as before: runChat's mutating tools
+ * (start_registration only sets result.registration; flag/access/update) are
+ * never triggered by the personas below. search/browse/details + embeddings +
+ * the Anthropic calls hit the real network.
  */
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type Anthropic from "@anthropic-ai/sdk";
+import { anthropic, CLAUDE_MODEL } from "../lib/anthropicClient";
+import { isGapAcknowledgement, isScopeAffirm } from "../lib/buildIntent";
 import {
   runChat,
   type BriefPayload,
@@ -43,214 +52,293 @@ import { seedCatalogueIfEmpty } from "../lib/seed";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPORT_PATH = join(__dirname, "e2e-report.md");
 
-// ─── Scenario definitions ───────────────────────────────────────────────────
+/** Cap on user↔agent exchanges per scenario, so a stuck conversation can't run forever. */
+const MAX_EXCHANGES = 10;
 
-/** The literal scope-trigger message used by every scenario below that forks into scoping. */
-const SCOPE_TRIGGER_TEXT = "Let's scope the idea — I want to build it";
+// ─── Scenario definitions ───────────────────────────────────────────────────
 
 type Scenario = {
   id: number;
   title: string;
-  /** Fixed ordered user messages. The agent's questions vary — we send this
-   *  sequence regardless of what it asks and capture whatever outcome results. */
-  messages: string[];
-  /** What a correct outcome looks like, for the report header — not enforced,
-   *  just printed alongside the actual result so a human can compare. */
+  /** Who the simulated user is. */
+  persona: string;
+  /** What they want, and their disposition (e.g. "committed to building if nothing exists"). This seeds the opening message. */
+  goal: string;
+  /** Hidden facts the simulated user reveals ONLY when the agent asks for them — never volunteered all at once. */
+  facts: string[];
+  /** What a correct outcome looks like, printed in the report and fed to the judge. */
   expectation: string;
-  /** If set, flag in the report when the terminal outcome's stage doesn't match. */
   expectStage?: FunnelStage;
-  /** If set, flag when the drafted brief's risk is below this. */
   expectRiskAtLeast?: "high";
-  /** If set, flag when the outcome's modality doesn't match — the real,
-   *  post-Phase-3 check (this used to only be checkable by eye against a
-   *  flattened micro/full appClass; now it's a direct field comparison). */
   expectModality?: Modality;
-  /**
-   * How the scenario's SCOPE_TRIGGER_TEXT turn is sent. Defaults to "scope"
-   * — the real UI's fork chip only appears on a no-match turn and sends
-   * `mode: "scope"` + searchContext, so that's what most scenarios should
-   * measure. Exactly one scenario should be "typed" (see its definition
-   * below): when the first turn already returns a strong match, the fork
-   * chip never renders in the real UI at all — the only way to reach
-   * scoping is typing intent as plain text, so that scenario deliberately
-   * exercises the typed-intent-detection path instead of the flag.
-   */
-  scopeTriggerMode?: "typed" | "scope";
 };
 
 const SCENARIOS: Scenario[] = [
   {
     id: 1,
-    title: "Reuse (should find existing)",
-    messages: ["Something to track A/B experiment results"],
-    expectation: "Finds an existing catalogue tool, no handoff to scope.",
-    expectStage: "chat",
+    title: "Reuse check → lean build (no A/B tool exists)",
+    persona: "A growth analyst.",
+    goal: "You want a way to track A/B experiment results. You're happy to use something that already exists if it fits.",
+    facts: ["Your team runs a handful of experiments a month.", "You mainly need to see win/loss and significance in one place."],
+    expectation:
+      "There is NO A/B experiment tool in the catalogue, so the honest answer is to acknowledge the gap in one sentence (no hallucinated tool, no over-scoping in chat). Since it's only a handful of experiments a month for a small team, either a lean skill/brief or a recommend_kill (Claude can compute significance from pasted numbers) is acceptable — but NOT a heavyweight app and NOT a false 'nothing exists then immediately draft a full spec' contradiction.",
   },
   {
     id: 2,
     title: "MCP case",
-    messages: [
-      "Our support agents keep needing supplier contract terms but there's no clean way for a tool to pull them",
-      "Let's scope the idea — I want to build it",
-      "They're AI agents resolving tickets automatically, no human in the loop, hundreds of suppliers queried constantly",
-      "Mostly machine-readable PDFs and structured data",
-      "A few agent pipelines but thousands of queries a day",
-      "Both structured fields and raw clause text",
-      "Legal and Procurement own them and must sign off on exposed fields",
+    persona: "A support-ops engineer.",
+    goal: "Your support agents keep needing supplier contract terms but there's no clean way for a tool to pull them. You're committed to building this if nothing already covers it.",
+    facts: [
+      "The callers are AI agents resolving tickets automatically — no human in the loop.",
+      "Hundreds of suppliers, thousands of queries a day, across a few agent pipelines.",
+      "The terms live in machine-readable PDFs plus some structured data.",
+      "Legal and Procurement own the contracts and must sign off on which fields get exposed.",
     ],
     expectation:
-      "True modality is an MCP server (machine-to-machine, high query volume, no UI). Exposes sensitive Legal/Procurement-owned data → risk should be high.",
+      "True modality is an MCP server (machine-to-machine, high query volume, no UI). Sensitive Legal/Procurement-owned data → risk high. Should end in a brief.",
     expectStage: "brief",
     expectRiskAtLeast: "high",
     expectModality: "mcp",
   },
   {
     id: 3,
-    title: "Skill case (typed-intent path — first turn finds a strong match, so the fork chip never renders; scope trigger is sent as plain text)",
-    messages: [
-      "Every week I write SEO briefs for new experience pages and it eats half a day",
-      "Let's scope the idea — I want to build it",
-      "It's just me and two others, but the format and research steps are the same every time",
-      "Output is a doc we paste into the CMS",
+    title: "Skill case",
+    persona: "A content marketer.",
+    goal: "Every week you write SEO briefs for new experience pages and it eats half a day. You'd build something if nothing covers it, but you'll try an existing tool first if it looks close.",
+    facts: [
+      "It's just you and two others doing this.",
+      "The format and research steps are the same every time.",
+      "The output is a doc you paste into the CMS.",
     ],
     expectation:
-      "True modality is a reusable Claude skill (text-in, doc-out, no UI, no hosting).",
-    expectStage: "brief",
+      "If the catalogue's SEO Brief Builder covers it, reuse is the right call; otherwise the true modality is a reusable Claude skill (text-in, doc-out, no UI, no hosting).",
     expectModality: "skill",
-    scopeTriggerMode: "typed",
   },
   {
     id: 4,
     title: "Zep case",
-    messages: [
-      "I want our daily bookings numbers to auto-post to a Slack channel every morning",
-      "Let's scope the idea — I want to build it",
-      "Just a scheduled summary, no interaction needed",
-      "Whole revenue team reads it, every morning",
+    persona: "A revenue-team lead.",
+    goal: "You want your daily bookings numbers to auto-post to a Slack channel every morning. Committed to building it if nothing exists.",
+    facts: [
+      "It's just a scheduled summary — no interaction needed.",
+      "The whole revenue team reads it, every morning.",
+      "The numbers come from your internal bookings database.",
     ],
     expectation:
-      "True modality is a Zep on Headout's Zeps platform (connector orchestration + a cron trigger, no custom UI).",
+      "True modality is a Zep on Headout's Zeps platform (connector orchestration + a cron trigger, no custom UI). Should end in a brief.",
     expectStage: "brief",
     expectModality: "zep",
   },
   {
     id: 5,
     title: "No-build / Claude-native (should kill)",
-    messages: [
-      "I need to summarize this quarter's NPS verbatim comments into themes",
-      "Let's scope the idea — I want to build it",
-      "It's a one-time analysis for the quarterly review",
-    ],
+    persona: "A CX researcher.",
+    goal: "You need to summarize this quarter's NPS verbatim comments into themes. You're open to being told you don't need to build anything.",
+    facts: ["It's a one-time analysis for the quarterly review.", "It's really just you doing it."],
     expectation: "One-off, Claude-native task — should recommend_kill, not draft a brief.",
     expectStage: "kill",
   },
   {
     id: 6,
     title: "One-off script (should kill/redirect)",
-    messages: [
-      "I need to bulk-rename 500 image files in our asset bucket",
-      "Let's scope the idea — I want to build it",
-      "One time, just this migration",
-    ],
+    persona: "A digital-asset manager.",
+    goal: "You need to bulk-rename 500 image files in your asset bucket. Open to being told the simplest way.",
+    facts: ["It's one time, just this migration.", "You won't need to do it again."],
     expectation: "One-off migration task — should recommend_kill, not draft a brief.",
     expectStage: "kill",
   },
   {
     id: 7,
     title: "Full app (known-good)",
-    messages: [
-      "HR wants to upload a sheet of role requirements and get back candidate profiles with emails",
-      "Let's scope the idea — I want to build it",
-      "HR recruiters, 3-4 of them, a few times a week",
-      "A human reviews before any email is sent",
-      "Internal HR only",
+    persona: "An HR-ops manager.",
+    goal: "HR wants to upload a sheet of role requirements and get back candidate profiles with emails. Committed to building it if nothing exists.",
+    facts: [
+      "The users are HR recruiters — 3 or 4 of them — a few times a week.",
+      "A human reviews before any email is sent.",
+      "It's internal HR only.",
+      "The candidate profiles live in your internal ATS (Greenhouse).",
     ],
-    expectation: "Genuine repeated multi-user need — should draft a brief, modality full_app.",
+    expectation:
+      "Genuine repeated multi-user need with a real review UI Zeps can't cleanly serve — should draft a brief, modality full_app (or micro_app if justified).",
     expectStage: "brief",
     expectModality: "full_app",
   },
   {
     id: 8,
     title: "Too big / eng-team",
-    messages: [
-      "I want a system that dynamically reprices every experience based on live demand",
-      "Let's scope the idea — I want to build it",
-      "It would touch every experience and feed the live pricing engine",
-      "Pricing and data science teams",
+    persona: "A pricing PM.",
+    goal: "You want a system that dynamically reprices every experience based on live demand. Committed to pushing it forward.",
+    facts: [
+      "It would touch every experience and feed the live pricing engine.",
+      "The Pricing and Data Science teams would need to own it.",
     ],
     expectation:
-      "Should escalate_to_eng (modality eng_project) with a project pitch — NOT end in draft_brief with a self-serve repo, which would be a taxonomy contradiction.",
+      "Should escalate_to_eng (modality eng_project) with a project pitch — NOT a self-serve repo, which would be a taxonomy contradiction.",
     expectStage: "escalate",
     expectModality: "eng_project",
   },
   {
     id: 9,
     title: "Vague intent",
-    messages: [
-      "I want to build something new",
-      "A tool that helps ops track supplier response times",
-      "Ops team, daily",
-    ],
+    persona: "An ops associate.",
+    goal: "You want to build something new but you open vaguely, without describing it. When asked, you clarify: a tool that helps ops track supplier response times.",
+    facts: ["The ops team would use it, daily.", "You want to see which suppliers are slow to respond."],
     expectation:
-      "First message is too vague to search on — should get the deterministic clarifier, then proceed once the idea is described.",
+      "First message is too vague to search on — should get one clarifying question, then proceed once the idea is described.",
   },
   {
     id: 10,
     title: "Registration",
-    messages: ["I built a refund classifier and want to list it"],
+    persona: "An engineer who just shipped something.",
+    goal: "You built a refund classifier and want to list it in the catalogue.",
+    facts: ["You have a URL to it ready if asked."],
     expectation: "Immediate start_registration, stage register, no search first.",
     expectStage: "register",
   },
   {
     id: 11,
     title: "Browse",
-    messages: ["Show me all the MCPs we have"],
-    expectation: "browse_catalogue with type filter, not search_catalogue.",
+    persona: "A platform engineer.",
+    goal: "You want to see all the MCPs the company has.",
+    facts: [],
+    expectation: "browse_catalogue with a type filter, not a scoping conversation.",
     expectStage: "chat",
   },
   {
     id: 12,
     title: "Off-mission",
-    messages: ["Write me a poem about Headout"],
+    persona: "A bored employee.",
+    goal: "You ask the assistant to write you a poem about Headout.",
+    facts: [],
     expectation: "Politely declines / redirects — not a catalogue or build task at all.",
+    expectStage: "chat",
   },
 ];
 
+// ─── Simulated user ───────────────────────────────────────────────────────────
+
+function simulatedUserSystemPrompt(scenario: Scenario): string {
+  const factLines =
+    scenario.facts.length > 0
+      ? scenario.facts.map((f) => `  • ${f}`).join("\n")
+      : "  (none — you have no extra details to give)";
+  return `You are role-playing a Headout employee chatting with an internal-tools assistant. Stay fully in character — you are the USER, not the assistant.
+
+WHO YOU ARE: ${scenario.persona}
+
+WHAT YOU WANT: ${scenario.goal}
+
+FACTS YOU KNOW (reveal these ONLY when the assistant asks something that calls for them — never dump them all at once, answer one question at a time like a real person):
+${factLines}
+
+HOW TO BEHAVE:
+- Write like a real Slack message: one or two short sentences, casual, no lists.
+- Answer the assistant's actual question. If it asks something your facts don't cover, give a brief natural answer or say you're not sure.
+- Do NOT volunteer everything upfront. Let the assistant do its job of asking.
+- If the assistant recommends an existing tool that genuinely fits your goal, accept it and wrap up.
+- If the assistant says nothing exists and your goal is to build, tell it plainly you want to build it / let's scope it.
+- If the assistant tells you that you don't need to build anything and gives a sensible alternative that fits, accept it.
+- When the conversation has reached its natural end (you got an answer, a recommendation, a brief, a kill verdict, or a clear decline), reply with exactly: END
+- Never break character. Never describe yourself as an AI. Never speak for the assistant.`;
+}
+
+/**
+ * Produce the simulated user's next message given the transcript so far.
+ * Roles are swapped: the storefront assistant's turns are "user" to this model,
+ * and the simulated user's own prior turns are "assistant".
+ */
+async function simulateUserTurn(
+  scenario: Scenario,
+  transcript: ChatTurn[],
+): Promise<string> {
+  const messages: Anthropic.MessageParam[] =
+    transcript.length === 0
+      ? [{ role: "user", content: "Start the conversation with your opening message to the assistant." }]
+      : transcript.map((t) => ({
+          role: t.role === "assistant" ? "user" : "assistant",
+          content: t.content,
+        }));
+
+  const response = await anthropic.messages.create({
+    model: CLAUDE_MODEL,
+    max_tokens: 300,
+    temperature: 0,
+    system: simulatedUserSystemPrompt(scenario),
+    messages,
+  });
+  const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text ?? "";
+  return text.trim();
+}
+
+// ─── Client-transport simulation ───────────────────────────────────────────────
+// Mirrors HomeChat.tsx's fork-chip contract against the CURRENT server: the chip
+// only sends mode:"scope" + searchContext after a no-match turn, and once stage
+// "scope" is observed the client keeps mode:"scope" until brief/kill/scope_exit.
+// (Phase 2 unifies the agent and removes this threading — at which point this
+// helper collapses to "just send the message"; update it then.)
+
+type ClientState = { inScope: boolean; lastQuery: string; lastResult: ChatResult | null };
+
+function buildUserContext(
+  scenario: Scenario,
+  userText: string,
+  state: ClientState,
+): ChatUserContext {
+  if (state.inScope) return { conversationId: `eval-${scenario.id}`, mode: "scope" };
+
+  // Mirror HomeChat.tsx's scope entry. The dominant path is "continuing after a
+  // gap": once the concierge has said nothing in the catalogue fits, the next
+  // user message enters scope automatically (the client's continuingAfterGap /
+  // fork-chip behavior) — regardless of how the user phrases their reply. We
+  // also enter scope on an explicit build-affirm when there's prior context.
+  // We deliberately do NOT trigger on isMatchRejection/isBuildIntent here: a
+  // satisfied "nah, that's exactly what I needed" starts with "nah" and would
+  // false-positive, wrongly dragging a happy browse/reuse turn into scoping.
+  const priorGap = state.lastResult ? isGapAcknowledgement(state.lastResult.message) : false;
+  const priorTools = state.lastResult?.tools ?? [];
+  const hasPriorContext = (state.lastResult?.noMatch ?? false) || priorTools.length > 0;
+  if (priorGap || (isScopeAffirm(userText) && hasPriorContext)) {
+    return {
+      conversationId: `eval-${scenario.id}`,
+      mode: "scope",
+      searchContext: {
+        query: (state.lastQuery || userText).slice(0, 120),
+        nearMisses: priorTools.map((t) => ({ name: t.name, oneLiner: t.oneLiner })),
+      },
+    };
+  }
+  return { conversationId: `eval-${scenario.id}` };
+}
+
 // ─── Runner ──────────────────────────────────────────────────────────────────
 
-type TurnLog = {
-  role: "user" | "assistant";
-  text: string;
-  stage?: FunnelStage;
-  /** Best-effort inference of which tool produced this turn, since ChatResult
-   *  doesn't expose a tool-call trace. Not a ground-truth call log — derived
-   *  from stage transitions and result shape. */
-  toolSignal?: string;
-};
+type TurnLog = { role: "user" | "assistant"; text: string; stage?: FunnelStage; toolSignal?: string };
 
-/** The first draft_brief/recommend_kill/escalate_to_eng ever reached in a conversation — the honest outcome, regardless of what came after. */
-type TerminalOutcome = {
-  stage: "brief" | "kill" | "escalate";
-  /** 1-based index into scenario.messages of the user turn that produced this outcome. */
-  turnIndex: number;
-  result: ChatResult;
+type TerminalOutcome = { stage: "brief" | "kill" | "escalate"; turnIndex: number; result: ChatResult };
+
+type Rubric = {
+  coherence: number;
+  contextRetention: number;
+  noContradiction: number;
+  pushbackQuality: number;
+  gapNoteHonesty: number;
+  concision: number;
+  summary: string;
 };
 
 type ScenarioReport = {
   scenario: Scenario;
   turns: TurnLog[];
-  /** The last turn's result — kept for transcript/debugging (e.g. did the concierge fall back after a brief), NOT for grading the outcome. */
   finalResult: ChatResult | null;
-  /** The honest outcome: the first terminal stage ever reached, with its full payload. This is what scoring/flags should use. */
   terminalOutcome: TerminalOutcome | null;
   error: string | null;
   scopeQuestionCount: number;
   modalityHits: string[];
+  rubric: Rubric | null;
 };
 
 const MODALITY_TERMS = ["MCP", "skill", "Zep", "engineering team", "platform team"];
 
-/** Best-effort label for what tool produced this turn's result. See TurnLog.toolSignal. */
 function inferToolSignal(result: ChatResult, prevStage: FunnelStage | undefined): string {
   if (result.registration) return "start_registration";
   if (result.stage === "brief") return "draft_brief";
@@ -273,43 +361,26 @@ function inferToolSignal(result: ChatResult, prevStage: FunnelStage | undefined)
 async function runScenario(scenario: Scenario): Promise<ScenarioReport> {
   const history: ChatTurn[] = [];
   const turns: TurnLog[] = [];
-  let inScope = false;
-  let prevUserText = "";
+  const state: ClientState = { inScope: false, lastQuery: "", lastResult: null };
   let finalResult: ChatResult | null = null;
   let terminalOutcome: TerminalOutcome | null = null;
   let error: string | null = null;
 
-  for (let i = 0; i < scenario.messages.length; i++) {
-    const userText = scenario.messages[i];
+  for (let i = 0; i < MAX_EXCHANGES; i++) {
+    let userText: string;
+    try {
+      userText = await simulateUserTurn(scenario, history);
+    } catch (err) {
+      error = `simulated-user error: ${err instanceof Error ? err.message : String(err)}`;
+      break;
+    }
+    if (!userText || userText.trim().toUpperCase() === "END") break;
+
     history.push({ role: "user", content: userText });
     turns.push({ role: "user", text: userText });
 
     const prevStage = finalResult?.stage;
-
-    // Mirror the real UI's fork chip: it only renders (and only sends
-    // mode:"scope" + searchContext) when the previous turn came back with
-    // no catalogue match at all. See Scenario.scopeTriggerMode.
-    const isScopeTrigger = userText === SCOPE_TRIGGER_TEXT;
-    const sendScopeMode =
-      !inScope && isScopeTrigger && (scenario.scopeTriggerMode ?? "scope") === "scope";
-
-    const userCtx: ChatUserContext = {
-      conversationId: `eval-scenario-${scenario.id}`,
-      ...(inScope
-        ? { mode: "scope" as const }
-        : sendScopeMode
-          ? {
-              mode: "scope" as const,
-              searchContext: {
-                query: (prevUserText || userText).slice(0, 120),
-                nearMisses: (finalResult?.tools ?? []).map((t) => ({
-                  name: t.name,
-                  oneLiner: t.oneLiner,
-                })),
-              },
-            }
-          : {}),
-    };
+    const userCtx = buildUserContext(scenario, userText, state);
 
     let result: ChatResult;
     try {
@@ -321,30 +392,23 @@ async function runScenario(scenario: Scenario): Promise<ScenarioReport> {
     }
 
     history.push({ role: "assistant", content: result.message });
-    turns.push({
-      role: "assistant",
-      text: result.message,
-      stage: result.stage,
-      toolSignal: inferToolSignal(result, prevStage),
-    });
+    turns.push({ role: "assistant", text: result.message, stage: result.stage, toolSignal: inferToolSignal(result, prevStage) });
     finalResult = result;
-    prevUserText = userText;
+
+    // Advance the client-transport state machine.
+    if (!state.inScope && userCtx.mode !== "scope") state.lastQuery = userText;
+    state.lastResult = result;
+    if (result.stage === "scope") state.inScope = true;
+    if (result.stage === "brief" || result.stage === "kill" || result.stage === "scope_exit") state.inScope = false;
 
     if (
       terminalOutcome === null &&
       (result.stage === "brief" || result.stage === "kill" || result.stage === "escalate")
     ) {
       terminalOutcome = { stage: result.stage, turnIndex: i + 1, result };
+      break; // terminal outcome reached — stop the conversation
     }
-
-    // Mirror HomeChat.tsx's inScopeMode threading exactly: once the client
-    // observes stage "scope" it keeps passing mode:"scope" on every
-    // subsequent turn (with no searchContext — the server falls back to
-    // extractSearchContext(history)), until brief/kill/scope_exit resolves it.
-    if (result.stage === "scope") inScope = true;
-    if (result.stage === "brief" || result.stage === "kill" || result.stage === "scope_exit") {
-      inScope = false;
-    }
+    if (result.stage === "register" || result.stage === "scope_exit") break;
   }
 
   const scopeQuestionCount = turns.filter(
@@ -358,7 +422,73 @@ async function runScenario(scenario: Scenario): Promise<ScenarioReport> {
     .toLowerCase();
   const modalityHits = MODALITY_TERMS.filter((term) => allAssistantText.includes(term.toLowerCase()));
 
-  return { scenario, turns, finalResult, terminalOutcome, error, scopeQuestionCount, modalityHits };
+  let rubric: Rubric | null = null;
+  if (!error && turns.length > 0) {
+    try {
+      rubric = await judgeTranscript(scenario, turns);
+    } catch (err) {
+      error = `judge error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  return { scenario, turns, finalResult, terminalOutcome, error, scopeQuestionCount, modalityHits, rubric };
+}
+
+// ─── LLM judge ────────────────────────────────────────────────────────────────
+
+const JUDGE_TOOL: Anthropic.Tool = {
+  name: "submit_scores",
+  description: "Submit the conversation-quality scores for the transcript.",
+  input_schema: {
+    type: "object",
+    properties: {
+      coherence: { type: "integer", description: "1–5. Do the assistant's replies read naturally and hang together as one conversation?" },
+      contextRetention: { type: "integer", description: "1–5. Did the assistant use facts the user already gave, without re-asking or forgetting them?" },
+      noContradiction: { type: "integer", description: "1–5. Did the assistant avoid contradicting itself across turns (e.g. flip-flopping 'nothing exists' ↔ 'X already does this')? 5 = no contradictions." },
+      pushbackQuality: { type: "integer", description: "1–5. When scoping/critiquing, was the pushback sharp, relevant, and well-reasoned (vs generic form-filling or none)? Score 3 if the scenario needed no pushback." },
+      gapNoteHonesty: { type: "integer", description: "1–5. Were claims about what tools do / don't cover truthful and non-hallucinated (no invented tools or capabilities)? 5 = fully honest." },
+      concision: { type: "integer", description: "1–5. Was it appropriately brief — no repetition, no dumping metadata the UI already shows?" },
+      summary: { type: "string", description: "One or two sentences: the single biggest conversation-quality problem in this transcript, or 'clean' if none." },
+    },
+    required: ["coherence", "contextRetention", "noContradiction", "pushbackQuality", "gapNoteHonesty", "concision", "summary"],
+  },
+};
+
+function transcriptForJudge(turns: TurnLog[]): string {
+  return turns
+    .map((t) => (t.role === "user" ? `USER: ${t.text}` : `ASSISTANT: ${t.text}`))
+    .join("\n\n");
+}
+
+async function judgeTranscript(scenario: Scenario, turns: TurnLog[]): Promise<Rubric> {
+  const system = `You are a strict evaluator of an internal-tools assistant's conversation quality. You are NOT grading whether it reached a particular stage (that's checked separately) — you are grading the CONVERSATION as a user would experience it.
+
+Score each dimension 1 (poor) to 5 (excellent) using the submit_scores tool. Be critical: reserve 5 for genuinely excellent, use 1–2 for real failures. A self-contradiction across turns, a re-asked question, or a hallucinated tool should tank the relevant score.
+
+For context, here is what a correct outcome for this scenario looks like (do not grade on stage, only use this to judge whether the assistant's reasoning/pushback was on-target): ${scenario.expectation}`;
+
+  const response = await anthropic.messages.create({
+    model: CLAUDE_MODEL,
+    max_tokens: 1024,
+    temperature: 0,
+    system,
+    tools: [JUDGE_TOOL],
+    tool_choice: { type: "tool", name: "submit_scores" },
+    messages: [{ role: "user", content: `Transcript:\n\n${transcriptForJudge(turns)}` }],
+  });
+
+  const toolUse = response.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
+  const a = (toolUse?.input ?? {}) as Record<string, unknown>;
+  const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  return {
+    coherence: num(a.coherence),
+    contextRetention: num(a.contextRetention),
+    noContradiction: num(a.noContradiction),
+    pushbackQuality: num(a.pushbackQuality),
+    gapNoteHonesty: num(a.gapNoteHonesty),
+    concision: num(a.concision),
+    summary: typeof a.summary === "string" ? a.summary : "",
+  };
 }
 
 // ─── Report rendering ────────────────────────────────────────────────────────
@@ -377,7 +507,7 @@ function emptyBriefFields(brief: BriefPayload | null | undefined): string[] {
 }
 
 function renderBriefPayload(brief: BriefPayload): string {
-  const lines = [
+  return [
     `- **title**: ${brief.title ?? "_(none)_"}`,
     `- **problem**: ${brief.problem || "_(empty)_"}`,
     `- **users**: ${brief.users || "_(empty)_"}`,
@@ -387,14 +517,7 @@ function renderBriefPayload(brief: BriefPayload): string {
     `- **modality**: ${brief.modality}`,
     `- **modalityReason**: ${brief.modalityReason || "_(empty)_"}`,
     `- **risk**: ${brief.risk}`,
-    `- **searchContext.query**: ${brief.searchContext?.query || "_(empty)_"}`,
-    `- **searchContext.nearMisses**: ${
-      brief.searchContext?.nearMisses.length
-        ? brief.searchContext.nearMisses.map((n) => `\n  - ${n.name}: ${n.oneLiner}`).join("")
-        : "_(none)_"
-    }`,
-  ];
-  return lines.join("\n");
+  ].join("\n");
 }
 
 function renderKillPayload(kill: KillPayload): string {
@@ -416,7 +539,6 @@ function renderEscalatePayload(escalate: EscalatePayload): string {
   ].join("\n");
 }
 
-/** The outcome's modality regardless of which of the three outcome payloads carries it. */
 function outcomeModality(result: ChatResult | null): Modality | null {
   return (
     result?.briefPayload?.modality ??
@@ -426,100 +548,73 @@ function outcomeModality(result: ChatResult | null): Modality | null {
   );
 }
 
-/** Automated flags per "What the report should make obvious" — computed generically from scenario metadata, not hardcoded per id. Graded against the honest terminal outcome, not the last scripted turn. */
 function computeFlags(report: ScenarioReport): string[] {
   const flags: string[] = [];
-  const { scenario, terminalOutcome, finalResult, scopeQuestionCount } = report;
+  const { scenario, terminalOutcome, scopeQuestionCount, rubric } = report;
   const outcomeStage = terminalOutcome?.stage;
   const outcomeResult = terminalOutcome?.result ?? null;
 
-  if (scenario.expectStage && outcomeStage !== scenario.expectStage) {
+  if (scenario.expectStage && (outcomeStage ?? report.finalResult?.stage) !== scenario.expectStage) {
     flags.push(
-      `⚠️ expected terminal outcome \`${scenario.expectStage}\`, got \`${outcomeStage ?? "(none reached — conversation never resolved)"}\``,
+      `⚠️ expected outcome \`${scenario.expectStage}\`, got \`${outcomeStage ?? report.finalResult?.stage ?? "(none)"}\``,
     );
   }
-
   if (outcomeStage === "brief" && outcomeResult?.briefPayload) {
     const empties = emptyBriefFields(outcomeResult.briefPayload);
-    if (empties.length > 0) {
-      flags.push(`⚠️ brief has empty required field(s): ${empties.join(", ")}`);
-    }
+    if (empties.length > 0) flags.push(`⚠️ brief has empty required field(s): ${empties.join(", ")}`);
   }
-
   const modality = outcomeModality(outcomeResult);
   if (scenario.expectModality && modality !== scenario.expectModality) {
-    flags.push(
-      `⚠️ expected modality \`${scenario.expectModality}\`, got \`${modality ?? "(none)"}\``,
-    );
+    flags.push(`⚠️ expected modality \`${scenario.expectModality}\`, got \`${modality ?? "(none)"}\``);
   }
-
   if (scenario.expectRiskAtLeast === "high" && outcomeStage === "brief") {
     const risk = outcomeResult?.briefPayload?.risk;
-    if (risk !== "high") {
-      flags.push(`⚠️ expected risk \`high\` (sensitive data / access sign-off involved), got \`${risk ?? "(none)"}\``);
-    }
+    if (risk !== "high") flags.push(`⚠️ expected risk \`high\`, got \`${risk ?? "(none)"}\``);
   }
-
   if (scopeQuestionCount > 6) {
-    flags.push(`⚠️ over-questioning: ${scopeQuestionCount} scope questions asked (cap is meant to be ~6)`);
+    flags.push(`⚠️ over-questioning: ${scopeQuestionCount} scope questions (cap is ~6)`);
   }
-
-  if (
-    outcomeStage === "brief" &&
-    report.modalityHits.some((h) => h.toLowerCase() === "engineering team")
-  ) {
-    flags.push(
-      `⚠️ outcome-taxonomy contradiction: assistant text names "engineering team" but still ended in draft_brief (a self-serve repo) — should have escalated instead`,
-    );
+  // Conversation-quality flags from the judge.
+  if (rubric) {
+    const lows: string[] = [];
+    if (rubric.noContradiction <= 2) lows.push(`self-contradiction (${rubric.noContradiction}/5)`);
+    if (rubric.contextRetention <= 2) lows.push(`context loss (${rubric.contextRetention}/5)`);
+    if (rubric.coherence <= 2) lows.push(`incoherent (${rubric.coherence}/5)`);
+    if (rubric.gapNoteHonesty <= 2) lows.push(`dishonest gap notes (${rubric.gapNoteHonesty}/5)`);
+    if (rubric.pushbackQuality <= 2) lows.push(`weak pushback (${rubric.pushbackQuality}/5)`);
+    if (rubric.concision <= 2) lows.push(`verbose/repetitive (${rubric.concision}/5)`);
+    if (lows.length > 0) flags.push(`⚠️ conversation-quality: ${lows.join(", ")}`);
   }
-
-  // Turns scripted after the terminal outcome exist deliberately in some
-  // scenarios (to probe post-outcome behavior, e.g. bug C) — this isn't
-  // itself wrong, but a fall-back to plain concierge `chat` afterward is a
-  // routing regression worth surfacing on stage/routing grounds alone.
-  if (
-    terminalOutcome &&
-    terminalOutcome.turnIndex < scenario.messages.length &&
-    finalResult?.stage === "chat"
-  ) {
-    flags.push(
-      `⚠️ conversation fell back to concierge \`chat\` stage after reaching \`${terminalOutcome.stage}\` at turn ${terminalOutcome.turnIndex} — check post-outcome turns for a re-routing regression`,
-    );
-  }
-
   return flags;
 }
 
+function rubricAvg(r: Rubric | null): string {
+  if (!r) return "—";
+  const vals = [r.coherence, r.contextRetention, r.noContradiction, r.pushbackQuality, r.gapNoteHonesty, r.concision];
+  return (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1);
+}
+
 function renderScenarioSection(report: ScenarioReport): string {
-  const { scenario, turns, finalResult, terminalOutcome, error } = report;
+  const { scenario, turns, terminalOutcome, error, rubric } = report;
   const flags = computeFlags(report);
   const outcomeResult = terminalOutcome?.result ?? null;
-
   const lines: string[] = [];
+
   lines.push(`## ${scenario.id}. ${scenario.title}`);
   lines.push("");
   lines.push(`**Expectation:** ${scenario.expectation}`);
   lines.push("");
   lines.push(
-    `**Terminal outcome:** ${
-      terminalOutcome
-        ? `\`${terminalOutcome.stage}\` at turn ${terminalOutcome.turnIndex} of ${scenario.messages.length}`
-        : "(none reached)"
-    }`,
-  );
-  lines.push(
-    `**Final stage (last scripted turn):** \`${finalResult?.stage ?? "(none)"}\`${
-      terminalOutcome && terminalOutcome.turnIndex < scenario.messages.length
-        ? " _(conversation continued past the terminal outcome — see transcript)_"
-        : ""
-    }`,
+    `**Terminal outcome:** ${terminalOutcome ? `\`${terminalOutcome.stage}\` at exchange ${terminalOutcome.turnIndex}` : `\`${report.finalResult?.stage ?? "(none)"}\``}`,
   );
   lines.push(`**Scope questions asked:** ${report.scopeQuestionCount}`);
-  lines.push(
-    `**Modality terms named in assistant text:** ${
-      report.modalityHits.length > 0 ? report.modalityHits.join(", ") : "(none)"
-    }`,
-  );
+  lines.push(`**Modality terms named:** ${report.modalityHits.length > 0 ? report.modalityHits.join(", ") : "(none)"}`);
+  if (rubric) {
+    lines.push(
+      `**Conversation rubric (avg ${rubricAvg(rubric)}/5):** coherence ${rubric.coherence}, context ${rubric.contextRetention}, no-contradiction ${rubric.noContradiction}, pushback ${rubric.pushbackQuality}, honesty ${rubric.gapNoteHonesty}, concision ${rubric.concision}`,
+    );
+    lines.push(`**Judge note:** ${rubric.summary}`);
+  }
   if (error) lines.push(`**Error:** ${error}`);
   lines.push("");
 
@@ -532,12 +627,9 @@ function renderScenarioSection(report: ScenarioReport): string {
   lines.push("<details><summary>Transcript</summary>");
   lines.push("");
   for (const turn of turns) {
-    if (turn.role === "user") {
-      lines.push(`**User:** ${turn.text}`);
-    } else {
-      lines.push(
-        `**Assistant** (stage: \`${turn.stage ?? "?"}\`, tool signal: ${turn.toolSignal ?? "?"}):`,
-      );
+    if (turn.role === "user") lines.push(`**User:** ${turn.text}`);
+    else {
+      lines.push(`**Assistant** (stage: \`${turn.stage ?? "?"}\`, tool signal: ${turn.toolSignal ?? "?"}):`);
       lines.push(`> ${turn.text.replace(/\n/g, "\n> ")}`);
     }
     lines.push("");
@@ -546,51 +638,29 @@ function renderScenarioSection(report: ScenarioReport): string {
   lines.push("");
 
   if (outcomeResult?.briefPayload) {
-    lines.push("**Raw briefPayload (from the terminal outcome):**");
-    lines.push("");
-    lines.push(renderBriefPayload(outcomeResult.briefPayload));
-    lines.push("");
+    lines.push("**Raw briefPayload:**", "", renderBriefPayload(outcomeResult.briefPayload), "");
   }
-
   if (outcomeResult?.killPayload) {
-    lines.push("**Raw killPayload (from the terminal outcome):**");
-    lines.push("");
-    lines.push(renderKillPayload(outcomeResult.killPayload));
-    lines.push("");
+    lines.push("**Raw killPayload:**", "", renderKillPayload(outcomeResult.killPayload), "");
   }
-
   if (outcomeResult?.escalatePayload) {
-    lines.push("**Raw escalatePayload (from the terminal outcome):**");
-    lines.push("");
-    lines.push(renderEscalatePayload(outcomeResult.escalatePayload));
-    lines.push("");
+    lines.push("**Raw escalatePayload:**", "", renderEscalatePayload(outcomeResult.escalatePayload), "");
   }
-
   return lines.join("\n");
 }
 
 function renderSummaryTable(reports: ScenarioReport[]): string {
-  const header =
-    "| # | Scenario | terminal outcome | last-turn stage | modality (payload) | risk | # questions | brief empty? | modality named? |";
-  const sep = "|---|---|---|---|---|---|---|---|---|";
+  const header = "| # | Scenario | outcome | modality | risk | # q | rubric avg | biggest problem |";
+  const sep = "|---|---|---|---|---|---|---|---|";
   const rows = reports.map((r) => {
     const outcomeResult = r.terminalOutcome?.result ?? null;
     const brief = outcomeResult?.briefPayload;
-    const emptyFields = emptyBriefFields(brief);
     const modality = outcomeModality(outcomeResult);
-    return [
-      r.scenario.id,
-      r.scenario.title,
-      r.terminalOutcome ? `\`${r.terminalOutcome.stage}\` @${r.terminalOutcome.turnIndex}` : "(none)",
-      `\`${r.finalResult?.stage ?? "(none)"}\``,
-      modality ?? "—",
-      brief?.risk ?? "—",
-      r.scopeQuestionCount,
-      brief ? (emptyFields.length > 0 ? `⚠️ ${emptyFields.join(", ")}` : "no") : "—",
-      r.modalityHits.length > 0 ? r.modalityHits.join(", ") : "no",
-    ].join(" | ");
+    const outcome = r.terminalOutcome ? `\`${r.terminalOutcome.stage}\`` : `\`${r.finalResult?.stage ?? "(none)"}\``;
+    const problem = r.rubric ? r.rubric.summary.slice(0, 60) : "—";
+    return `| ${r.scenario.id} | ${r.scenario.title} | ${outcome} | ${modality ?? "—"} | ${brief?.risk ?? "—"} | ${r.scopeQuestionCount} | ${rubricAvg(r.rubric)} | ${problem} |`;
   });
-  return [header, sep, ...rows.map((r) => `| ${r} |`)].join("\n");
+  return [header, sep, ...rows].join("\n");
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────
@@ -602,23 +672,21 @@ async function main() {
   const reports: ScenarioReport[] = [];
   for (const scenario of SCENARIOS) {
     console.log(`Running scenario ${scenario.id}: ${scenario.title}...`);
-    const report = await runScenario(scenario);
-    reports.push(report);
+    reports.push(await runScenario(scenario));
   }
 
-  const sections = [
+  const markdown = [
     "# E2E conversation eval report",
     "",
-    `Generated by \`tsx src/eval/e2eConversations.ts\`. Measurement only — no bugs fixed here.`,
+    "Generated by `tsx src/eval/e2eConversations.ts` — simulated-user + LLM-judge. Measurement only.",
     "",
     "## Summary",
     "",
     renderSummaryTable(reports),
     "",
     ...reports.map(renderScenarioSection),
-  ];
+  ].join("\n");
 
-  const markdown = sections.join("\n");
   writeFileSync(REPORT_PATH, markdown, "utf-8");
   console.log(`\nReport written to ${REPORT_PATH}`);
 }
